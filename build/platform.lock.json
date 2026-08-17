@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Release qualification is blocked until the production-class Linux host",
+    "has installed Docker from the official stable Debian channel and its exact",
+    "facts have been reviewed and frozen here before a release-candidate tag.",
+    "",
+    "The qualification job must compare the observed host with those frozen",
+    "facts. It must never derive its expected values from the host under test.",
+    "Updating Docker after a freeze requires a new reviewed lock and a complete",
+    "no-skip qualification run; it does not invalidate historical records."
+  ],
+  "schema_version": 1,
+  "status": "pending",
+  "policy": {
+    "os": "debian",
+    "os_version": "13",
+    "os_codename": "trixie",
+    "arch": "amd64",
+    "docker_channel": "stable",
+    "docker_source": "https://download.docker.com/linux/debian",
+    "selection": "latest-stable-at-policy-review",
+    "target_engine": "29.7.2",
+    "reviewed": "2026-08-16",
+    "freeze_point": "before-release-candidate"
+  }
+}
