@@ -1,0 +1,82 @@
+apiVersion: runpool.rhobuild.com/v1
+kind: RunpoolConfig
+
+instance:
+  name: primary
+
+host:
+  topology: dedicated-daemon
+  reserve:
+    cpu: "1"
+    memory: 2GiB
+    swap: 0B
+    freeDisk: 20GiB
+
+scheduling:
+  parallelism: 2
+
+targets:
+  - id: app
+    url: https://github.com/acme/app
+    credential: github-default
+    cache:
+      enabled: true
+      generation: rust-v1
+    tiers:
+      - tier: standard
+        scaleSetName: runpool-standard
+
+  - id: acme-org
+    url: https://github.com/acme
+    credential: github-default
+    cache:
+      enabled: false
+    runnerGroup: default
+    tiers:
+      - tier: standard
+        scaleSetName: runpool-standard
+
+credentials:
+  - id: github-default
+    type: token
+    tokenEnv: RUNPOOL_GITHUB_TOKEN
+
+tiers:
+  - id: standard
+    parallelism: 2
+    resources:
+      cpu: "2"
+      memory: 4GiB
+      swap: 0B
+      pids: 1024
+
+cache:
+  storage:
+    mode: volume
+  global:
+    maxManagedBytes: 150GiB
+    highWatermarkPercent: 80
+    lowWatermarkPercent: 65
+    softEmergencyFreeBytes: 20GiB
+    hardEmergencyFreeBytes: 10GiB
+  defaults:
+    repositoryMaxBytes: 15GiB
+    unusedTTL: 720h
+
+retention:
+  leaseHistory: 2160h
+
+observability:
+  log:
+    format: json
+    level: info
+  metrics:
+    enabled: false
+
+network:
+  profile: public-internet-only
+  ipv6: disabled
+  dns:
+    mode: gateway
+  allowPrivateCIDRs: []
+  denyCIDRs: []
