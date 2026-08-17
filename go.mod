@@ -2,6 +2,8 @@ module github.com/rhobuild/runpool
 
 go 1.26.6
 
+require gopkg.in/yaml.v3 v3.0.1
+
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect

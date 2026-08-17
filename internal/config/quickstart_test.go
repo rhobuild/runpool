@@ -1,0 +1,173 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+func env(m map[string]string) func(string) string {
+	return func(name string) string { return m[name] }
+}
+
+func TestQuickStartMinimal(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvGitHubURL:    "https://github.com/acme/app",
+		EnvGitHubToken:  "secret",
+		EnvHostTopology: HostTopologyDedicatedDaemon,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := c.Targets[0]
+	// Quick Start leaves the cache off until reuse across jobs is
+	// release-qualified: a default that enables an unqualified feature ships a
+	// promise the runtime has not kept.
+	if target.Cache.Enabled {
+		t.Error("Quick Start enabled the cache before its reuse was release-qualified")
+	}
+	if got := target.Tiers[0].ScaleSetName; got != "runpool-standard" {
+		t.Errorf("scaleSetName = %q; want runpool-standard", got)
+	}
+	if c.Tiers[0].Parallelism != 1 {
+		t.Errorf("parallelism = %d; want 1", c.Tiers[0].Parallelism)
+	}
+	if cr := c.Credentials[0]; cr.TokenEnv != EnvGitHubToken || cr.TokenFile != "" {
+		t.Errorf("credential should reference the env var by name, got %+v", cr)
+	}
+	if c.Network.Profile != NetworkProfilePublicInternetOnly {
+		t.Errorf("network profile = %q", c.Network.Profile)
+	}
+}
+
+func TestQuickStartOrganizationDisablesCache(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvGitHubURL:         "https://github.com/acme",
+		EnvGitHubToken:       "secret",
+		EnvGitHubRunnerGroup: "runpool",
+		EnvHostTopology:      HostTopologyDedicatedDaemon,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Targets[0].Cache.Enabled {
+		t.Error("organization target must not enable a repository cache")
+	}
+}
+
+func TestQuickStartErrors(t *testing.T) {
+	cases := map[string]map[string]string{
+		"missing topology": {EnvGitHubURL: "https://github.com/acme/app", EnvGitHubToken: "secret"},
+		"missing url":      {EnvGitHubToken: "secret", EnvHostTopology: HostTopologyDedicatedDaemon},
+		"missing token":    {EnvGitHubURL: "https://github.com/acme/app", EnvHostTopology: HostTopologyDedicatedDaemon},
+		"token and file": {
+			EnvGitHubURL:       "https://github.com/acme/app",
+			EnvGitHubToken:     "secret",
+			EnvGitHubTokenFile: "/run/secrets/token",
+			EnvHostTopology:    HostTopologyDedicatedDaemon,
+		},
+		"bad parallelism": {
+			EnvGitHubURL:    "https://github.com/acme/app",
+			EnvGitHubToken:  "secret",
+			EnvParallelism:  "zero",
+			EnvHostTopology: HostTopologyDedicatedDaemon,
+		},
+		"config file with target var": {
+			EnvConfigFile: "testdata/example.yaml",
+			EnvGitHubURL:  "https://github.com/acme/app",
+		},
+	}
+	for name, vars := range cases {
+		if _, err := Load(env(vars)); err == nil {
+			t.Errorf("%s: Load succeeded; want error", name)
+		}
+	}
+}
+
+func TestQuickStartTokenFile(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvGitHubURL:       "https://github.com/acme/app",
+		EnvGitHubTokenFile: "/run/secrets/github-token",
+		EnvHostTopology:    HostTopologyDedicatedDaemon,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr := c.Credentials[0]; cr.TokenFile != "/run/secrets/github-token" || cr.TokenEnv != "" {
+		t.Errorf("credential = %+v", cr)
+	}
+}
+
+func TestQuickStartSharedDaemonRequiresReserve(t *testing.T) {
+	base := map[string]string{
+		EnvGitHubURL:    "https://github.com/acme/app",
+		EnvGitHubToken:  "secret",
+		EnvHostTopology: HostTopologySharedDaemon,
+	}
+	if _, err := Load(env(base)); err == nil || !strings.Contains(err.Error(), "host.reserve") {
+		t.Fatalf("shared daemon without reserve: %v", err)
+	}
+	base[EnvHostReserveCPU] = "1"
+	base[EnvHostReserveMemory] = "2GiB"
+	base[EnvHostReserveFreeDisk] = "20GiB"
+	c, err := Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Host.Topology != HostTopologySharedDaemon {
+		t.Fatalf("topology = %q", c.Host.Topology)
+	}
+}
+
+func TestLoadFileMode(t *testing.T) {
+	c, err := Load(env(map[string]string{EnvConfigFile: "testdata/example.yaml"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Targets) != 2 {
+		t.Fatalf("targets = %d; want 2", len(c.Targets))
+	}
+	// The same human-friendly scale-set name in different GitHub scopes
+	// names different resources and must be accepted.
+	if c.Targets[0].Tiers[0].ScaleSetName != c.Targets[1].Tiers[0].ScaleSetName {
+		t.Error("example should exercise cross-scope name reuse")
+	}
+}
+
+func TestLoadFileUnknownField(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/bad.yaml"
+	content := "apiVersion: runpool.rhobuild.com/v1\nkind: RunpoolConfig\nfoo: 1\n"
+	if err := writeFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "foo") {
+		t.Errorf("unknown field error should name the field, got: %v", err)
+	}
+}
+
+// TestFileModeRefusesEveryQuickStartVariable: a variable that is neither
+// applied nor refused is the worst of the three outcomes. An operator who
+// sets RUNPOOL_LOG_LEVEL=debug beside a configuration file gets no debug
+// logging and no explanation, and looks for the reason somewhere else.
+func TestFileModeRefusesEveryQuickStartVariable(t *testing.T) {
+	for _, name := range []string{EnvLogLevel, EnvNetworkProfile} {
+		environ := func(k string) string {
+			switch k {
+			case EnvConfigFile:
+				return "/etc/runpool/config.yaml"
+			case name:
+				return "debug"
+			}
+			return ""
+		}
+		_, err := Load(environ)
+		if err == nil {
+			t.Errorf("%s beside a configuration file was accepted; it applies to neither", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error for %s = %q; want it to name the variable", name, err)
+		}
+	}
+}
