@@ -1,0 +1,182 @@
+package store
+
+import (
+	"bytes"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+
+	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+)
+
+var (
+	// ErrContractDrift means the provider redelivered a natural key with
+	// different content. The delivery is neither overwritten nor
+	// acknowledged: drift is a broken upstream assumption, and the
+	// binding stops until a person looks.
+	ErrContractDrift = errors.New("delivery fingerprint differs under the same natural key")
+	// ErrOpenAttemptExists means a workload already has an unresolved
+	// attempt, so a new one may not open: two live attempts for one
+	// workload is how a job runs twice.
+	ErrOpenAttemptExists = errors.New("an open attempt already exists for this workload")
+	// ErrConflict means a compare-and-swap matched no row: the row moved
+	// since the caller observed it. Re-read and re-decide; the store
+	// never resolves a conflict by forcing the write.
+	ErrConflict = errors.New("row state moved since it was observed")
+	// ErrNotFound mirrors sql.ErrNoRows as a domain error.
+	ErrNotFound = errors.New("not found")
+)
+
+// WorkloadRow is the assignment content a delivery carries for one
+// workload, in the domain's neutral terms.
+type WorkloadRow struct {
+	SourceWorkloadKey string
+	TenantKey         string
+	ProjectKey        string
+}
+
+// RecordDelivery persists one delivery and its attempts idempotently.
+//
+//   - First arrival inserts the delivery and one ready attempt per
+//     workload.
+//   - An exact redelivery (same natural key, same fingerprint) inserts
+//     nothing and reports the existing delivery: at-least-once transport
+//     must not double work.
+//   - The same natural key with a different fingerprint returns
+//     ErrContractDrift and writes nothing.
+//   - A workload that already holds an open attempt under a *different*
+//     delivery returns ErrOpenAttemptExists: the caller supersedes or
+//     resolves the predecessor first, in the same transaction, and
+//     retries.
+func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (sqlitedb.BrokerDelivery, error) {
+	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
+		BindingID: bindingID, SourceDeliveryKey: sourceDeliveryKey,
+	})
+	switch {
+	case err == nil:
+		if !bytes.Equal(delivery.PayloadSha256, fingerprint[:]) {
+			return sqlitedb.BrokerDelivery{}, fmt.Errorf("%w: delivery %s of binding %d",
+				ErrContractDrift, sourceDeliveryKey, bindingID)
+		}
+		// Exact redelivery. The attempts are ensured below rather than
+		// assumed: a failure between inserting the delivery and its
+		// attempts — a crash, or an open-attempt conflict the caller is
+		// resolving inside this very transaction — would otherwise leave
+		// a delivery whose work no query can ever find.
+	case errors.Is(err, sql.ErrNoRows):
+		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
+			BindingID:         bindingID,
+			SourceDeliveryKey: sourceDeliveryKey,
+			PayloadSha256:     fingerprint[:],
+		})
+		if err != nil {
+			return sqlitedb.BrokerDelivery{}, err
+		}
+	default:
+		return sqlitedb.BrokerDelivery{}, err
+	}
+
+	for _, w := range workloads {
+		if w.SourceWorkloadKey == "" {
+			return sqlitedb.BrokerDelivery{}, fmt.Errorf("workload with no key in delivery %s cannot be made durable", sourceDeliveryKey)
+		}
+		if err := t.insertAttempt(delivery, w); err != nil {
+			return sqlitedb.BrokerDelivery{}, err
+		}
+	}
+	return delivery, nil
+}
+
+func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) error {
+	id, err := newAttemptID()
+	if err != nil {
+		return err
+	}
+	affected, err := t.q.InsertAttempt(t.ctx, sqlitedb.InsertAttemptParams{
+		ID:                id,
+		DeliveryID:        delivery.ID,
+		BindingID:         delivery.BindingID,
+		SourceWorkloadKey: w.SourceWorkloadKey,
+		TenantKey:         w.TenantKey,
+		ProjectKey:        w.ProjectKey,
+	})
+	if err != nil {
+		// The partial unique index rejects a second open attempt for the
+		// workload. That is a real conflict with an attempt under a
+		// different delivery — the caller resolves the predecessor first.
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: workload %s of binding %d",
+				ErrOpenAttemptExists, w.SourceWorkloadKey, delivery.BindingID)
+		}
+		return err
+	}
+	if affected == 0 {
+		// Same delivery, same workload: already inserted by a previous
+		// arrival of this delivery. Idempotent by design.
+		return nil
+	}
+	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
+		AttemptID:      id,
+		IdempotencyKey: "attempt_created",
+		Kind:           "attempt_created",
+		DetailJson:     "{}",
+	})
+	return err
+}
+
+// SupersedeOpenAttempt resolves the open predecessor of a workload so a
+// new delivery's attempt can be recorded — in the caller's transaction,
+// so old-to-superseded and new-to-ready commit together or not at all.
+// Only an attempt that never had a start authorized may be superseded;
+// anything further along is settled or reviewed through its own path.
+func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution string) error {
+	open, err := t.q.GetOpenAttemptByWorkload(t.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
+		BindingID: bindingID, SourceWorkloadKey: sourceWorkloadKey,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	affected, err := t.q.SupersedeAttempt(t.ctx, sqlitedb.SupersedeAttemptParams{
+		Resolution: resolution, AttemptID: open.ID,
+	})
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: attempt %s is %s and cannot be superseded",
+			ErrConflict, open.ID, open.State)
+	}
+	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
+		AttemptID:      open.ID,
+		IdempotencyKey: "attempt_superseded",
+		Kind:           "attempt_superseded",
+		DetailJson:     "{}",
+	})
+	return err
+}
+
+// isUniqueViolation reports whether err is SQLite's unique-constraint
+// failure. The driver exposes it in the error string with the standard
+// extended code; matching the stable prefix is the portable check the
+// driver offers without a typed error.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return bytes.Contains([]byte(msg), []byte("UNIQUE constraint failed")) ||
+		bytes.Contains([]byte(msg), []byte("constraint failed: UNIQUE"))
+}
+
+func newAttemptID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "att-" + hex.EncodeToString(buf), nil
+}
