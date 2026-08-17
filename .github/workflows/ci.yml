@@ -1,0 +1,132 @@
+# The gate every change passes. It runs on GitHub-hosted runners on
+# purpose: Runpool's own CI must not depend on Runpool, so a bug here
+# cannot hide behind the thing it is testing.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only by default; no job in this workflow needs more.
+defaults:
+  run:
+    # GitHub's default shell omits pipefail, so a step that pipes into tee
+    # reports tee's exit status and a failing suite reads as a pass.
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The exact toolchain, so no step silently switches compilers: go.mod
+  # names the version and this refuses any automatic substitution. A
+  # reproducible build pins the compiler, not just the dependencies.
+  GOTOOLCHAIN: go1.26.6
+
+jobs:
+  dependency-review:
+    name: dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
+  build:
+    name: build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The exact toolchain from go.mod's toolchain directive, not
+          # the latest patch: a reproducible build pins the compiler.
+          go-version-file: go.mod
+      - name: Verify formatting
+        # gofmt -l prints offenders and exits zero, so the check has to
+        # look at the output rather than the status.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Static analysis
+        # The check set lives in staticcheck.conf (all checks); a -checks
+        # flag here would override the file.
+        #
+        # Staticcheck exits zero both when clean and when it matched no
+        # packages, so an older release paired with a newer Go once
+        # printed "matched no packages" and passed — a gate that analyzed
+        # nothing. Capture stderr and fail on that warning, and require a
+        # non-empty package set, so the gate cannot pass by analyzing
+        # zero packages.
+        run: |
+          test "$(go list ./... | wc -l)" -gt 0 || { echo "no packages to analyze"; exit 1; }
+          err=$(go tool staticcheck ./... 2>&1 1>/dev/null) || { echo "$err"; exit 1; }
+          if printf '%s' "$err" | grep -q 'matched no packages'; then
+            echo "staticcheck analyzed no packages:"; echo "$err"; exit 1
+          fi
+          go tool staticcheck ./...
+      - name: Test with the race detector
+        # Shuffled, so a test that depends on another's leftovers fails
+        # here rather than on the day the order happens to change.
+        run: go test -race -shuffle=on -count=1 ./...
+      - name: Verify the module is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  lint:
+    name: workflows, scripts and containers
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Lint the workflows
+        # Pinned in go.mod like every other gate: a linter resolved at
+        # run time changes what passes without anyone deciding to.
+        run: go tool actionlint
+      - name: Lint the shell scripts
+        # shellcheck ships with the runner image; the verification
+        # scripts run against real hosts, where a quoting bug deletes
+        # the wrong thing.
+        run: shellcheck scripts/*/*.sh
+      - name: Verify documentation links resolve
+        # Offline by design: in-repo links only, which is what a
+        # documentation reorganization breaks silently.
+        run: scripts/verify/doc-links.sh
+
+  vulnerabilities:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Scan for known vulnerabilities
+        # The scanner is pinned in go.mod and run with `go tool`: a gate
+        # that resolves @latest at run time cannot be reproduced, and a
+        # security gate that changes under you is not a gate.
+        run: go tool govulncheck ./...

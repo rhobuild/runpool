@@ -1,0 +1,33 @@
+* @rhobuild/runpool-maintainers
+
+# Security boundary and privileged runtime.
+/internal/capsule/            @rhobuild/runpool-maintainers
+/internal/egress/             @rhobuild/runpool-maintainers
+/internal/gateway/            @rhobuild/runpool-maintainers
+/internal/lease/              @rhobuild/runpool-maintainers
+/internal/platform/docker/    @rhobuild/runpool-maintainers
+/cmd/capsule-supervisor/      @rhobuild/runpool-maintainers
+/build/                       @rhobuild/runpool-maintainers
+/deploy/                      @rhobuild/runpool-maintainers
+
+# Durable identity, state, schema, and generated persistence.
+/internal/assignment/         @rhobuild/runpool-maintainers
+/internal/store/              @rhobuild/runpool-maintainers
+/sqlc.yaml                    @rhobuild/runpool-maintainers
+
+# Release, security, and public contracts.
+/.github/workflows/           @rhobuild/runpool-maintainers
+/.github/dependabot.yml       @rhobuild/runpool-maintainers
+# The provider SDK's version is a public contract: the behaviour it
+# encodes is what the live contracts measure, and they cannot run here.
+/go.mod                       @rhobuild/runpool-maintainers
+/go.sum                       @rhobuild/runpool-maintainers
+/scripts/                     @rhobuild/runpool-maintainers
+/README.md                    @rhobuild/runpool-maintainers
+/SECURITY.md                  @rhobuild/runpool-maintainers
+/docs/security/               @rhobuild/runpool-maintainers
+/docs/adrs/                   @rhobuild/runpool-maintainers
+/docs/product-contract.md     @rhobuild/runpool-maintainers
+/docs/release-readiness.md    @rhobuild/runpool-maintainers
+/docs/reference/              @rhobuild/runpool-maintainers
+/docs/maintainers/            @rhobuild/runpool-maintainers

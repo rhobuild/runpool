@@ -1,0 +1,20 @@
+# Build output
+/runpool
+/capsule-supervisor
+/dist/
+/coverage.out
+/release-qualification.json
+/platform-facts.json
+/*-contract.log
+
+# Local configuration and state
+.env
+*.db
+*.db-shm
+*.db-wal
+
+# OS noise
+.DS_Store
+._*
+.idea/
+.vscode/

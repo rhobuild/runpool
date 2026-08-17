@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go-dependencies:
+        # The provider SDK arrives on its own. It is the one dependency
+        # whose behaviour no pull request can check — the contracts that
+        # exercise it reach protected fixtures, so they never run on one —
+        # and an update folded into a batch of a dozen is one nobody
+        # dispatches those contracts for.
+        exclude-patterns: ["github.com/actions/scaleset"]
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

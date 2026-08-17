@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/rhobuild/runpool/security/advisories/new
+    about: Report privately. Never in a public issue — see SECURITY.md.
+  - name: Support and scope
+    url: https://github.com/rhobuild/runpool/blob/main/SUPPORT.md
+    about: What is supported today, and what is explicitly not.
