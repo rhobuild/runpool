@@ -1,0 +1,21 @@
+# sqlc generates the typed persistence layer for the delivery/attempt
+# bounded context. The schema file is a mechanical projection of the
+# runtime migrations (go run ./internal/store/schema/gen) — migrations
+# stay the single authority. Generated code lands in
+# internal/store/sqlitedb and is imported by internal/store only;
+# interfaces are defined by consumers, and persistence rows are not JSON
+# DTOs, so neither is emitted.
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "internal/store/schema/current.sql"
+    queries: "internal/store/query"
+    gen:
+      go:
+        package: "sqlitedb"
+        out: "internal/store/sqlitedb"
+        sql_package: "database/sql"
+        emit_empty_slices: true
+        emit_interface: false
+        emit_json_tags: false
+        emit_prepared_queries: false

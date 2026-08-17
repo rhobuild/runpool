@@ -82,6 +82,15 @@ jobs:
         # Shuffled, so a test that depends on another's leftovers fails
         # here rather than on the day the order happens to change.
         run: go test -race -shuffle=on -count=1 ./...
+      - name: Verify the generated persistence layer is current
+        # sqlc diff regenerates and compares against the committed code;
+        # the schema parity test in internal/store does the same for the
+        # snapshot the generation reads. Together they leave no second
+        # source of truth: migrations produce the snapshot, the snapshot
+        # produces the code, and drift anywhere fails here.
+        run: |
+          go tool sqlc diff
+          go tool sqlc vet
       - name: Verify the module is tidy
         run: |
           go mod tidy
