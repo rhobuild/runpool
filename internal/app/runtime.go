@@ -323,6 +323,18 @@ func (s *Controller) recoverCapsuleFailure(b *binding, leaseID string, startObs 
 	}
 	log := s.log.With("binding", bindingKey, "lease", leaseID)
 
+	// After the drain window, recovery belongs to the successor. The
+	// failures that arrive here now are the shutdown itself — the client
+	// and store closing under a live wait — and acting on them would
+	// rewrite a running lease to cleaning, handing the next start a
+	// failure to dismantle instead of a capsule to adopt. A recovery
+	// already past this point runs to completion: its transitions are
+	// durable, and the successor resumes whatever it left.
+	if s.abandoning.Load() {
+		log.Warn("drain window elapsed; the lease is left as it is for the next start to recover")
+		return nil
+	}
+
 	was, err := s.leases.ToCleaning(ctx, leaseID)
 	if err != nil {
 		log.Error("failure transition failed", "error", err)

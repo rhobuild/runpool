@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/allocator"
@@ -35,7 +36,13 @@ const (
 	// first, the sessions stay open, and the next start waits each one
 	// out as a conflict.
 	drainTimeout = 60 * time.Second
-	pollBackoff  = 5 * time.Second
+	// sessionCloseBudget bounds closing every binding's message session
+	// at shutdown — all of them together, under one budget. One budget
+	// and not one per binding: the deployment's stop grace period has to
+	// hold drain plus this, and a bound that grew with the binding count
+	// would outgrow any grace period an operator chose.
+	sessionCloseBudget = 15 * time.Second
+	pollBackoff        = 5 * time.Second
 
 	// capsulePrepTimeout bounds getting a capsule to the point of running:
 	// minting a credential, acquiring a lane, building the sandbox,
@@ -294,22 +301,11 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		b.newSession = func(ctx context.Context) (providerSession, error) {
 			return b.gh.OpenSession(ctx, b.scaleSetID, owner)
 		}
-		defer func(b *binding) {
-			// A session the broker still holds is one the next start has
-			// to wait out, and it reports that wait as a predecessor's
-			// crash. Saying so here is what tells the two apart.
-			if b.session == nil {
-				return // never opened, or discarded by the loop
-			}
-			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := b.session.Close(cctx); err != nil {
-				log.Warn("cannot close the message session; the broker holds it until it "+
-					"expires and the next start waits that out",
-					"binding", b.key, "error", err)
-			}
-		}(b)
 	}
+	// A session the broker still holds is one the next start has to wait
+	// out, and it reports that wait as a predecessor's crash. Saying so
+	// here is what tells the two apart.
+	defer s.closeSessions()
 
 	var loops sync.WaitGroup
 	loops.Add(1)
@@ -482,20 +478,65 @@ type Controller struct {
 	launch func(b *binding, lease store.Lease)
 
 	wg sync.WaitGroup // capsule goroutines, for drain
+
+	// abandoning is set when the drain window elapses. From then on the
+	// destructive recovery paths leave leases exactly as they are: the
+	// successor's adoption owns recovery now, and a dying process that
+	// rewrites a running lease to cleaning hands the next start a
+	// failure to dismantle instead of a capsule to adopt.
+	abandoning atomic.Bool
+
+	// drainWindow overrides drainTimeout in tests; zero means the
+	// default. Held for the same reason as pollBackoff: a minute is not
+	// something a test waits.
+	drainWindow time.Duration
 }
 
 func (s *Controller) drain() error {
 	s.log.Info("draining")
+	window := s.drainWindow
+	if window == 0 {
+		window = drainTimeout
+	}
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
 	select {
 	case <-done:
 		s.log.Info("drained cleanly")
 		return nil
-	case <-time.After(drainTimeout):
-		s.log.Warn("drain window elapsed; live capsules will be adopted on next start")
+	case <-time.After(window):
+		// The goroutines that did not finish are woken moments from now
+		// by the client and store closing under them, and their failure
+		// paths would rewrite running leases on the way down. Marking
+		// the abandonment first is what turns those paths into no-ops.
+		s.abandoning.Store(true)
+		s.log.Warn("drain window elapsed; live capsules are left for the next start to adopt")
 		return nil
 	}
+}
+
+// closeSessions closes every binding's message session concurrently
+// under one shared budget. The loops have already been waited out, so
+// each binding's session field is quiescent here.
+func (s *Controller) closeSessions() {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionCloseBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, b := range s.bindings {
+		if b.session == nil {
+			continue // never opened, or discarded by the loop
+		}
+		wg.Add(1)
+		go func(b *binding) {
+			defer wg.Done()
+			if err := b.session.Close(ctx); err != nil {
+				s.log.Warn("cannot close the message session; the broker holds it until it "+
+					"expires and the next start waits that out",
+					"binding", b.key, "error", err)
+			}
+		}(b)
+	}
+	wg.Wait()
 }
 
 // claimLease takes ownership of a lease's recovery. It reports false when
