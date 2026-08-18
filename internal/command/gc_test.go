@@ -22,7 +22,7 @@ func capture() (IO, *bytes.Buffer, *bytes.Buffer) {
 // same number from the preview and the apply otherwise concludes the
 // backlog is gone.
 func TestReportLeaseHistorySaysWhatItWouldDo(t *testing.T) {
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,7 +49,7 @@ type harness struct {
 
 func newHarness(t *testing.T, parallelism int) *harness {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestAttemptsWaitForACreditAndSurvive(t *testing.T) {
 // to the same rows.
 func TestReadyAttemptsResumeAfterRestart(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestReadyAttemptsResumeAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := store.Open(dir)
+	reopened, err := store.Open(dir, store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

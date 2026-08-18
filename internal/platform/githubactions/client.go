@@ -70,6 +70,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 			SystemInfo:      info,
 		})
 	} else {
+		// Symmetric with the App validation above. An empty token builds
+		// a client that authenticates as nobody: the upstream constructor
+		// accepts it, and the failure arrives later as the provider's
+		// answer to an anonymous request — an authorization error about
+		// the target, when the fault is a credential that resolved to
+		// nothing.
+		if cfg.Credential.Token == "" {
+			return nil, fmt.Errorf("personal access token credential: the token is empty")
+		}
 		c, err = scaleset.NewClientWithPersonalAccessToken(scaleset.NewClientWithPersonalAccessTokenConfig{
 			GitHubConfigURL:     cfg.ConfigURL,
 			PersonalAccessToken: cfg.Credential.Token,

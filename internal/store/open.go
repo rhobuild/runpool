@@ -146,28 +146,18 @@ func (s *Store) loadIdentityReadOnly() error {
 	return s.db.QueryRow(`SELECT v FROM meta WHERE k = 'instance_id'`).Scan(&s.instanceID)
 }
 
-// Option adjusts a store at open time. Options exist for the values a
-// deployment configures; everything else about a store is a property of
-// the schema and is not adjustable.
-type Option func(*Store)
-
-// WithRetryBudget sets how many times one attempt may be leased before it
-// is held for review. A count below one is ignored: it would not be a
-// smaller budget but no budget at all, reopening the unbounded retry the
-// counter exists to close. What a deployment may legitimately set is a
-// configuration rule, checked by the validator; a store opened by a
-// maintenance command has no configuration to read and keeps the default.
-func WithRetryBudget(n int) Option {
-	return func(s *Store) {
-		if n >= 1 {
-			s.retryBudget = n
-		}
-	}
-}
-
 // Open opens (creating if needed) the database in the state directory,
 // applies pending migrations, and loads the stable instance identity.
-func Open(dir string, opts ...Option) (*Store, error) {
+//
+// retryBudget is how many times one attempt may be leased before it is
+// held for review. It is a parameter rather than an option so the
+// compiler forces every opener to say which budget it means: the serving
+// path passes the configured value, and a maintenance command — which
+// has no configuration to read — passes DefaultRetryBudget by name. A
+// count below one is ignored in favour of the default: it would not be a
+// smaller budget but no budget at all, reopening the unbounded retry the
+// counter exists to close.
+func Open(dir string, retryBudget int) (*Store, error) {
 	db, err := sql.Open("sqlite", dsn(filepath.Join(dir, DatabaseFile)))
 	if err != nil {
 		return nil, err
@@ -177,8 +167,8 @@ func Open(dir string, opts ...Option) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	s := &Store{db: db, dir: dir, retryBudget: DefaultRetryBudget}
-	for _, opt := range opts {
-		opt(s)
+	if retryBudget >= 1 {
+		s.retryBudget = retryBudget
 	}
 	migrations, err := loadMigrations()
 	if err == nil {
@@ -225,10 +215,11 @@ type Tx struct {
 	ctx context.Context
 	tx  *sql.Tx
 	q   *sqlitedb.Queries
-	// s is the store this transaction belongs to, for the values it was
-	// opened with. Not for reaching back into the database: a transaction
-	// that took a second connection would deadlock against its own.
-	s *Store
+	// retryBudget is copied from the store at transaction start: the one
+	// opened-with value serving consults. The store itself is deliberately
+	// not carried — a transaction reaching back into it for a second
+	// connection would deadlock against its own.
+	retryBudget int
 }
 
 // Tx runs fn inside one transaction: immediate for a writable store, so
@@ -245,7 +236,7 @@ func (s *Store) Tx(ctx context.Context, fn func(*Tx) error) error {
 	// checks it out for the life of the process and every later query
 	// blocks on it. Rollback after a successful Commit is a no-op.
 	defer func() { _ = tx.Rollback() }()
-	if err := fn(&Tx{ctx: ctx, tx: tx, q: sqlitedb.New(tx), s: s}); err != nil {
+	if err := fn(&Tx{ctx: ctx, tx: tx, q: sqlitedb.New(tx), retryBudget: s.retryBudget}); err != nil {
 		return err
 	}
 	return tx.Commit()

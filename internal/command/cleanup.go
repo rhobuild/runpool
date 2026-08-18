@@ -325,7 +325,7 @@ func openStoreAndDocker(ctx context.Context) (*store.Store, *docker.Client, func
 		}
 		return nil, nil, nil, err
 	}
-	st, err := store.Open(stateDir())
+	st, err := store.Open(stateDir(), store.DefaultRetryBudget)
 	if err != nil {
 		lock.Release()
 		return nil, nil, nil, err

@@ -46,7 +46,7 @@ func TestPreMigrationBackupsAreNeverOverwritten(t *testing.T) {
 // the operator what to do, because that is the whole value of stopping.
 func TestUnknownSchemaVersionIsRefusedWithInstructions(t *testing.T) {
 	dir := t.TempDir()
-	st, err := Open(dir)
+	st, err := Open(dir, DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestUnknownSchemaVersionIsRefusedWithInstructions(t *testing.T) {
 	}
 	st.Close()
 
-	_, err = Open(dir)
+	_, err = Open(dir, DefaultRetryBudget)
 	if err == nil {
 		t.Fatal("a database from an unknown build was opened")
 	}

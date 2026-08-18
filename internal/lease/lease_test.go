@@ -53,7 +53,7 @@ type fixture struct {
 // serving it — the state every lease-machine test starts from.
 func newFixture(t *testing.T, remove Remover) *fixture {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

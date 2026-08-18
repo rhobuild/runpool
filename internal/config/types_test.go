@@ -240,3 +240,21 @@ func TestRetentionWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestTierImage: a tier's own image replaces the shipped one for that
+// tier alone, and a tier that names none runs what the build ships. The
+// binding that launches and the status document that reports both apply
+// this method, so this is the one place the rule is pinned.
+func TestTierImage(t *testing.T) {
+	const shipped = "ghcr.io/rhobuild/runpool/capsule@sha256:" +
+		"1111111111111111111111111111111111111111111111111111111111111111"
+	const operators = "ghcr.io/acme/capsule@sha256:" +
+		"2222222222222222222222222222222222222222222222222222222222222222"
+
+	if got := (Tier{ID: "standard"}).Image(shipped); got != shipped {
+		t.Errorf("a tier naming no image runs %q, want the shipped capsule", got)
+	}
+	if got := (Tier{ID: "heavy", CapsuleImage: operators}).Image(shipped); got != operators {
+		t.Errorf("a tier naming an image runs %q, want its own", got)
+	}
+}

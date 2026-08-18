@@ -16,10 +16,11 @@ func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errBuf bytes.Buffer
 	code = Execute(args, BuildInfo{
-		Version:      "v1.2.3",
-		Commit:       "abc123",
-		Built:        "2026-08-13T00:00:00Z",
-		CapsuleImage: "ghcr.io/rhobuild/runpool/capsule@sha256:test",
+		Version: "v1.2.3",
+		Commit:  "abc123",
+		Built:   "2026-08-13T00:00:00Z",
+		CapsuleImage: "ghcr.io/rhobuild/runpool/capsule@sha256:" +
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	},
 		IO{In: strings.NewReader(""), Out: &out, Err: &errBuf})
 	return code, out.String(), errBuf.String()
@@ -321,5 +322,52 @@ tiers:
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the effective configuration does not mention %q:\n%s", want, stdout)
 		}
+	}
+}
+
+// TestReportingShapesBeforeTheFirstServe pins what each surface answers
+// on an instance that has never run. The listing answers in the
+// listing's own shape — an empty array, because no state holds no
+// attempts — and inspect fails naming the absent state, because it was
+// asked about one attempt that therefore does not exist. Only status
+// answers the question "has this instance served", and its document
+// carries `served` as the v1 discriminator in both forms, so a consumer
+// branches on a field instead of on which fields happen to exist.
+func TestReportingShapesBeforeTheFirstServe(t *testing.T) {
+	t.Setenv("RUNPOOL_STATE_DIR", t.TempDir())
+
+	code, stdout, _ := run(t, "attempts", "list", "--state", "manual-review", "--json")
+	if code != exitOK {
+		t.Fatalf("attempts list --json = %d; want 0", code)
+	}
+	var attempts []map[string]any
+	if err := json.Unmarshal([]byte(stdout), &attempts); err != nil {
+		t.Fatalf("attempts list --json did not emit a JSON array: %v (%q)", err, stdout)
+	}
+	if len(attempts) != 0 {
+		t.Errorf("attempts list on a never-run instance = %d entries; want none", len(attempts))
+	}
+
+	code, _, stderr := run(t, "attempts", "inspect", "att-1", "--json")
+	if code == exitOK {
+		t.Error("attempts inspect on a never-run instance succeeded; the attempt cannot exist")
+	}
+	if !strings.Contains(stderr, "has not run yet") {
+		t.Errorf("inspect's failure does not name the absent state: %q", stderr)
+	}
+
+	code, stdout, _ = run(t, "status", "--json")
+	if code != exitOK {
+		t.Fatalf("status --json = %d; want 0", code)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("status --json: %v", err)
+	}
+	if doc["api_version"] != "v1" {
+		t.Errorf("api_version = %v; want v1", doc["api_version"])
+	}
+	if served, ok := doc["served"].(bool); !ok || served {
+		t.Errorf("served = %v; the pre-serve form carries served=false", doc["served"])
 	}
 }

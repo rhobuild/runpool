@@ -114,17 +114,27 @@ func newGitHubCredentialProbe(configURL string, secret credential.Secret) (docto
 	if err != nil {
 		return nil, err
 	}
-	return githubProbe{client}, nil
+	return githubProbe{client: client}, nil
 }
 
 // githubProbe narrows the adapter's client to what the doctor declares.
 // The adapter answers with its own scale set type, and the doctor stays
 // provider-neutral by never naming one — so the translation belongs here,
 // in the layer that already knows which adapter this is.
-type githubProbe struct{ *githubactions.Client }
+//
+// The client is a named field, not embedded: embedding would promote the
+// adapter's whole method set, and the value handed to a package that
+// promises never to mutate durable product state would carry
+// DeleteScaleSet and RemoveRunner along with it. The two forwards below
+// are the probe's entire surface, and a test holds the type to that.
+type githubProbe struct{ client *githubactions.Client }
+
+func (p githubProbe) RunnerGroupID(ctx context.Context, group string) (int, error) {
+	return p.client.RunnerGroupID(ctx, group)
+}
 
 func (p githubProbe) ScaleSetID(ctx context.Context, group, name string) (int, bool, error) {
-	set, found, err := p.Client.ScaleSetByName(ctx, group, name)
+	set, found, err := p.client.ScaleSetByName(ctx, group, name)
 	if err != nil || !found {
 		return 0, false, err
 	}

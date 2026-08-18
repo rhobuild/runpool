@@ -490,6 +490,18 @@ func allDigits(s string) bool {
 	return true
 }
 
+// Image is what this tier's jobs run in: the tier's configured capsule
+// where one is named, the shipped one everywhere else. The rule lives
+// here, beside Ceiling, because two surfaces apply it — the binding that
+// launches and the status document that reports — and two copies of a
+// default rule are how a report drifts from what runs.
+func (t Tier) Image(shipped string) string {
+	if t.CapsuleImage != "" {
+		return t.CapsuleImage
+	}
+	return shipped
+}
+
 // Ceiling is how long Runpool waits for one of this tier's capsules.
 func (t Tier) Ceiling() time.Duration {
 	if t.JobTimeout == nil {

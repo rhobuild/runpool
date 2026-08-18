@@ -201,7 +201,7 @@ func (t *Tx) withinRetryBudget(attemptID string) error {
 	if err != nil {
 		return err
 	}
-	if n >= t.s.retryBudget {
+	if n >= t.retryBudget {
 		return fmt.Errorf("%w: attempt %s has been served %d times",
 			ErrRetryBudgetExhausted, attemptID, n)
 	}

@@ -572,7 +572,7 @@ func TestCacheLaneVolumes(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

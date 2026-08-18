@@ -80,7 +80,7 @@ func TestSchemaAheadOfBuildFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := Open(dir); err == nil {
+	if _, err := Open(dir, DefaultRetryBudget); err == nil {
 		t.Fatal("opening a newer schema succeeded; want refusal")
 	}
 }
