@@ -34,7 +34,12 @@ updates:
       controller-images:
         patterns: ["*"]
     ignore:
-      # Same builder, same reason as the capsule below.
+      # The builder must compile with the Go that go.mod declares and that
+      # every test ran on. Patch releases keep that true and are welcome;
+      # a minor or major bump does not, and it is also where Go publishes
+      # release candidates, so an unattended update once proposed building
+      # the shipped binary with a compiler no test had used. Those bumps
+      # belong in the same reviewed commit as go.mod.
       - dependency-name: golang
         update-types:
           - version-update:semver-minor
@@ -49,12 +54,7 @@ updates:
       capsule-images:
         patterns: ["*"]
     ignore:
-      # The builder must compile with the Go that go.mod declares and that
-      # every test ran on. Patch releases keep that true and are welcome;
-      # a minor or major bump does not, and it is also where Go publishes
-      # release candidates, so an unattended update once proposed building
-      # the shipped binary with a compiler no test had used. Those bumps
-      # belong in the same reviewed commit as go.mod.
+      # Same builder, same reason as the controller above.
       - dependency-name: golang
         update-types:
           - version-update:semver-minor
