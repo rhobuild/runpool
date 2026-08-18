@@ -102,15 +102,6 @@ func TestTerminalFailureDistinguishesUnstartedRunners(t *testing.T) {
 	}
 }
 
-// The controller reads this code to tell an abort from an execution; see
-// capsule.SupervisorAbortedExitCode. The two binaries cannot import each
-// other, so both pin the literal.
-func TestExitAbortedIsPinned(t *testing.T) {
-	if exitAborted != 79 {
-		t.Errorf("exitAborted = %d; capsule.SupervisorAbortedExitCode is 79", exitAborted)
-	}
-}
-
 // TestRunnerStatusNeverCollidesWithTheAbortCode. This process returns the
 // runner's own status as the capsule's, and the controller reads
 // exitAborted as proof the runner never started — the one account a

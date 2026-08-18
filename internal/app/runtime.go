@@ -92,7 +92,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	}
 
 	runnerName := "runpool-" + shortID(lease.ID)
-	jit, err := b.jit.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
+	jit, err := b.gh.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
 	if err != nil {
 		log.Error("jit generation failed", "error", err)
 		s.recoverCapsuleFailure(b, lease.ID, startObs)
@@ -359,7 +359,7 @@ func (s *Controller) recoverCapsuleFailure(b *binding, leaseID string, startObs 
 	// its Docker resources, but there is no client to deregister the
 	// runner with — GitHub expires an unseen ephemeral runner on its own.
 	if runnerGitHubID != 0 && b != nil {
-		switch err := b.jit.RemoveRunner(ctx, int(runnerGitHubID)); {
+		switch err := b.gh.RemoveRunner(ctx, int(runnerGitHubID)); {
 		case err == nil:
 		case errors.Is(err, githubactions.ErrRunnerNotFound):
 			// Already gone, which is what cleanup wanted.

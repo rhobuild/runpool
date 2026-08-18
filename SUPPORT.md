@@ -21,7 +21,7 @@ not a support commitment while the project remains unreleased.
 | Area | State |
 | --- | --- |
 | CI provider | GitHub Actions, as the single adapter. The control plane is provider-neutral by construction, but no other adapter exists or is promised. |
-| Host | Linux amd64, rootful Docker Engine 28.0 or newer, cgroup v2 with the memory and pids controllers. Docker Engine 29.6.2 on Debian 13 is selected for the first release qualification; the remaining host facts have not yet been frozen. See the exact support matrix. |
+| Host | Linux amd64, rootful Docker Engine 28.0 or newer, cgroup v2 with the memory and pids controllers. Docker Engine 29.7.2 on Debian 13 is selected for the first release qualification; the remaining host facts have not yet been frozen. See the exact support matrix. |
 | Scope | Repository-scoped and organization-scoped scale sets. Persistent cache lanes are repository-scoped only. |
 | Egress | The restricted profile (implemented and tested live, not yet release-qualified) denies direct egress and permits proxy HTTP or CONNECT to allowed addresses on ports 80/443. See [the runbook](docs/runbook.md). |
 | State | SQLite in a Docker named volume, one controller per state directory, enforced by a lock. |

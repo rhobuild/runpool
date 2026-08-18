@@ -172,7 +172,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 			FreeBytes:    p.FreeBytes,
 			FreeInodes:   p.FreeInodes,
 			ManagedBytes: p.ManagedBytes,
-			MeasuredAt:   time.Unix(p.MeasuredAt, 0).UTC().Format(time.RFC3339),
+			MeasuredAt:   rfc3339(time.Unix(p.MeasuredAt, 0)),
 		}
 	}
 	for _, b := range snap.Bindings {
@@ -198,7 +198,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 			Project:     project,
 			RuntimeName: l.RuntimeName,
 			Evidence:    string(attempt.Evidence),
-			CreatedAt:   l.CreatedAt.UTC().Format(time.RFC3339),
+			CreatedAt:   rfc3339(l.CreatedAt),
 			Resources:   []resourceDTO{},
 		}
 		for _, in := range snap.Resources[l.ID] {
@@ -211,7 +211,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	for _, c := range snap.CacheLanes {
 		doc.CacheLanes = append(doc.CacheLanes, laneDTO{
 			ID: c.ID, SourceProjectKey: c.SourceProjectKey, Generation: c.Generation,
-			LeasedBy: c.LeasedBy, LastUsed: time.Unix(c.LastUsed, 0).UTC().Format(time.RFC3339),
+			LeasedBy: c.LeasedBy, LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
 		})
 	}
 	doc.ManualReview = append(doc.ManualReview, review...)

@@ -45,9 +45,12 @@ targets:
     cache:
       enabled: false
     tiers:
+      # No scaleSetName: the name defaults to runpool-<tier id>, so
+      # workflows reach this tier with: runs-on: runpool-standard — the
+      # label every guide and the example workflow use. The company
+      # target above names its set explicitly, which is the form for
+      # serving one tier to several targets without a collision.
       - tier: standard
-        # Workflows reach this tier with: runs-on: runpool-app-standard
-        scaleSetName: runpool-app-standard
 
 credentials:
   # A token belongs to the person who minted it. For anything long-running

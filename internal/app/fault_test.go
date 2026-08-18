@@ -57,7 +57,30 @@ func (f *fakeCapsule) InspectExecution(context.Context, capsule.PreparedRuntime)
 	return f.obs, f.obsErr
 }
 
-type fakeRegistry struct{ jitErr error }
+// nullProvider answers every provider method with its zero value. The
+// scenario fakes embed it and override exactly the calls their scenario
+// is about, so merging the provider seams did not force every fake to
+// carry methods its test never exercises.
+type nullProvider struct{}
+
+func (nullProvider) EnsureScaleSet(context.Context, string, string, int, bool) (githubactions.ScaleSet, error) {
+	return githubactions.ScaleSet{}, nil
+}
+
+func (nullProvider) GenerateJITConfig(context.Context, int, string, string) (githubactions.JITConfig, error) {
+	return githubactions.JITConfig{}, nil
+}
+
+func (nullProvider) RemoveRunner(context.Context, int) error { return nil }
+
+func (nullProvider) OpenSession(context.Context, int, string) (*githubactions.Session, error) {
+	return nil, errors.New("this fake opens no sessions")
+}
+
+type fakeRegistry struct {
+	nullProvider
+	jitErr error
+}
 
 func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (githubactions.JITConfig, error) {
 	if f.jitErr != nil {
@@ -84,7 +107,7 @@ func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, 
 	t.Helper()
 	h.srv.caps = caps
 	h.srv.wait = wait
-	h.bind.jit = reg
+	h.bind.gh = reg
 	if err := h.deliver(demand(workload, "app", 60)); err != nil {
 		t.Fatal(err)
 	}

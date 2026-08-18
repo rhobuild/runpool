@@ -66,9 +66,14 @@ var narrowDeps = map[string][]string{
 		module + "/internal/store",
 	},
 	// capsule talks to the daemon; it must not also import the gateway,
-	// which is a separate process with its own lifecycle.
+	// which is a separate process with its own lifecycle. The protocol
+	// leaf is the values the supervisor and the launcher must agree on —
+	// one declaration both sides import is what makes their drift
+	// unrepresentable, so the edge is the point rather than a
+	// convenience.
 	module + "/internal/capsule": {
 		module + "/internal/assignment",
+		module + "/internal/capsule/protocol",
 		module + "/internal/config",
 		module + "/internal/egress",
 		module + "/internal/platform/docker",

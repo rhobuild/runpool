@@ -43,27 +43,20 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 )
 
 const (
-	// protocolVersion is what this capsule declares it speaks, written to
-	// protocolFile at boot and read by the controller before it hands the
-	// capsule anything. Part of the control-surface contract; must match
-	// capsule.ProtocolVersion.
-	protocolVersion = "1"
-	// exitAborted says the supervisor stopped before the runner started, so
-	// the job was never handed over and must be retried. It is a distinct
-	// exit code because the state file cannot outlive the container: by the
-	// time a controller inspects an aborted capsule the daemon reports
-	// `exited`, exec is impossible and the tmpfs control surface is gone.
-	// Part of the control-surface contract; must match
-	// capsule.SupervisorAbortedExitCode.
-	exitAborted  = 79
-	controlDir   = "/run/runpool"
-	stateFile    = controlDir + "/state"
-	jitFile      = controlDir + "/jitconfig"
-	startFile    = controlDir + "/start"
-	protocolFile = controlDir + "/protocol"
+	// The shared control-surface vocabulary lives in
+	// internal/capsule/protocol — one declaration for both sides.
+	protocolVersion = protocol.Version
+	exitAborted     = protocol.AbortedExitCode
+	controlDir      = "/run/runpool"
+	stateFile       = controlDir + "/state"
+	jitFile         = controlDir + "/jitconfig"
+	startFile       = controlDir + "/start"
+	protocolFile    = controlDir + "/protocol"
 
 	dockerSocket = "/run/runpool-docker/docker.sock"
 

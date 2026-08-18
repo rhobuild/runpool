@@ -65,17 +65,6 @@ func TestClassifySupervisorExitSeparatesAbortFromExit(t *testing.T) {
 	}
 }
 
-// The exit code is a contract between two binaries that cannot import each
-// other: the supervisor ships inside the capsule image and must stay free
-// of the controller's dependency tree. Both sides pin the literal, so
-// changing one without the other fails here or in cmd/capsule-supervisor.
-func TestSupervisorAbortedExitCodeIsPinned(t *testing.T) {
-	if SupervisorAbortedExitCode != 79 {
-		t.Errorf("SupervisorAbortedExitCode = %d; the supervisor's exitAborted is 79",
-			SupervisorAbortedExitCode)
-	}
-}
-
 // TestClassifyContainerStateNeverAsksAStoppedCapsule is the shape of the
 // defect this replaced: an exited container short-circuited to
 // assignment.ObservedExited before the supervisor was ever consulted, so an abort

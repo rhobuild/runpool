@@ -27,7 +27,7 @@ import (
 
 const (
 	workFolder = "_work"
-	// drainTimeout bounds the wait for capsule goroutines at shutdown. A
+	// DrainTimeout bounds the wait for capsule goroutines at shutdown. A
 	// capsule running a job outlives any window worth waiting — that is
 	// what adoption on the next start is for — so this is sized to be
 	// spent, and to leave the deployment's stop grace period enough room
@@ -35,13 +35,17 @@ const (
 	// that grace period is never reached: the platform sends SIGKILL
 	// first, the sessions stay open, and the next start waits each one
 	// out as a conflict.
-	drainTimeout = 60 * time.Second
-	// sessionCloseBudget bounds closing every binding's message session
+	//
+	// Exported with SessionCloseBudget because their sum is a deployment
+	// contract: the reference deployment's stop grace period is sized
+	// against it, and the consistency suite reads both sides.
+	DrainTimeout = 60 * time.Second
+	// SessionCloseBudget bounds closing every binding's message session
 	// at shutdown — all of them together, under one budget. One budget
 	// and not one per binding: the deployment's stop grace period has to
 	// hold drain plus this, and a bound that grew with the binding count
 	// would outgrow any grace period an operator chose.
-	sessionCloseBudget = 15 * time.Second
+	SessionCloseBudget = 15 * time.Second
 	pollBackoff        = 5 * time.Second
 
 	// capsulePrepTimeout bounds getting a capsule to the point of running:
@@ -90,12 +94,11 @@ type binding struct {
 	target config.Target
 	tier   config.Tier
 	ref    config.TargetRef
-	gh     *githubactions.Client
-	// jit is the serving-time slice of gh, split out so the fault matrix
-	// can mint credentials and deregister runners without a provider.
-	jit runnerRegistry
-	// sets is the startup slice of gh, split out for the same reason.
-	sets scaleSetRegistry
+	// gh is the provider client, held as the one interface above: the
+	// binding must not know more about its provider than it serves
+	// through, and a concrete client here was how partial test doubles
+	// and untested paths accumulated.
+	gh provider
 	// scaleSetID is the provider's own id for this binding's scale set,
 	// held in memory for the session and JIT calls. bindingID is what the
 	// attempt and lease machinery keys on; this reaches the store in one
@@ -358,20 +361,20 @@ type runtimeWaiter interface {
 	TailLogs(ctx context.Context, id string, lines int) (string, error)
 }
 
-// runnerRegistry is what a binding needs from its provider client while
-// serving: mint one JIT credential, deregister one runner.
-type runnerRegistry interface {
+// provider is everything a binding needs from its provider client, as
+// one interface: the scale set it creates or adopts, the JIT
+// credentials it mints, the runners it deregisters, and the message
+// session it polls. One seam rather than a concrete client beside two
+// partial views, because they are one client holding one credential —
+// and because what the loop has to get right is the provider failing,
+// which is only testable against a provider that fails on demand. The
+// session keeps its own seam through newSession: the loop's session
+// handling is a subject of its own.
+type provider interface {
+	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool) (githubactions.ScaleSet, error)
 	GenerateJITConfig(ctx context.Context, scaleSetID int, runnerName, workFolder string) (githubactions.JITConfig, error)
 	RemoveRunner(ctx context.Context, id int) error
-}
-
-// scaleSetRegistry is what a binding needs from its provider client
-// before serving: create or adopt its scale set. Declared here, like the
-// seam above, because the loop has to get its failure right — an
-// unreachable provider is a retry, not the end of the process — and that
-// is only testable against a registry that fails on demand.
-type scaleSetRegistry interface {
-	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool) (githubactions.ScaleSet, error)
+	OpenSession(ctx context.Context, scaleSetID int, owner string) (*githubactions.Session, error)
 }
 
 // providerSession is the message session as the serving loop uses it.
@@ -486,7 +489,7 @@ type Controller struct {
 	// failure to dismantle instead of a capsule to adopt.
 	abandoning atomic.Bool
 
-	// drainWindow overrides drainTimeout in tests; zero means the
+	// drainWindow overrides DrainTimeout in tests; zero means the
 	// default. Held for the same reason as pollBackoff: a minute is not
 	// something a test waits.
 	drainWindow time.Duration
@@ -496,7 +499,7 @@ func (s *Controller) drain() error {
 	s.log.Info("draining")
 	window := s.drainWindow
 	if window == 0 {
-		window = drainTimeout
+		window = DrainTimeout
 	}
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
@@ -519,7 +522,7 @@ func (s *Controller) drain() error {
 // under one shared budget. The loops have already been waited out, so
 // each binding's session field is quiescent here.
 func (s *Controller) closeSessions() {
-	ctx, cancel := context.WithTimeout(context.Background(), sessionCloseBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), SessionCloseBudget)
 	defer cancel()
 	var wg sync.WaitGroup
 	for _, b := range s.bindings {

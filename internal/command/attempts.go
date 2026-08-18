@@ -177,7 +177,7 @@ func runAttemptsInspect(streams IO, id string, asJSON bool) error {
 		fmt.Fprintln(streams.Out, "lifecycle:")
 		for _, ev := range events {
 			fmt.Fprintf(streams.Out, "  %s  %-28s %s\n",
-				time.Unix(ev.CreatedAt, 0).UTC().Format(time.RFC3339), ev.Kind, ev.Detail)
+				rfc3339(time.Unix(ev.CreatedAt, 0)), ev.Kind, ev.Detail)
 		}
 		return nil
 	})
