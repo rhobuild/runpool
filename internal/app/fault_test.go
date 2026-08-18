@@ -8,6 +8,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
+	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -94,9 +95,17 @@ func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return nil }
 type fakeWaiter struct {
 	exit    int64
 	waitErr error
+	// deadline captures the wait context's bound, which is where the
+	// tier's ceiling — or what a lease has left of it — must arrive.
+	deadline time.Time
 }
 
-func (f *fakeWaiter) WaitExit(context.Context, string) (int64, error) { return f.exit, f.waitErr }
+func (f *fakeWaiter) WaitExit(ctx context.Context, _ string) (int64, error) {
+	if d, ok := ctx.Deadline(); ok {
+		f.deadline = d
+	}
+	return f.exit, f.waitErr
+}
 func (f *fakeWaiter) TailLogs(context.Context, string, int) (string, error) {
 	return "", nil
 }
@@ -503,4 +512,50 @@ func TestPeriodicReconcileSpareAJobBeingLaunched(t *testing.T) {
 	if h.srv.alloc.TryReserve(h.bind.key) {
 		t.Error("the launching lease's admission credit was released out from under it")
 	}
+}
+
+// TestTheWaitInheritsWhatTheLeaseHasLeft: the ceiling bounds how long
+// this instance waits for one capsule, and a lease adopted after a
+// restart has already spent part of it. remainingCeiling holds that
+// rule; this pins the wiring — that runCapsule's wait actually receives
+// the remainder, because a wait built from the tier's full ceiling
+// would hand every restart a fresh budget and the wedge the ceiling
+// exists to bound would be extended by each one.
+func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
+	h := newHarness(t, 1)
+	h.bind.tier.JobTimeout = ptrDuration(2 * time.Hour)
+	caps := &fakeCapsule{}
+	wait := &fakeWaiter{}
+	h.srv.caps = caps
+	h.srv.wait = wait
+	h.bind.gh = &fakeRegistry{}
+	if err := h.deliver(demand("job-adopted", "app", 61)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-adopted")
+
+	// An adopted lease is one whose clock started in a previous process:
+	// age it ninety minutes, then drive it.
+	aged := lease
+	aged.CreatedAt = time.Now().Add(-90 * time.Minute)
+	before := time.Now()
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, aged)
+
+	if wait.deadline.IsZero() {
+		t.Fatal("the wait carried no deadline; the ceiling never reached it")
+	}
+	left := wait.deadline.Sub(before)
+	if left > 40*time.Minute {
+		t.Fatalf("the wait was given %s; a ninety-minute-old lease on a two-hour ceiling has ~30m left, "+
+			"so the restart handed it a fresh budget", left.Round(time.Minute))
+	}
+	if left < 20*time.Minute {
+		t.Fatalf("the wait was given %s; want roughly the thirty minutes the lease has left", left.Round(time.Minute))
+	}
+}
+
+func ptrDuration(d time.Duration) *config.Duration {
+	cd := config.Duration(d)
+	return &cd
 }

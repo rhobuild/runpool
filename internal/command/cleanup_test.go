@@ -134,3 +134,30 @@ func TestQueuedAttemptsAreVisibleBeforeAPurge(t *testing.T) {
 		t.Errorf("queuedAttemptCount of nothing queued = %d; want 0", got)
 	}
 }
+
+// TestUninstallRefusesBeforeItDescribes: a wrong confirmation is
+// refused before anything is described in the present tense. The
+// refusal-first order matters because the description reads "removing"
+// once a confirmation is present — a command that prints the removal
+// line and then refuses has told the operator something happened that
+// did not.
+func TestUninstallRefusesBeforeItDescribes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	code, stdout, stderr := run(t, "uninstall", "--confirm", "not-this-instance")
+	if code == exitOK {
+		t.Fatal("a wrong confirmation succeeded")
+	}
+	if !strings.Contains(stderr, "does not name this instance") {
+		t.Errorf("the refusal does not say what was wrong: %q", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("the refusal printed a description first:\n%s", stdout)
+	}
+}
