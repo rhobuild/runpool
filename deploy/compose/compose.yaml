@@ -1,0 +1,79 @@
+# Reference deployment. The platform manages exactly one service — the
+# controller — and Runpool creates every job capsule through the Docker
+# API. Runner, dind, capsule networks and capsule volumes are never
+# declared here: they exist only while a job runs.
+#
+# WARNING: the controller holds the host's Docker socket, which confers
+# host-root authority, and job capsules run a privileged Docker daemon.
+# Runpool is a resource and hygiene boundary for CI you trust, not a
+# sandbox for hostile code. Do not point it at repositories whose
+# workflows you would not run on this host yourself.
+name: runpool
+
+services:
+  controller:
+    # Supply the complete digest-qualified reference published in the
+    # release, for example ghcr.io/rhobuild/runpool@sha256:.... A mutable
+    # tag such as latest cannot identify the bytes being deployed.
+    image: ${RUNPOOL_IMAGE:?set the digest-qualified released controller image (no release exists yet)}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      # File mode supports any number of targets without copying credentials
+      # into the Compose model or the container environment.
+      RUNPOOL_CONFIG_FILE: /etc/runpool/config.yaml
+    volumes:
+      # Dokploy persists ../files across repository refreshes. Other Compose
+      # operators may override these two source paths explicitly.
+      - type: bind
+        source: ${RUNPOOL_CONFIG_PATH:-../files/runpool/config.yaml}
+        target: /etc/runpool/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${RUNPOOL_CREDENTIALS_PATH:-../files/runpool/credentials}
+        target: /run/secrets/runpool
+        read_only: true
+        bind:
+          create_host_path: false
+      # Read-only on the mount prevents replacing the socket file; it does
+      # not restrict the Docker API, which is the authority that matters.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+      - type: volume
+        source: runpool-state
+        target: /var/lib/runpool/state
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runpool", "healthcheck", "--mode=liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Must exceed the controller's drain window, so the drain ends and the
+    # message sessions close before the platform kills the container. A
+    # session left open is one the next start waits out as a conflict.
+    # Anything still running is adopted on the next start.
+    stop_grace_period: 2m
+    labels:
+      io.runpool.role: controller
+
+volumes:
+  # State holds the lease and ownership records: back this up. Cache
+  # lanes are NOT declared here — the controller creates them as its own
+  # named volumes (runpool-cache-<lane>), labeled and garbage-collected;
+  # they are warm build state, disposable by design, and belong outside
+  # any backup.
+  runpool-state:
+    labels:
+      io.runpool.managed: "true"
+      io.runpool.kind: state

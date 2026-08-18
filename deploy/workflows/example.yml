@@ -1,0 +1,35 @@
+# The workflow side of a Runpool deployment, in full.
+#
+# `runs-on` names the scale set, not a set of labels. Runpool creates one
+# scale set per (target, tier) under `tiers[].scaleSetName`, which
+# defaults to `runpool-<tier id>`; `runpool doctor` prints the name for
+# every tier a deployment serves, beside the provider id where the set
+# already exists.
+#
+# `runs-on: [self-hosted, linux, x64]` does not reach a scale set. GitHub
+# matches a scale set by its name and nothing else.
+name: example
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: runpool-standard
+    steps:
+      - uses: actions/checkout@v5
+
+      # Every job gets its own Docker daemon inside its own capsule, so
+      # this needs no service, no socket mount and no privileged runner.
+      - name: The job has a Docker daemon of its own
+        run: |
+          docker version
+          docker run --rm alpine:3 echo "hello from a container this job started"
+
+      # Under the default network profile the capsule has no route out.
+      # Its only egress is a relay that applies the deployment's policy,
+      # and the proxy is set for the job, its steps, the daemon, and the
+      # containers that daemon creates. Anything that ignores proxy
+      # environment variables — git+ssh, arbitrary TCP — fails closed.
+      - name: Egress goes through the relay
+        run: curl -fsS https://api.github.com/zen
