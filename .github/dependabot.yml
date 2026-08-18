@@ -26,6 +26,21 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: docker
+    directory: /build/controller
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      controller-images:
+        patterns: ["*"]
+    ignore:
+      # Same builder, same reason as the capsule below.
+      - dependency-name: golang
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+
+  - package-ecosystem: docker
     directory: /build/capsule
     schedule:
       interval: weekly

@@ -161,6 +161,26 @@ jobs:
         # twice. This is the comment on each declaration made executable.
         run: scripts/verify/capsule-protocol.sh
 
+  image:
+    name: controller image
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the controller image
+        # Built but not pushed: publishing is a release decision, and a
+        # pull request must never be able to publish.
+        run: docker build -f build/controller/Dockerfile -t runpool:ci .
+      - name: The runtime layer must carry no shell
+        run: |
+          if docker run --rm --entrypoint sh runpool:ci -c true 2>/dev/null; then
+            echo "a shell is reachable in the runtime layer"; exit 1
+          fi
+      - name: The image must run
+        run: docker run --rm runpool:ci version
+
   vulnerabilities:
     name: govulncheck
     runs-on: ubuntu-24.04
