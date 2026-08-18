@@ -1,0 +1,34 @@
+# Fixture for the organization cache-isolation contract. Install this file as
+# .github/workflows/organization-cache.yml in both fixture repositories. The
+# contract verifies byte equality before dispatching either workflow.
+name: organization cache isolation
+
+run-name: "organization cache isolation ${{ inputs.correlation_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: Run-scoped identifier used by the contract harness
+        required: true
+        type: string
+      runner_label:
+        description: Run-scoped scale-set label created by the contract harness
+        required: true
+        type: string
+
+concurrency:
+  group: organization-cache-fixture-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 5
+    steps:
+      - name: Report the assigned repository
+        run: |
+          echo "repository=${{ github.repository }}"
+          echo "correlation=${{ inputs.correlation_id }}"
