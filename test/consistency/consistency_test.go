@@ -22,6 +22,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/app"
 	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/store"
 )
 
 func repoPath(parts ...string) string {
@@ -196,4 +197,17 @@ func keys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestTheTwoRetryBudgetDefaultsAgree: the deployment's default lives in
+// config, the maintenance commands' default lives in store, and an
+// import in either direction would put deployment vocabulary in the
+// store or persistence in the schema. Two constants, one value, held
+// here.
+func TestTheTwoRetryBudgetDefaultsAgree(t *testing.T) {
+	if config.DefaultRetryBudget != store.DefaultRetryBudget {
+		t.Fatalf("config.DefaultRetryBudget = %d, store.DefaultRetryBudget = %d; "+
+			"a deployment and a maintenance command would enforce different budgets",
+			config.DefaultRetryBudget, store.DefaultRetryBudget)
+	}
 }

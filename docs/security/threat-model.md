@@ -20,7 +20,7 @@ per-capsule gateway that relays under a default-deny policy.
 
 | Asset | Why it matters |
 |---|---|
-| Provider credential | Administers runners on the target; it remains in the controller |
+| Provider credential — a personal access token or a GitHub App private key | Administers runners on the target; either form remains in the controller |
 | Per-runner JIT bundle | Short-lived bootstrap material for one ephemeral runner; the assigned workload shares its execution identity |
 | The host Docker socket | Confers host-root authority |
 | The state database | Ownership records; deciding what Runpool may delete |
@@ -82,7 +82,7 @@ policy remain necessary in either topology.
 |---|---|---|
 | No state survives a job | Fresh dind data root, workspace and control tmpfs per capsule; the data root is a volume removed with the lease | Capsule contract, live |
 | A leaked runner cannot outlive its job | Ephemeral JIT runner, one job, removed on failure paths too | Live JIT flow, including removing a runner that never started |
-| Provider credentials never enter capsules; JIT state does not persist across jobs | Provider token remains in the controller. JIT arrives over exec stdin, its files are redirected to tmpfs, and it is absent from Docker configuration, environment, labels, and logs. The upstream runner requires it transiently in argv, visible to the assigned workload | Capsule contract asserts volatile materialization and no log disclosure; controller end-to-end qualification remains required |
+| Provider credentials never enter capsules; JIT state does not persist across jobs | The provider token or App private key remains in the controller. JIT arrives over exec stdin, its files are redirected to tmpfs, and it is absent from Docker configuration, environment, labels, and logs. The upstream runner requires it transiently in argv, visible to the assigned workload | Capsule contract asserts volatile materialization and no log disclosure; controller end-to-end qualification remains required |
 | Cross-repository cache contamination | Lanes are daemon-side named volumes, exclusive per lease, named by opaque ids, reused only for the same repository and generation | Live lane contract: marker persists for the same lane, another generation is blind |
 | Runpool deletes only what it owns | Instance- and lease-scoped ownership labels on every created object; creation recovery and destructive intent cleanup re-inspect ownership before acting; no daemon-wide prune | Foreign-resource contracts pass live; controller E2E asserts unrelated container, network and volume sentinels and still needs release qualification |
 | A crashed controller leaves nothing | Adoption of running capsules, sweep of orphans, singleton flock | Live SIGKILL mid-capsule, successor adopted and cleaned |

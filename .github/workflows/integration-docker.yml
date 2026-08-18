@@ -30,6 +30,7 @@ on:
       - "build/controller/**"
       - "deploy/compose/**"
       - "scripts/drills/**"
+      - "test/drills/**"
       - "test/contract/**"
       - ".github/workflows/integration-docker.yml"
   push:

@@ -64,8 +64,6 @@ services:
     # session left open is one the next start waits out as a conflict.
     # Anything still running is adopted on the next start.
     stop_grace_period: 2m
-    labels:
-      io.runpool.role: controller
 
 volumes:
   # State holds the lease and ownership records: back this up. Cache
@@ -73,7 +71,9 @@ volumes:
   # named volumes (runpool-cache-<lane>), labeled and garbage-collected;
   # they are warm build state, disposable by design, and belong outside
   # any backup.
-  runpool-state:
-    labels:
-      io.runpool.managed: "true"
-      io.runpool.kind: state
+  #
+  # Deliberately unlabeled: the io.runpool.* vocabulary belongs to the
+  # objects the controller creates and may collect, and this volume is
+  # the one thing it must never collect. A managed label here would be a
+  # false claim on exactly the object whose loss is unrecoverable.
+  runpool-state: {}

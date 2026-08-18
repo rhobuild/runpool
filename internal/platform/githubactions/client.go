@@ -36,7 +36,8 @@ func IsHostedDomain(host string) bool {
 }
 
 type ClientConfig struct {
-	// ConfigURL is the canonical target URL (repository or organization).
+	// ConfigURL is the canonical target URL, at any scope a target
+	// takes: repository, organization or enterprise.
 	ConfigURL string
 	// Credential is the resolved secret this client authenticates with. A
 	// token authenticates as the person who minted it; an App installation
