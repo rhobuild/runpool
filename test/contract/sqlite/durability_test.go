@@ -56,6 +56,19 @@ func TestCrashRecovery(t *testing.T) {
 	dbPath := filepath.Join(dir, "crash.db")
 	logPath := filepath.Join(dir, "crash.log")
 
+	// The database is established before the first victim starts, for
+	// the same reason TestContention establishes it: the controller
+	// creates its database under the flock singleton before anything
+	// else can reach it, so the crash production can deal a writer is
+	// against an established WAL database. Without this, a kill that
+	// lands inside the victim's own schema bootstrap leaves no entries
+	// table — correct durability for an uncommitted CREATE TABLE, but
+	// the verifier reads the absence as a lost table. DDL atomicity has
+	// its own coverage in TestMigrationMechanics.
+	setup := open(t, dbPath)
+	mustExec(t, setup, schema)
+	setup.Close()
+
 	for round := range 12 {
 		cmd := writerCmd(dbPath, logPath, 0)
 		if err := cmd.Start(); err != nil {
