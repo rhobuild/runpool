@@ -18,7 +18,11 @@ import (
 const statusAPIVersion = "v1"
 
 type statusDoc struct {
-	APIVersion    string         `json:"api_version"`
+	APIVersion string `json:"api_version"`
+	// Served discriminates v1's two forms: true carries the document
+	// below, false is the pre-serve form with only state_dir and detail.
+	// A consumer branches on this, not on which fields happen to exist.
+	Served        bool           `json:"served"`
 	Instance      string         `json:"instance"`
 	HostTopology  string         `json:"host_topology"`
 	SchemaVersion int            `json:"schema_version"`
@@ -145,6 +149,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		topology = cfg.Host.Topology
 	}
 	doc := statusDoc{
+		Served:        true,
 		APIVersion:    statusAPIVersion,
 		Instance:      snap.InstanceID,
 		HostTopology:  topology,
@@ -268,13 +273,9 @@ func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64
 		if cfg.Scheduling.Parallelism != nil && available > dto.Available {
 			available = dto.Available
 		}
-		image := tier.CapsuleImage
-		if image == "" {
-			image = shippedCapsule
-		}
 		dto.Tiers = append(dto.Tiers, tierCapacityDTO{
 			ID: tier.ID, Parallelism: tier.Parallelism, Active: tierActive, Available: available,
-			CapsuleImage: image,
+			CapsuleImage: tier.Image(shippedCapsule),
 		})
 	}
 	return dto

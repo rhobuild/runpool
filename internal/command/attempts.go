@@ -52,14 +52,13 @@ func viewOf(a store.Attempt, now time.Time) attemptView {
 
 // inReadOnlyStore runs fn against the read-only store: listing and
 // inspecting must not migrate — or create — a database a live
-// controller owns.
-func inReadOnlyStore(streams IO, asJSON bool, fn func(*store.Tx) error) error {
+// controller owns. ErrNoState propagates: what an absent state means is
+// the caller's question — an empty listing for list, a failure for
+// inspect — and answering it here forced every caller into one shape.
+func inReadOnlyStore(fn func(*store.Tx) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st, err := store.OpenReadOnly(stateDir())
-	if errors.Is(err, store.ErrNoState) {
-		return reportNoState(streams, asJSON)
-	}
 	if err != nil {
 		return err
 	}
@@ -74,7 +73,7 @@ func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
 		return usagef("attempts list serves --state manual-review and ready; %q is not wired", stateFilter)
 	}
 
-	return inReadOnlyStore(streams, asJSON, func(s *store.Tx) error {
+	err := inReadOnlyStore(func(s *store.Tx) error {
 		attempts, err := listAttempts(s, stateFilter)
 		if err != nil {
 			return err
@@ -99,6 +98,19 @@ func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
 		}
 		return nil
 	})
+	if errors.Is(err, store.ErrNoState) {
+		// No state is no attempts. An instance that has never run holds
+		// nothing for review and nothing ready, and the listing says so
+		// in the listing's own shape — whether it has run at all is
+		// status's question, answered in status's document.
+		if asJSON {
+			fmt.Fprintln(streams.Out, "[]")
+			return nil
+		}
+		fmt.Fprintf(streams.Out, "no attempts in %s\n", stateFilter)
+		return nil
+	}
+	return err
 }
 
 // listAttempts serves the two states an operator can act on: work held
@@ -126,7 +138,7 @@ func listAttempts(s *store.Tx, stateFilter string) ([]store.Attempt, error) {
 }
 
 func runAttemptsInspect(streams IO, id string, asJSON bool) error {
-	return inReadOnlyStore(streams, asJSON, func(s *store.Tx) error {
+	err := inReadOnlyStore(func(s *store.Tx) error {
 		attempt, err := s.Get(id)
 		if err != nil {
 			return err
@@ -169,6 +181,12 @@ func runAttemptsInspect(streams IO, id string, asJSON bool) error {
 		}
 		return nil
 	})
+	if errors.Is(err, store.ErrNoState) {
+		// Inspect names one attempt, and with no state that attempt does
+		// not exist: a failure that says why, not an empty success.
+		return fmt.Errorf("attempt %s: no state in %s; this instance has not run yet", id, stateDir())
+	}
+	return err
 }
 
 // runAttemptsResolve is the operator deciding held work. Exactly one of
@@ -209,7 +227,7 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, err := store.Open(stateDir())
+	st, err := store.Open(stateDir(), store.DefaultRetryBudget)
 	if err != nil {
 		return err
 	}

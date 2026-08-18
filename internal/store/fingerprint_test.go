@@ -51,7 +51,7 @@ func TestSchemaIdentifiedByContentsNotCount(t *testing.T) {
 	}
 
 	t.Run("the controller refuses it", func(t *testing.T) {
-		_, err := Open(dir)
+		_, err := Open(dir, DefaultRetryBudget)
 		if err == nil {
 			t.Fatal("a database written from different migrations was opened")
 		}
@@ -79,7 +79,7 @@ func TestSchemaIdentifiedByContentsNotCount(t *testing.T) {
 			}
 		}
 		b.Close()
-		if _, err := Open(bare); err == nil {
+		if _, err := Open(bare, DefaultRetryBudget); err == nil {
 			t.Fatal("a database predating the fingerprint was opened")
 		}
 	})
@@ -94,7 +94,7 @@ func TestAStoreThisBuildWroteReopens(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := Open(dir)
+	again, err := Open(dir, DefaultRetryBudget)
 	if err != nil {
 		t.Fatalf("reopening a store this build created: %v", err)
 	}

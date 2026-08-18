@@ -71,3 +71,23 @@ func TestATokenCredentialStillBuilds(t *testing.T) {
 		t.Fatal("no client")
 	}
 }
+
+// An empty personal access token is refused while the client is built,
+// symmetric with the incomplete-App refusal above and for the same
+// reason: the upstream constructor validates the config URL and nothing
+// about the credential, so the empty token would authenticate as nobody
+// and surface as the provider's authorization error instead of as a
+// statement about the configuration.
+func TestAnEmptyTokenIsRefusedAtBuild(t *testing.T) {
+	_, err := NewClient(ClientConfig{
+		ConfigURL:  "https://github.com/acme/app",
+		Credential: credential.Secret{},
+		Version:    "test",
+	})
+	if err == nil {
+		t.Fatal("an empty token built a client")
+	}
+	if !strings.Contains(err.Error(), "token is empty") {
+		t.Errorf("error = %v; want it to name the empty token", err)
+	}
+}

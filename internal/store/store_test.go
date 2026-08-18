@@ -16,7 +16,7 @@ import (
 
 func openStore(t *testing.T, dir string) *Store {
 	t.Helper()
-	s, err := Open(dir)
+	s, err := Open(dir, DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1243,7 +1243,7 @@ func TestRetryBudgetIsConfigurable(t *testing.T) {
 		"a negative count is ignored too":                     {-3, DefaultRetryBudget},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s, err := Open(t.TempDir(), WithRetryBudget(tc.set))
+			s, err := Open(t.TempDir(), tc.set)
 			if err != nil {
 				t.Fatal(err)
 			}

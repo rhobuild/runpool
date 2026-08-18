@@ -177,7 +177,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		log.Warn("network profile is unsafe-open-egress: capsules reach whatever this host reaches, including the LAN and host services")
 	}
 
-	capsuleImg, err := capsuleImage(opts.Environ, opts.CapsuleImage)
+	capsuleImg, err := CapsuleImage(opts.Environ, opts.CapsuleImage)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	}
 	defer lock.Release()
 
-	st, err := store.Open(opts.StateDir, store.WithRetryBudget(cfg.Scheduling.RetryBudget))
+	st, err := store.Open(opts.StateDir, cfg.Scheduling.RetryBudget)
 	if err != nil {
 		return err
 	}

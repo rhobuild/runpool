@@ -60,14 +60,14 @@ func TestCapsuleImageResolution(t *testing.T) {
 		}
 		return ""
 	}
-	img, err := capsuleImage(fromEnv, "runpool-capsule:dev")
+	img, err := CapsuleImage(fromEnv, "runpool-capsule:dev")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if img != "runpool-capsule:local-test" {
 		t.Errorf("with the override set, image = %q; want the override", img)
 	}
-	img, err = capsuleImage(func(string) string { return "" }, "runpool-capsule:dev")
+	img, err = CapsuleImage(func(string) string { return "" }, "runpool-capsule:dev")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,14 +77,14 @@ func TestCapsuleImageResolution(t *testing.T) {
 
 	release := "ghcr.io/rhobuild/runpool/capsule@sha256:" +
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	img, err = capsuleImage(func(string) string { return release }, release)
+	img, err = CapsuleImage(func(string) string { return release }, release)
 	if err != nil || img != release {
 		t.Fatalf("release image = %q, %v; want stamped digest", img, err)
 	}
-	if _, err := capsuleImage(fromEnv, release); err == nil {
+	if _, err := CapsuleImage(fromEnv, release); err == nil {
 		t.Fatal("a runtime override replaced the release capsule image")
 	}
-	if _, err := capsuleImage(func(string) string { return "" }, "ghcr.io/rhobuild/runpool/capsule:v1"); err == nil {
+	if _, err := CapsuleImage(func(string) string { return "" }, "ghcr.io/rhobuild/runpool/capsule:v1"); err == nil {
 		t.Fatal("a mutable release capsule reference was accepted")
 	}
 }

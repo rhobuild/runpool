@@ -17,7 +17,7 @@ import (
 // yield identical bytes, which is what lets a test compare this against
 // the committed snapshot and fail the build when the snapshot drifts.
 func SchemaProjection(dir string) (string, error) {
-	st, err := Open(dir)
+	st, err := Open(dir, DefaultRetryBudget)
 	if err != nil {
 		return "", fmt.Errorf("apply migrations: %w", err)
 	}

@@ -21,7 +21,7 @@ func main() {
 	}
 	mode, dir := os.Args[1], os.Args[2]
 
-	st, err := store.Open(dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open:", err)
 		os.Exit(1)

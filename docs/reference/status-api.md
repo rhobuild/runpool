@@ -18,11 +18,36 @@ them under the wrong schema.
   the monitor has run once; `discrepancies` is `null` when the daemon
   could not be reached, which is different from finding none.
 
+## The two forms, and their discriminator
+
+`served` is a boolean in every v1 document, and it is what a consumer
+branches on — never on which fields happen to exist.
+
+**`served: false`** is the whole document before the controller's first
+serve: no state directory exists yet, so there is nothing to report and
+nothing is invented. It carries exactly `api_version`, `served`,
+`state_dir` and `detail`.
+
+```json
+{"api_version": "v1", "served": false,
+ "state_dir": "/var/lib/runpool/state",
+ "detail": "this instance has not run yet"}
+```
+
+**`served: true`** carries the full shape below.
+
+This document is `status`'s alone. `attempts list` answers a different
+question — what is held for review, what is ready — and on an instance
+that has never run its answer is an empty array in its own shape, not
+this document; `attempts inspect` of any id fails then, naming the
+absent state, because the attempt it was asked about cannot exist.
+
 ## Shape
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `api_version` | string | `v1` |
+| `served` | boolean | The discriminator above; `true` in this form |
 | `instance` | string | This instance's opaque id |
 | `host_topology` | string | Effective `shared-daemon` or `dedicated-daemon`; `unknown` only when status cannot read configuration |
 | `schema_version` | number | The state schema in use |

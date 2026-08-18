@@ -95,7 +95,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				cacheEnabled: ref.Scope == config.ScopeRepository && target.Cache.Enabled,
 				generation:   target.Cache.Generation,
 				maxLanes:     laneCeiling(cfg, tier),
-				capsuleImage: tierCapsuleImage(tier, s.shippedCapsuleImage),
+				capsuleImage: tier.Image(s.shippedCapsuleImage),
 			}
 			if err := s.alloc.Register(tier.ID, b.key, tier.Parallelism); err != nil {
 				return err
@@ -237,18 +237,6 @@ func (s *Controller) recordProviderFailure(ctx context.Context, b *binding, caus
 	}
 	b.reaching = false
 	b.lastFailure = reason
-}
-
-// tierCapsuleImage is what one tier's jobs run in. A configured image
-// replaces the shipped one for that tier alone; the controller already
-// holds the host's daemon, so an operator naming their own capsule adds
-// nothing they could not already do, and the digest the validator
-// requires keeps the launch as exact as the shipped pin.
-func tierCapsuleImage(tier config.Tier, shipped string) string {
-	if tier.CapsuleImage != "" {
-		return tier.CapsuleImage
-	}
-	return shipped
 }
 
 // firstOf keeps the first moment of a run of like events: the second and

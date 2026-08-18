@@ -23,7 +23,10 @@ type imageLock struct {
 	} `json:"images"`
 }
 
-// capsuleImage resolves the outer capsule image the controller creates.
+// CapsuleImage resolves the outer capsule image the controller creates.
+// Exported because two surfaces must give the same answer: serve, which
+// launches it, and status, which reports it — a report resolved by any
+// other rule describes an image the controller does not run.
 // A release binary carries the exact digest that passed release qualification;
 // an environment value cannot replace it. Development builds may use an
 // explicit local image through RUNPOOL_CAPSULE_IMAGE.
@@ -31,7 +34,7 @@ type imageLock struct {
 // The runner and dind lock entries remain the build inputs of that
 // image — build/capsule/Dockerfile copies its halves from exactly those
 // digests — so the lock still reviews everything privileged that runs.
-func capsuleImage(environ func(string) string, buildDefault string) (string, error) {
+func CapsuleImage(environ func(string) string, buildDefault string) (string, error) {
 	if buildDefault == "" {
 		buildDefault = "runpool-capsule:dev"
 	}

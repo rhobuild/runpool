@@ -67,7 +67,7 @@ func (f *fakeVolumes) OwnedVolumeUsage(context.Context, string) ([]docker.Volume
 
 func newManager(t *testing.T) (*LaneManager, *store.Store, *fakeVolumes) {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestReleaseIsIdempotent(t *testing.T) {
 // possibly-active lane to a new job.
 func TestLaneLeaseSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
-	st, err := store.Open(dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestLaneLeaseSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st2, err := store.Open(dir)
+	st2, err := store.Open(dir, store.DefaultRetryBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
