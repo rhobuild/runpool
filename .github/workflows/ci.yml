@@ -91,6 +91,21 @@ jobs:
         run: |
           go tool sqlc diff
           go tool sqlc vet
+      - name: Verify coverage meets the floor
+        # The global floor protects the hermetic surface from regression;
+        # live contracts cover the Docker and provider adapters separately.
+        # Requiring covdata also rejects an incomplete Go distribution.
+        run: |
+          go tool -n covdata >/dev/null 2>&1 || { echo "toolchain has no covdata; it is not a complete distribution"; exit 1; }
+          go test -covermode=atomic -coverprofile=coverage.out -count=1 ./...
+          scripts/verify/coverage.sh coverage.out
+      - name: Keep the coverage baseline
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 14
+          if-no-files-found: error
       - name: Verify generated CLI documentation is current
         run: |
           go generate ./internal/command/...
