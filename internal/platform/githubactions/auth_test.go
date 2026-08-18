@@ -91,3 +91,22 @@ func TestAnEmptyTokenIsRefusedAtBuild(t *testing.T) {
 		t.Errorf("error = %v; want it to name the empty token", err)
 	}
 }
+
+// TestIsHostedDomain mirrors the upstream client's own classification,
+// which is what decides whether the API is addressed as api.<host> or
+// as <host>/api/v3. The predicate feeds visibility only — the startup
+// log and the doctor's boundary warning — never admission.
+func TestIsHostedDomain(t *testing.T) {
+	hosted := []string{"github.com", "GitHub.com", "www.github.com", "github.localhost", "acme.ghe.com", "eu.GHE.com"}
+	for _, h := range hosted {
+		if !IsHostedDomain(h) {
+			t.Errorf("IsHostedDomain(%q) = false; GitHub operates it", h)
+		}
+	}
+	notHosted := []string{"gihub.com", "ghe.com", "ghes.internal", "github.com.evil.example", "api.github.com.example"}
+	for _, h := range notHosted {
+		if IsHostedDomain(h) {
+			t.Errorf("IsHostedDomain(%q) = true; GitHub does not operate it", h)
+		}
+	}
+}
