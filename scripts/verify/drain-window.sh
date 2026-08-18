@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# The controller's drain window must fit inside the deployment's stop
-# grace period. Nothing else ties them: a Go constant and a Compose key
-# are separate ecosystems, and the drift is invisible in a green build
-# because neither side can see the other.
+# The controller's whole shutdown — the drain window plus the shared
+# budget for closing every message session — must fit inside the
+# deployment's stop grace period. Nothing else ties them: two Go
+# constants and a Compose key are separate ecosystems, and the drift is
+# invisible in a green build because neither side can see the other.
 #
 # The drift is not cosmetic. A capsule running a job outlives any drain
 # window, so the window is always spent whenever work is in flight. When
-# it outlasts the grace period the platform sends SIGKILL first, the
-# deferred session closes never run, and every restart with a live job
-# leaves the broker holding a session the next start has to wait out as a
-# conflict.
+# shutdown outlasts the grace period the platform sends SIGKILL first,
+# the deferred session closes never run, and every restart with a live
+# job leaves the broker holding a session the next start has to wait out
+# as a conflict.
 #
 # Usage: scripts/verify/drain-window.sh
 cd "$(dirname "$0")/../.."
@@ -46,6 +47,18 @@ if [ -z "$drain" ]; then
   exit 1
 fi
 
+close_expr=$(sed -n 's/^[[:space:]]*sessionCloseBudget[[:space:]]*=[[:space:]]*\(.*\)$/\1/p' internal/app/serve.go)
+if [ -z "$close_expr" ]; then
+  echo "FAIL  internal/app/serve.go declares no sessionCloseBudget"
+  exit 1
+fi
+close=$(seconds_from_go "$close_expr")
+if [ -z "$close" ]; then
+  echo "FAIL  internal/app/serve.go: cannot read sessionCloseBudget from '$close_expr'"
+  exit 1
+fi
+shutdown=$(( drain + close ))
+
 compose=deploy/compose/compose.yaml
 grace_raw=$(sed -n 's/^[[:space:]]*stop_grace_period:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$compose")
 if [ -z "$grace_raw" ]; then
@@ -56,10 +69,10 @@ grace=$(seconds_from_compose "$grace_raw")
 if [ -z "$grace" ]; then
   echo "FAIL  $compose: cannot read stop_grace_period from '$grace_raw'"
   status=1
-elif [ "$grace" -gt "$drain" ]; then
-  echo "ok    $compose stop_grace_period ${grace}s over a ${drain}s drain"
+elif [ "$grace" -gt "$shutdown" ]; then
+  echo "ok    $compose stop_grace_period ${grace}s over a ${shutdown}s shutdown (${drain}s drain + ${close}s session close)"
 else
-  echo "FAIL  $compose stop_grace_period is ${grace}s and the drain window is ${drain}s;"
+  echo "FAIL  $compose stop_grace_period is ${grace}s and shutdown needs ${shutdown}s (${drain}s drain + ${close}s session close);"
   echo "      the platform kills the controller before it closes its sessions"
   status=1
 fi
