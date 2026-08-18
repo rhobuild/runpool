@@ -45,6 +45,17 @@ The distinction that matters: a workflow author who is trusted still
 runs untrusted third-party code — dependencies, actions, containers.
 Runpool's per-job disposal and egress policy exist for that layer.
 
+**The target host is inside the trusted set, because the operator names
+it.** A target accepts any `https` host — an Enterprise Server or a
+data-residency domain speaks the same protocol — and the credential the
+target references travels to that host on every call. Runpool does not
+allowlist hosts; it makes the boundary visible instead: the first serve
+logs, per target, the host each credential authenticates against, a host
+GitHub does not operate is logged at `Warn`, and `runpool doctor` names
+the host in the credential verdict and warns beside it. A mistyped host
+is therefore a line in the first start's log and in every doctor run,
+not a silent standing grant to whoever holds the name.
+
 ## Deployment topologies
 
 Runpool requires an explicit host topology:

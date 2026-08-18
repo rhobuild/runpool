@@ -87,6 +87,11 @@ type Options struct {
 	// It is a factory rather than a client because the provider is
 	// reached per target: each has its own URL and credential.
 	NewCredentialProbe func(configURL string, secret credential.Secret) (CredentialProbe, error)
+	// HostedDomain reports whether the provider itself operates a host.
+	// Injected like the probe factory so the doctor stays
+	// provider-neutral; nil treats every host as hosted and no boundary
+	// warning is raised.
+	HostedDomain func(host string) bool
 }
 
 // CredentialProbe proves one credential can reach one target's runner
@@ -368,8 +373,17 @@ func checkCredentials(ctx context.Context, opts Options) []Result {
 			continue
 		}
 		out = append(out, Result{name, Pass,
-			fmt.Sprintf("%s scope, runner group %s reachable, authenticated as %s",
-				ref.Scope, group, describe(secret)), ""})
+			fmt.Sprintf("%s scope on %s, runner group %s reachable, authenticated as %s",
+				ref.Scope, ref.Host, group, describe(secret)), ""})
+		if opts.HostedDomain != nil && !opts.HostedDomain(ref.Host) {
+			// Visibility, not admission: the host is the operator's own
+			// claim, and the one moment it is worth a second look is
+			// here, where the credential that travels to it is proven
+			// live.
+			out = append(out, Result{name, Warn,
+				fmt.Sprintf("%s is not a host GitHub operates; the credential travels there", ref.Host),
+				"verify the host is the Enterprise Server you meant"})
+		}
 		out = append(out, scaleSetResults(ctx, probe, target, group)...)
 	}
 	return out

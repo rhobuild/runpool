@@ -39,6 +39,7 @@ func runDoctor(streams IO, asJSON bool) error {
 	// the composition root names an adapter.
 	if cfg != nil {
 		opts.NewCredentialProbe = newGitHubCredentialProbe
+		opts.HostedDomain = githubactions.IsHostedDomain
 	}
 	report := doctor.Run(ctx, opts)
 

@@ -587,3 +587,53 @@ func TestCheckCredentialsNamesTheIdentity(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckCredentialsNamesTheHost: any https host is accepted by
+// design, so where a credential travels has to be visible instead of
+// assumed. The verdict names the host it proved, and a host the
+// provider does not operate earns a warning beside the pass — the one
+// moment the boundary is worth a second look is when the credential
+// that crosses it has just been proven live.
+func TestCheckCredentialsNamesTheHost(t *testing.T) {
+	environ := func(k string) string {
+		if k == "TOKEN" {
+			return "t0ken"
+		}
+		return ""
+	}
+	cfgFor := func(url string) *config.Config {
+		return &config.Config{
+			Credentials: []config.Credential{{ID: "gh", TokenEnv: "TOKEN"}},
+			Targets:     []config.Target{{ID: "app", URL: url, CredentialID: "gh"}},
+		}
+	}
+	hosted := func(h string) bool { return h == "github.com" }
+
+	res := checkCredentials(t.Context(), Options{
+		Config: cfgFor("https://github.com/acme/app"), Environ: environ,
+		NewCredentialProbe: func(string, credential.Secret) (CredentialProbe, error) {
+			return &fakeProbe{id: 7}, nil
+		},
+		HostedDomain: hosted,
+	})
+	if len(res) != 1 || res[0].Status != Pass {
+		t.Fatalf("hosted target = %+v; want one pass and no warning", res)
+	}
+	if !strings.Contains(res[0].Detail, "github.com") {
+		t.Errorf("the verdict %q does not name the host it proved", res[0].Detail)
+	}
+
+	res = checkCredentials(t.Context(), Options{
+		Config: cfgFor("https://ghes.internal/acme/app"), Environ: environ,
+		NewCredentialProbe: func(string, credential.Secret) (CredentialProbe, error) {
+			return &fakeProbe{id: 7}, nil
+		},
+		HostedDomain: hosted,
+	})
+	if len(res) != 2 || res[0].Status != Pass || res[1].Status != Warn {
+		t.Fatalf("enterprise target = %+v; want the pass and the boundary warning", res)
+	}
+	if !strings.Contains(res[1].Detail, "ghes.internal") {
+		t.Errorf("the warning %q does not name where the credential travels", res[1].Detail)
+	}
+}

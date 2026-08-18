@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
@@ -333,4 +336,62 @@ func (r *recordingScaleSets) EnsureScaleSet(_ context.Context, _, _ string, _ in
 		r.duringCall()
 	}
 	return githubactions.ScaleSet{ID: r.id}, nil
+}
+
+// TestStartupSaysWhereEachCredentialTravels: any https host is accepted
+// by design, so the boundary has to be visible instead of enforced. A
+// host GitHub operates logs as ordinary; any other logs at Warn naming
+// the target, the host and the credential — which is what makes a
+// one-letter typosquat visible on the first start instead of quietly
+// authenticated forever.
+func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
+	build := func(t *testing.T, url string) string {
+		t.Helper()
+		st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		var buf strings.Builder
+		s := &Controller{
+			log:       slog.New(slog.NewTextHandler(&buf, nil)),
+			store:     st,
+			alloc:     allocator.New(),
+			byBinding: map[int64]*binding{},
+		}
+		cfg := &config.Config{
+			Instance:    config.Instance{Name: "test"},
+			Credentials: []config.Credential{{ID: "gh", TokenEnv: "TOKEN"}},
+			Targets: []config.Target{{
+				ID: "app", URL: url, CredentialID: "gh",
+				Tiers: []config.TierBinding{{TierID: "standard", ScaleSetName: "runpool-standard"}},
+			}},
+			Tiers: []config.Tier{{ID: "standard", Parallelism: 1}},
+		}
+		environ := func(k string) string {
+			if k == "TOKEN" {
+				return "t0ken"
+			}
+			return ""
+		}
+		if err := s.buildBindings(t.Context(), cfg, environ); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+
+	logged := build(t, "https://github.com/acme/app")
+	if !strings.Contains(logged, "host=github.com") {
+		t.Errorf("a hosted target's log does not name the host:\n%s", logged)
+	}
+	if strings.Contains(logged, "level=WARN") {
+		t.Errorf("a hosted target warned:\n%s", logged)
+	}
+
+	logged = build(t, "https://ghes.internal/acme/app")
+	if !strings.Contains(logged, "level=WARN") ||
+		!strings.Contains(logged, "host=ghes.internal") ||
+		!strings.Contains(logged, "credential=gh") {
+		t.Errorf("a non-hosted target must warn naming host and credential:\n%s", logged)
+	}
 }

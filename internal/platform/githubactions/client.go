@@ -11,11 +11,29 @@ package githubactions
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/actions/scaleset"
 
 	"github.com/rhobuild/runpool/internal/credential"
 )
+
+// IsHostedDomain reports whether GitHub itself operates the host: the
+// public site or a data-residency domain. It mirrors the upstream
+// client's own classification — github.com, www.github.com,
+// github.localhost and any subdomain of ghe.com resolve to the hosted
+// API endpoints, and every other host is addressed as an Enterprise
+// Server. The predicate exists for visibility, not admission: a
+// credential configured for an unrecognised host still travels there,
+// and the startup log and the doctor are the surfaces that say so.
+func IsHostedDomain(host string) bool {
+	host = strings.ToLower(host)
+	switch host {
+	case "github.com", "www.github.com", "github.localhost":
+		return true
+	}
+	return strings.HasSuffix(host, ".ghe.com")
+}
 
 type ClientConfig struct {
 	// ConfigURL is the canonical target URL (repository or organization).

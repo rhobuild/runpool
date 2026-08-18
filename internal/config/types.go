@@ -402,13 +402,31 @@ const (
 	ScopeEnterprise TargetScope = "enterprise"
 )
 
-// TargetRef is a parsed target URL. V1 supports github.com only, so any
-// other host is rejected here rather than failing later against the API.
+// TargetRef is a parsed target URL: the scope it names, the identifiers
+// under that scope, and the canonical form rebuilt from the host that was
+// given. Which hosts serve the protocol is not decided here; see
+// ParseTargetURL.
 type TargetRef struct {
-	Scope        TargetScope
-	Owner        string
+	Scope TargetScope
+	Owner string
+	// Host is the lowercased host the URL named, carried so the surfaces
+	// that must say where a credential travels — the startup log and the
+	// doctor — do not re-parse the canonical URL to find out.
+	Host         string
 	Repository   string
 	CanonicalURL string
+}
+
+// reservedTargetRoutes are the provider's own page prefixes. Kept short
+// and certain: every entry 404s as an account on the REST API, so no
+// legitimate owner is ever shadowed by the refusal.
+var reservedTargetRoutes = map[string]bool{
+	"apps":          true,
+	"marketplace":   true,
+	"notifications": true,
+	"settings":      true,
+	"sponsors":      true,
+	"topics":        true,
 }
 
 var (
@@ -440,25 +458,59 @@ func ParseTargetURL(raw string) (TargetRef, error) {
 	host := strings.ToLower(u.Host)
 	base := "https://" + host + "/"
 	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+	// Reserved routes: pages whose first segment can never be an account
+	// — each verified unregistrable — so a pasted settings or
+	// marketplace address is refused with its reason instead of being
+	// read as an owner and failing much later against the provider.
+	// "orgs" and "enterprises" are not here: they are addresses of the
+	// scopes they name, and the cases below translate them.
+	if len(segments) > 0 && reservedTargetRoutes[strings.ToLower(segments[0])] {
+		return TargetRef{}, fmt.Errorf(
+			"invalid target url %q: %q is a reserved route on the provider, not an owner", raw, segments[0])
+	}
 	switch {
 	case len(segments) == 2 && strings.EqualFold(segments[0], "enterprises") && ownerRe.MatchString(segments[1]):
 		return TargetRef{
 			Scope:        ScopeEnterprise,
+			Host:         host,
 			Owner:        segments[1],
 			CanonicalURL: base + "enterprises/" + segments[1],
+		}, nil
+	case len(segments) == 2 && strings.EqualFold(segments[0], "orgs") && ownerRe.MatchString(segments[1]):
+		// The address a browser shows for an organization. Both segments
+		// satisfy the owner and repository patterns, so without a case of
+		// its own it is not refused — it is read as a repository named
+		// after the organization and owned by "orgs". Nothing can be
+		// named "orgs": the segment is a reserved path prefix, as
+		// "enterprises" is, so no account is shadowed by reading it.
+		return TargetRef{
+			Scope:        ScopeOrganization,
+			Host:         host,
+			Owner:        segments[1],
+			CanonicalURL: base + segments[1],
 		}, nil
 	case len(segments) == 1 && ownerRe.MatchString(segments[0]):
 		return TargetRef{
 			Scope:        ScopeOrganization,
+			Host:         host,
 			Owner:        segments[0],
 			CanonicalURL: base + segments[0],
 		}, nil
-	case len(segments) == 2 && ownerRe.MatchString(segments[0]) && repoRe.MatchString(segments[1]):
+	case len(segments) == 2 && ownerRe.MatchString(segments[0]):
+		// A clone URL carries a .git suffix that names no repository: the
+		// API does not address one, so keeping it turns a recognisable
+		// paste into a 404 against the provider long after the operator
+		// has stopped looking at the URL they wrote.
+		name := strings.TrimSuffix(segments[1], ".git")
+		if !repoRe.MatchString(name) {
+			break
+		}
 		return TargetRef{
 			Scope:        ScopeRepository,
+			Host:         host,
 			Owner:        segments[0],
-			Repository:   segments[1],
-			CanonicalURL: base + segments[0] + "/" + segments[1],
+			Repository:   name,
+			CanonicalURL: base + segments[0] + "/" + name,
 		}, nil
 	}
 	return TargetRef{}, fmt.Errorf(

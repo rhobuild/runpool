@@ -48,6 +48,20 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 		if err != nil {
 			return err
 		}
+		// Where this target's credential travels is stated at startup,
+		// once per target, because nothing else makes it visible: any
+		// https host is accepted by design, so a typo squatting one
+		// letter away would otherwise authenticate quietly forever. A
+		// host GitHub operates is ordinary; any other is the operator's
+		// own claim, and the log says so at Warn without blocking it.
+		if githubactions.IsHostedDomain(ref.Host) {
+			s.log.Info("target authenticates against the provider",
+				"target", target.ID, "host", ref.Host, "credential", target.CredentialID)
+		} else {
+			s.log.Warn("target authenticates against a host GitHub does not operate; "+
+				"the credential travels there on every call",
+				"target", target.ID, "host", ref.Host, "credential", target.CredentialID)
+		}
 
 		for _, tb := range target.Tiers {
 			tier := tiers[tb.TierID]

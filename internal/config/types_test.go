@@ -1,9 +1,11 @@
 package config
 
 import (
-	"gopkg.in/yaml.v3"
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseByteSize(t *testing.T) {
@@ -256,5 +258,64 @@ func TestTierImage(t *testing.T) {
 	}
 	if got := (Tier{ID: "heavy", CapsuleImage: operators}).Image(shipped); got != operators {
 		t.Errorf("a tier naming an image runs %q, want its own", got)
+	}
+}
+
+// TestParseTargetURLTranslatesTheOrgsAddress: the address a browser
+// shows for an organization has two segments that both satisfy the
+// owner and repository patterns, so without its own case it would be
+// read as a repository named after the organization and owned by
+// "orgs" — an owner that cannot exist, discovered only at the provider.
+func TestParseTargetURLTranslatesTheOrgsAddress(t *testing.T) {
+	got, err := ParseTargetURL("https://github.com/orgs/acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Scope != ScopeOrganization || got.Owner != "acme" ||
+		got.CanonicalURL != "https://github.com/acme" {
+		t.Errorf("orgs address = %s %q %q; want the organization it names",
+			got.Scope, got.Owner, got.CanonicalURL)
+	}
+}
+
+// TestParseTargetURLTrimsTheCloneSuffix: a clone URL's .git names no
+// repository — the API does not address one — so keeping it turns a
+// recognisable paste into a 404 against the provider long after the
+// operator has stopped looking at the URL they wrote.
+func TestParseTargetURLTrimsTheCloneSuffix(t *testing.T) {
+	got, err := ParseTargetURL("https://github.com/acme/app.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Repository != "app" || got.CanonicalURL != "https://github.com/acme/app" {
+		t.Errorf("clone URL = %q %q; want the repository it names", got.Repository, got.CanonicalURL)
+	}
+	// The suffix alone is not a name.
+	if _, err := ParseTargetURL("https://github.com/acme/.git"); err == nil {
+		t.Error("a bare .git parsed as a repository")
+	}
+}
+
+// TestParseTargetURLRefusesReservedRoutes: every entry in the list 404s
+// as an account, so the refusal shadows nobody — and without it a pasted
+// settings or marketplace address reads as an owner and fails much later
+// with the provider's answer instead of this one.
+func TestParseTargetURLRefusesReservedRoutes(t *testing.T) {
+	for _, in := range []string{
+		"https://github.com/settings/profile",
+		"https://github.com/marketplace",
+		"https://github.com/notifications",
+		"https://github.com/sponsors/acme",
+		"https://github.com/topics/ci",
+		"https://github.com/apps/runpool",
+	} {
+		_, err := ParseTargetURL(in)
+		if err == nil {
+			t.Errorf("ParseTargetURL(%q) succeeded; the route is the provider's, not an owner's", in)
+			continue
+		}
+		if !strings.Contains(err.Error(), "reserved route") {
+			t.Errorf("ParseTargetURL(%q) = %v; want the refusal to say why", in, err)
+		}
 	}
 }
