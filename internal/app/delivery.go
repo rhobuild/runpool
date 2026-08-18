@@ -641,6 +641,11 @@ func (s *Controller) openSession(ctx context.Context, b *binding) error {
 	return nil
 }
 
+// announce publishes the binding's advertised capacity to its session
+// and logs the pool arithmetic when the number moved. Every announce
+// sets the session's capacity — the broker holds a total, not a delta —
+// but only a change is worth a log line, or a quiet pool would fill the
+// log with the same number every poll.
 func (s *Controller) announce(b *binding) {
 	credit := s.alloc.Advertised(b.key)
 	b.session.SetCapacity(credit)

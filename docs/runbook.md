@@ -195,11 +195,11 @@ Then decide it. Exactly one of the two decisions, and `--apply` to make
 it:
 
 ```bash
-runpool attempts resolve <id> --retry --reason "..." --apply
+runpool attempts resolve <id> --retry --reason "..." --actor "<name>" --apply
 ```
 
 ```bash
-runpool attempts resolve <id> --settle-may-have-run --reason "..." --apply
+runpool attempts resolve <id> --settle-may-have-run --reason "..." --actor "<name>" --apply
 ```
 
 `--retry` returns the attempt to the queue; use it when the evidence
@@ -236,7 +236,10 @@ metadata is purged, so retrying is safe.
 **What uninstall does not take with it**, because none of it is a
 resource this instance owns and each is a separate decision:
 
-- the state volume, which is the final copy of the books;
+- the state volume — though not the books: uninstall purges the
+  delivery, attempt and lease records, so what the volume still holds
+  afterwards is the instance identity and the audit record of
+  maintenance actions, not a copy of the work;
 - the pre-migration copies beside it, `pre-migration-v<n>.db`;
 - the images Runpool pulled, and the credential files a deployment
   mounted;

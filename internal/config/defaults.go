@@ -59,6 +59,13 @@ const (
 	// systematic failure gets paid for instead of found.
 	MinRetryBudget = 1
 	MaxRetryBudget = 10
+	// DefaultRetryBudget is the budget a deployment gets without setting
+	// one. store.DefaultRetryBudget is its counterpart for maintenance
+	// commands, which open the store with no configuration to read; the
+	// consistency suite holds the two to one value, because an import in
+	// either direction would put deployment vocabulary in the store or
+	// persistence in the schema.
+	DefaultRetryBudget = 3
 	// DefaultLeaseHistory keeps a finished lease's record for 90 days.
 	// Long enough to explain an incident from last quarter, short enough
 	// that the books stay bounded by recent work on a host that runs for
@@ -120,6 +127,13 @@ func ApplyDefaults(c *Config) {
 		}
 	}
 
+	// Materialized rather than resolved at read time, for the same
+	// reason leaseHistory is: `config effective` prints this struct, and
+	// a value the controller fills in later is one the operator cannot
+	// see governing.
+	if c.Scheduling.RetryBudget == 0 {
+		c.Scheduling.RetryBudget = DefaultRetryBudget
+	}
 	for i := range c.Tiers {
 		t := &c.Tiers[i]
 		if t.Parallelism == 0 {
@@ -130,6 +144,13 @@ func ApplyDefaults(c *Config) {
 		}
 		if t.Resources.Memory == 0 {
 			t.Resources.Memory = 4 << 30 // 4GiB
+		}
+		// Same materialization rule as the retry budget above: Ceiling()
+		// still defends against a hand-built Tier, but a defaulted
+		// configuration shows the ceiling that governs.
+		if t.JobTimeout == nil {
+			d := DefaultJobTimeout
+			t.JobTimeout = &d
 		}
 		if t.Resources.PIDs == 0 {
 			t.Resources.PIDs = 1024

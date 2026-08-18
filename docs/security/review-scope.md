@@ -82,9 +82,9 @@ on judgement rather than on a property a test can assert.
    carrying labels it should not be able to set?
 5. Does recovery after a controller restart ever adopt or release a lease that
    belongs to different work?
-6. Do the credentials a deployment holds — provider tokens, the Docker socket,
-   the registry session during a build — have a shorter reach than the blast
-   radius they would have if leaked?
+6. Do the credentials a deployment holds — provider tokens, GitHub App
+   private keys, the Docker socket, the registry session during a build —
+   have a shorter reach than the blast radius they would have if leaked?
 
 ## Closing a finding
 

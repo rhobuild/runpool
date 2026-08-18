@@ -28,12 +28,15 @@ Docker Engine from the official stable channel
 https://download.docker.com/linux/debian
 ```
 
-Architecture is checked against the lock, which records `amd64`. A host of
-another architecture has no entry there and fails the gate for that
-reason — not because the suites would fail on it. Qualifying a second
-architecture is an added lock entry and a run of the same gates on that
-host; the [support matrix](../reference/support-matrix.md) states what
-has been observed and what has not.
+Architecture is checked against the lock, which records one policy and
+names `amd64` in it. A host of another architecture fails the comparison
+for that reason — not because the suites would fail on it. Recording
+several qualified platforms side by side is the subject of the
+[multiplatform locks decision](../adrs/2026-08-17-multiplatform-locks.md),
+accepted with its implementation pending; until it lands, the lock holds
+exactly one platform and the
+[support matrix](../reference/support-matrix.md) states what has been
+observed and what has not.
 
 ## Sizing
 

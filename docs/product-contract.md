@@ -36,6 +36,11 @@ supported yet.** There is no release. See
 - **Accepted work is not lost.** It is durable before it is
   acknowledged, and where evidence cannot decide what happened, the
   attempt is held for a person instead of being guessed at.
+- **A restart adopts running work; it never re-runs it.** A capsule that
+  outlives the controller is adopted by the next start and observed to
+  its real outcome. Work is requeued only when the evidence proves the
+  runner never started; from the start authorization onward, at-most-once
+  governs and an undecidable outcome is held for a person.
 - **The host cannot be filled silently.** Admission closes before the
   disk does.
 - **Under the restricted profile, a capsule has no route out.** Its
@@ -80,6 +85,7 @@ on and SemVer is what describes them:
 | Configuration schema | [Configuration reference](reference/configuration.md); the validator is the authority |
 | `status --json` document | [Status API reference](reference/status-api.md) — versioned separately as `v1` |
 | On-disk state | Migrations, forward-only after a release |
+| Capsule control protocol | `internal/capsule/protocol` — the version a capsule declares and the controller speaks; a capsule declaring a version this build does not speak is refused, never guessed at |
 | Operational procedures | [Runbook](runbook.md) |
 
 The configuration and status API versions move independently of the product
