@@ -1,0 +1,53 @@
+# Fixture workflow for the identity contract suite. Install it in the
+# fixture repository as .github/workflows/identity.yml; the suite
+# verifies the installed copy is byte-identical to this one before
+# dispatching, so an edited fixture fails loudly instead of measuring a
+# contract this file no longer describes.
+#
+# The runner label is an input rather than a literal so each run targets
+# the scale set that run created. The suite's scale sets carry random
+# names: a fixed label would send every concurrent run's job to whichever
+# scale set happened to hold that name, and a suite that listens to one
+# scale set while its job goes to another times out and reports the
+# contract as unmeasurable.
+name: identity
+
+# The correlation id surfaces in the run's display title, which is the
+# only dispatch-visible field the runs API returns. It is how the suite
+# finds the exact run it created — and cancels only that one.
+run-name: "identity ${{ inputs.correlation_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Scale set label this run must be assigned to
+        required: true
+        type: string
+      correlation_id:
+        description: Run-scoped id tying this run to one suite execution
+        required: true
+        type: string
+
+# One run at a time per repository. The suite reasons about which
+# assignment belongs to it by listening to its own scale set, and
+# overlapping runs would put two jobs in flight against one fixture.
+concurrency:
+  group: identity-fixture-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.runner_label }}
+    # The job exists to be assigned, and the suite deliberately leaves
+    # some assignments unserved to observe redelivery and reassignment.
+    # The timeout bounds what an abandoned run costs.
+    timeout-minutes: 5
+    steps:
+      - name: Report the identity this job was assigned under
+        run: |
+          echo "run_id=${{ github.run_id }}"
+          echo "correlation=${{ inputs.correlation_id }}"
+          echo "attempt=${{ github.run_attempt }}"
