@@ -637,3 +637,60 @@ func TestCheckCredentialsNamesTheHost(t *testing.T) {
 		t.Errorf("the warning %q does not name where the credential travels", res[1].Detail)
 	}
 }
+
+// fakeDaemonInfo answers the one read checkCgroups makes.
+type fakeDaemonInfo struct {
+	info docker.HostInfo
+	err  error
+}
+
+func (f fakeDaemonInfo) Info(context.Context) (docker.HostInfo, error) { return f.info, f.err }
+
+// TestCheckCgroupsRefusesWhatItCannotEnforce: every branch here is a
+// refusal an operator can hit, and each was unreachable while the check
+// took the concrete client — a live daemon cannot present cgroup v1, an
+// unknown driver or a missing controller on demand. A limit that
+// silently does nothing is worse than one that fails, so each shape
+// must close admission rather than warn.
+func TestCheckCgroupsRefusesWhatItCannotEnforce(t *testing.T) {
+	cfg := &config.Config{}
+	good := docker.HostInfo{CgroupVersion: "2", CgroupDriver: "systemd", MemoryLimit: true, PidsLimit: true}
+
+	fails := func(res []Result) bool {
+		for _, r := range res {
+			if r.Status == Fail {
+				return true
+			}
+		}
+		return false
+	}
+
+	if res := checkCgroups(t.Context(), nil, cfg); !fails(res) {
+		t.Error("no daemon passed the cgroup check")
+	}
+	if res := checkCgroups(t.Context(), fakeDaemonInfo{err: errors.New("daemon down")}, cfg); !fails(res) {
+		t.Error("an unanswerable daemon passed the cgroup check")
+	}
+
+	v1 := good
+	v1.CgroupVersion = "1"
+	if res := checkCgroups(t.Context(), fakeDaemonInfo{info: v1}, cfg); !fails(res) {
+		t.Error("cgroup v1 passed; tier limits cannot be enforced on it")
+	}
+
+	odd := good
+	odd.CgroupDriver = "openrc"
+	if res := checkCgroups(t.Context(), fakeDaemonInfo{info: odd}, cfg); !fails(res) {
+		t.Error("a driver this build cannot address passed; the capsule and gateway would run under separate budgets")
+	}
+
+	noMem := good
+	noMem.MemoryLimit = false
+	if res := checkCgroups(t.Context(), fakeDaemonInfo{info: noMem}, cfg); !fails(res) {
+		t.Error("a host without the memory controller passed; the tier envelope would be advisory")
+	}
+
+	if res := checkCgroups(t.Context(), fakeDaemonInfo{info: good}, cfg); fails(res) {
+		t.Errorf("a conforming host failed: %+v", res)
+	}
+}

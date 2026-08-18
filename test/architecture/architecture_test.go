@@ -65,6 +65,18 @@ var narrowDeps = map[string][]string{
 		module + "/internal/assignment",
 		module + "/internal/store",
 	},
+	// doctor validates a host before anything serves, so what it may
+	// know is the contract's vocabulary and the probes it drives — never
+	// the store, the lease machine or an adapter: a preflight that
+	// imports the machinery it is clearing would validate the host with
+	// the thing that needs the host validated.
+	module + "/internal/doctor": {
+		module + "/internal/capsule",
+		module + "/internal/config",
+		module + "/internal/credential",
+		module + "/internal/platform",
+		module + "/internal/platform/docker",
+	},
 	// capsule talks to the daemon; it must not also import the gateway,
 	// which is a separate process with its own lifecycle. The protocol
 	// leaf is the values the supervisor and the launcher must agree on —

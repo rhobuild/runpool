@@ -127,25 +127,57 @@ func defaultedConfig(t *testing.T) *config.Config {
 
 // TestCollectGarbageRunsWhatTheLevelObliges: high pressure works the
 // managed total down to the low watermark, a soft emergency takes every
-// free lane. The two are one formula apart and the level is the only
-// input that distinguishes them.
+// free lane — asserted against real lanes, because with an empty
+// fixture both levels plan nothing and a pass that never forwarded the
+// level would look identical. A fresh free lane surviving High and
+// falling to SoftEmergency is the observable difference between the two
+// postures.
 func TestCollectGarbageRunsWhatTheLevelObliges(t *testing.T) {
 	h := newHarness(t, 1)
 	h.srv.disk.policy = diskPolicy{
-		thresholds: disk.Thresholds{MaxManagedBytes: 1000, LowPct: 60},
+		ttl:        30 * 24 * time.Hour,
+		thresholds: disk.Thresholds{MaxManagedBytes: 1 << 40, LowPct: 60},
 	}
-	// No lanes exist, so a pass plans nothing and returns without
-	// touching the daemon; what is under test is that both levels reach
-	// the planner at all rather than one of them silently doing nothing.
-	for _, level := range []disk.Level{disk.High, disk.SoftEmergency} {
-		h.srv.disk.collectGarbage(t.Context(), level)
+	// One fresh, free lane: within TTL, within the managed budget.
+	loc, ok, err := h.srv.cache.Acquire(t.Context(), "https://github.com/acme/app", "gen", "lease-gc", 4)
+	if err != nil || !ok {
+		t.Fatalf("acquire: ok=%v, %v", ok, err)
 	}
-	if got := cache.GCTarget(1000, 60); got != 600 {
-		t.Errorf("high pressure target = %d; want the low watermark, 600", got)
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.ReleaseCacheLane("lease-gc")
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if !disk.SoftEmergency.Aggressive() || disk.High.Aggressive() {
-		t.Error("only a soft emergency asks for every free lane")
+	lanes := func() int {
+		var n int
+		if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+			all, err := tx.CacheLanes()
+			n = len(all)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
 	}
+	if lanes() != 1 {
+		t.Fatalf("fixture holds %d lanes; want 1", lanes())
+	}
+
+	// High pressure: the pass runs, and a fresh lane under the watermark
+	// is not its business.
+	h.srv.disk.collectGarbage(t.Context(), disk.High)
+	if lanes() != 1 {
+		t.Fatal("high pressure evicted a fresh lane under the low watermark")
+	}
+
+	// Soft emergency: every free lane goes, TTL and watermark
+	// notwithstanding — which is only observable if the level actually
+	// reaches the planner as AllFree.
+	h.srv.disk.collectGarbage(t.Context(), disk.SoftEmergency)
+	if lanes() != 0 {
+		t.Fatalf("a soft emergency left %d free lane(s); AllFree did not reach the planner", lanes())
+	}
+	_ = loc
 }
 
 // TestRediscoverClosesEveryGatewayWhenDiscoveryFails. The policy in force

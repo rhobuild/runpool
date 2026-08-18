@@ -119,7 +119,14 @@ func Run(ctx context.Context, opts Options) Report {
 	}
 	add(checkDaemon(ctx, opts.Docker))
 	add(checkIsolatedBridge(ctx, opts.Docker))
-	for _, res := range checkCgroups(ctx, opts.Docker, opts.Config) {
+	// A nil client must stay a nil interface: wrapped, it would be a
+	// non-nil daemonInfo holding nothing, and the guard inside would
+	// pass it to a method call.
+	var di daemonInfo
+	if opts.Docker != nil {
+		di = opts.Docker
+	}
+	for _, res := range checkCgroups(ctx, di, opts.Config) {
 		add(res)
 	}
 	// Cache lanes are daemon-side volumes now, so the daemon check above
@@ -259,7 +266,16 @@ func probeSuffix() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func checkCgroups(ctx context.Context, d *docker.Client, cfg *config.Config) []Result {
+// daemonInfo is the one read checkCgroups makes. A seam rather than the
+// client, because every branch below is a Fail an operator can hit and
+// a live daemon cannot be asked to produce: v1, an unaddressable
+// driver, a missing controller. Reachable branches or untested refusals
+// — there is no third option.
+type daemonInfo interface {
+	Info(ctx context.Context) (docker.HostInfo, error)
+}
+
+func checkCgroups(ctx context.Context, d daemonInfo, cfg *config.Config) []Result {
 	if d == nil {
 		return []Result{{"cgroups", Fail, "daemon not connected", ""}}
 	}

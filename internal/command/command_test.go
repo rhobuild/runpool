@@ -2,11 +2,16 @@ package command
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rhobuild/runpool/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // run drives the whole tree with captured streams, which is the point
@@ -369,5 +374,78 @@ func TestReportingShapesBeforeTheFirstServe(t *testing.T) {
 	}
 	if served, ok := doc["served"].(bool); !ok || served {
 		t.Errorf("served = %v; the pre-serve form carries served=false", doc["served"])
+	}
+}
+
+// TestLivenessReadsTheStateAndTheVerdictAge: a stat passes a corrupt
+// database and a wedged serve loop alike, which is exactly what a
+// liveness probe exists to catch. Readable state with a fresh verdict —
+// or none yet, which is the deployment start_period's window — is ok; a
+// stale verdict is a serve loop that stopped; garbage where the
+// database should be is a controller that cannot do anything correctly.
+func TestLivenessReadsTheStateAndTheVerdictAge(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+
+	// Before the first serve there is no state at all: liveness fails,
+	// and the start_period is what gives a booting controller its grace.
+	if code, _, _ := run(t, "healthcheck", "--mode", "liveness"); code == exitOK {
+		t.Error("liveness passed with no state; a stat of nothing would have failed too")
+	}
+
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := run(t, "healthcheck", "--mode", "liveness"); code != exitOK {
+		t.Errorf("liveness failed on a readable store with no verdict yet: %q", stderr)
+	}
+
+	// A fresh verdict passes; one far beyond the monitor's cadence is a
+	// serve loop that stopped writing.
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.SetPressure(store.PressureInfo{
+			Level: "normal", FreeBytes: 1 << 30, FreeInodes: 1 << 20,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := run(t, "healthcheck", "--mode", "liveness"); code != exitOK {
+		t.Errorf("liveness failed on a fresh verdict: %q", stderr)
+	}
+	st.Close()
+
+	// The verdict is stamped by the store at write time, so a stale one
+	// cannot be produced through the API — which is the point: only a
+	// loop that genuinely stopped leaves an old moment behind. The
+	// fixture forges that state directly.
+	db, err := sql.Open("sqlite", filepath.Join(dir, store.DatabaseFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE pressure SET measured_at = ?`, time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	code, _, stderr := run(t, "healthcheck", "--mode", "liveness")
+	if code == exitOK {
+		t.Error("liveness passed on an hour-old verdict; the serve loop writes one per minute")
+	}
+	if !strings.Contains(stderr, "serve loop") {
+		t.Errorf("the failure does not say what stopped: %q", stderr)
+	}
+
+	// The file present but not a database: the stat this replaced passed
+	// exactly this.
+	garbage := filepath.Join(t.TempDir(), "g")
+	t.Setenv("RUNPOOL_STATE_DIR", garbage)
+	if err := os.MkdirAll(garbage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(garbage, store.DatabaseFile), []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := run(t, "healthcheck", "--mode", "liveness"); code == exitOK {
+		t.Error("liveness passed on a file that is not a database")
 	}
 }

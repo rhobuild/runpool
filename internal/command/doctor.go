@@ -68,16 +68,50 @@ func runDoctor(streams IO, asJSON bool) error {
 // whether this process can still reach its own state; readiness adds
 // the host contract. It is deliberately cheap and local: no GitHub call,
 // so a broker outage never marks the controller unhealthy.
+// livenessVerdictTolerance is how stale the disk monitor's last verdict
+// may be before liveness reads the serve loop as stopped. The monitor
+// writes one per minute; ten of them is far past any transient stall a
+// restart would not fix, while a single slow cycle never trips it.
+const livenessVerdictTolerance = 10 * time.Minute
+
 func runHealthcheck(streams IO, mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	switch mode {
 	case "liveness":
-		// The state directory is the one resource whose loss makes the
-		// controller unable to do anything correctly.
-		if _, err := os.Stat(stateDir() + "/" + store.DatabaseFile); err != nil {
-			return fmt.Errorf("state database unreachable: %w", err)
+		// Liveness answers "is the process able to do its job", and a
+		// stat cannot: a corrupt database, an unreadable schema and a
+		// wedged serve loop all leave the file present. Opening
+		// read-only proves the state is a database this build can read,
+		// and the disk verdict's age proves the serve loop is still
+		// turning — the monitor writes one every minute, so a verdict
+		// far older than its cadence is a loop that has stopped.
+		st, err := store.OpenReadOnly(stateDir())
+		if err != nil {
+			return fmt.Errorf("state unreadable: %w", err)
+		}
+		defer st.Close()
+		var measured int64
+		if err := st.Tx(ctx, func(tx *store.Tx) error {
+			p, err := tx.Pressure()
+			if err != nil {
+				return err
+			}
+			if p != nil {
+				measured = p.MeasuredAt
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("state unreadable: %w", err)
+		}
+		// No verdict yet is a controller that has not finished starting;
+		// the deployment's start_period owns that window.
+		if measured != 0 {
+			if age := time.Since(time.Unix(measured, 0)); age > livenessVerdictTolerance {
+				return fmt.Errorf("the disk monitor's last verdict is %s old; the serve loop has stopped",
+					age.Round(time.Second))
+			}
 		}
 		fmt.Fprintln(streams.Out, "ok")
 		return nil
