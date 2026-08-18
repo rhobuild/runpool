@@ -101,9 +101,14 @@ by its public and operational effects.
   first call to the provider. A binding whose scale set or message
   session cannot be reached retries on its own loop, so an outage or an
   expired token costs that binding its turn rather than ending the
-  process while capsules are still running. The shutdown drain is sized
-  to end inside the deployment's stop grace period, so the message
-  sessions are closed rather than left for the next start to wait out.
+  process while capsules are still running. The whole shutdown is sized
+  to end inside the deployment's stop grace period: the drain is spent
+  first, then every message session closes concurrently under one shared
+  budget, so the bound does not grow with the binding count and the
+  sessions are closed rather than left for the next start to wait out. A
+  drain window that elapses leaves live capsules exactly as they are for
+  the next start's adoption — a dying controller never dismantles a
+  running job on its way down.
 
 - Cache lanes are **daemon-side named volumes**, exclusive per lease,
   reused only for the same repository and generation, garbage-collected
@@ -216,12 +221,37 @@ by its public and operational effects.
   and volumes. It also reports the effective host topology and the
   scheduling picture: mode, configured and effective parallelism,
   active and available capacity, queue depth, and per-tier accounting.
+  Every v1 document carries **`served`** as its discriminator: `false`
+  is the whole pre-serve form, `true` carries the full shape, and a
+  consumer branches on the field rather than on which fields exist. The
+  capsule image it reports per tier is resolved by the same rule and
+  resolver `serve` launches with.
+- **Every reporting surface answers its own question.** `attempts list
+  --json` emits an array in every state of the world — an instance that
+  has never run holds no attempts — and `attempts inspect` of an id
+  that cannot exist fails naming the reason. `config effective` prints
+  the job ceiling and retry budget that govern, materialized by the
+  defaults rather than resolved out of sight at read time.
+- The **liveness probe** verifies the state is a database this build can
+  read and that the serve loop's disk verdict is recent, so a corrupt
+  database or a wedged loop restarts the container instead of passing a
+  file-exists check.
 - **A binding reports what it reaches.** Each one carries when a provider
   call for it last succeeded and what it cannot do now, so an instance
   with no work to do is distinguishable from one reaching nothing —
   which every other field in the document reads identically. The record
   is durable, so the answer survives the controller that stopped being
   able to reach anything.
+- **A target is what its URL names.** Any `https` host at repository,
+  organization or enterprise scope; the browser's `…/orgs/<name>`
+  address translates to the organization it names, a clone URL's `.git`
+  is trimmed while canonicalizing, and the provider's own page
+  addresses are refused with the reason. Where each target's credential
+  travels is stated rather than assumed: the first serve logs the host
+  per target — at `Warn` when GitHub does not operate it — and `runpool
+  doctor` names the host in every credential verdict. An empty personal
+  access token is refused when the client is built, symmetric with the
+  incomplete-App refusal beside it.
 - **`runpool doctor` names the label workflows target.** For each scale
   set a deployment serves it reports the provider id where one exists and
   the `runs-on` value that reaches it, so the string in configuration and
