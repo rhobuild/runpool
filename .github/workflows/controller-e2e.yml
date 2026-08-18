@@ -1,0 +1,158 @@
+name: controller-e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      controller_image:
+        description: Digest-qualified controller candidate
+        required: true
+        type: string
+      capsule_image:
+        description: Digest-qualified capsule candidate embedded in the controller
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      controller_image:
+        description: Digest-qualified controller candidate
+        required: true
+        type: string
+      capsule_image:
+        description: Digest-qualified capsule candidate embedded in the controller
+        required: true
+        type: string
+
+defaults:
+  run:
+    # GitHub's default shell omits pipefail, so a step that pipes into tee
+    # reports tee's exit status and a failing suite reads as a pass.
+    shell: bash
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: controller-e2e
+  cancel-in-progress: false
+
+jobs:
+  workload:
+    name: real assignment, restart, cache and cleanup
+    runs-on: [self-hosted, linux, x64, runpool-release-qualification]
+    environment: release-qualification
+    timeout-minutes: 70
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate the fixture configuration
+        env:
+          ORGANIZATION: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}
+          REPOSITORY: ${{ vars.RUNPOOL_E2E_REPOSITORY }}
+          GIT_REVISION: ${{ vars.RUNPOOL_E2E_GIT_REVISION }}
+          CLIENT_ID: ${{ vars.RUNPOOL_E2E_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.RUNPOOL_E2E_APP_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$ORGANIZATION" ] || missing="$missing RUNPOOL_E2E_ORGANIZATION"
+          [ -n "$REPOSITORY" ] || missing="$missing RUNPOOL_E2E_REPOSITORY"
+          [ -n "$GIT_REVISION" ] || missing="$missing RUNPOOL_E2E_GIT_REVISION"
+          [ -n "$CLIENT_ID" ] || missing="$missing RUNPOOL_E2E_APP_CLIENT_ID"
+          [ -n "$PRIVATE_KEY" ] || missing="$missing RUNPOOL_E2E_APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "the release-qualification environment is missing:$missing"
+            exit 1
+          fi
+          case "$REPOSITORY" in
+            */*) echo "RUNPOOL_E2E_REPOSITORY must be a repository name, not owner/repository"; exit 1 ;;
+          esac
+
+      - name: Mint the fixture installation token
+        id: fixture-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RUNPOOL_E2E_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNPOOL_E2E_APP_PRIVATE_KEY }}
+          owner: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}
+          repositories: ${{ vars.RUNPOOL_E2E_REPOSITORY }}
+          permission-actions: write
+          permission-administration: write
+          permission-contents: read
+          permission-packages: write
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker_config="${RUNNER_TEMP}/runpool-e2e-docker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$docker_config"
+          echo "DOCKER_CONFIG=$docker_config" >> "$GITHUB_ENV"
+          echo "$GHCR_TOKEN" | docker --config "$docker_config" login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull the immutable candidates
+        env:
+          CAPSULE_IMAGE: ${{ inputs.capsule_image }}
+          CONTROLLER_IMAGE: ${{ inputs.controller_image }}
+        run: |
+          for image in "$CONTROLLER_IMAGE" "$CAPSULE_IMAGE"; do
+            case "$image" in
+              *@sha256:*) ;;
+              *) echo "candidate references must be digest-qualified"; exit 1 ;;
+            esac
+            docker pull "$image"
+          done
+
+      - name: Drive a real controller workload
+        env:
+          RUNPOOL_CONTROLLER_E2E: "1"
+          RUNPOOL_CONTRACT_QUALIFY: "1"
+          RUNPOOL_E2E_CONTROLLER_IMAGE: ${{ inputs.controller_image }}
+          RUNPOOL_E2E_CAPSULE_IMAGE: ${{ inputs.capsule_image }}
+          RUNPOOL_E2E_REPOSITORY: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}/${{ vars.RUNPOOL_E2E_REPOSITORY }}
+          RUNPOOL_E2E_GIT_REVISION: ${{ vars.RUNPOOL_E2E_GIT_REVISION }}
+          RUNPOOL_E2E_TOKEN: ${{ steps.fixture-token.outputs.token }}
+          RUNPOOL_E2E_ARTIFACT_DIR: ${{ github.workspace }}/controller-e2e-evidence
+        run: go test -count=1 -v -timeout 60m ./test/e2e/controller/...
+
+      - name: Refuse credential-bearing evidence
+        id: evidence-check
+        if: always()
+        env:
+          FIXTURE_TOKEN: ${{ steps.fixture-token.outputs.token }}
+        run: |
+          [ -d controller-e2e-evidence ] || exit 0
+          if [ -n "$FIXTURE_TOKEN" ] && grep -rlF "$FIXTURE_TOKEN" controller-e2e-evidence 2>/dev/null; then
+            echo "the fixture credential appears in the evidence; refusing to archive it"
+            exit 1
+          fi
+          if grep -rlE '(gh[pousr]_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,})' controller-e2e-evidence 2>/dev/null; then
+            echo "a token-shaped string appears in the evidence; refusing to archive it"
+            exit 1
+          fi
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+
+      - name: Keep controller E2E evidence
+        if: ${{ always() && steps.evidence-check.outputs.safe == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: controller-e2e-evidence
+          path: controller-e2e-evidence
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Close the registry session
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ]; then
+            docker --config "$DOCKER_CONFIG" logout ghcr.io >/dev/null 2>&1 || true
+            rm -rf -- "$DOCKER_CONFIG"
+          fi

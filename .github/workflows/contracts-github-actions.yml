@@ -1,0 +1,162 @@
+# Live contracts for the GitHub Actions runner-scale-set API. This workflow
+# never runs on pull requests because it accesses protected fixture resources.
+name: contracts-github-actions
+
+on:
+  schedule:
+    # Weekly. The upstream API is not ours to version, so drift is found
+    # on a schedule rather than at a release.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      qualify:
+        description: "Run in release-qualification mode: no skips, every contract must execute"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      qualify:
+        type: boolean
+        default: true
+
+defaults:
+  run:
+    # GitHub's default shell omits pipefail, so a step that pipes into tee
+    # reports tee's exit status and a failing suite reads as a pass.
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  # One fixture, one run: these contracts create scale sets and sessions
+  # against a real target, and two runs would fight over them.
+  group: contracts-github-actions
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    name: runner scale set API
+    runs-on: ubuntu-24.04
+    environment: upstream-contracts
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate the fixture configuration
+        env:
+          REPO_URL: ${{ vars.RUNPOOL_CONTRACT_REPO_URL }}
+          ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
+          ORG: ${{ vars.RUNPOOL_CONTRACT_ORGANIZATION }}
+          REPO_A: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+          REPO_B: ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
+          RUNNER_CMD: ${{ vars.RUNPOOL_CONTRACT_RUNNER_CMD }}
+          QUALIFYING: ${{ inputs.qualify && '1' || '' }}
+        run: |
+          missing=""
+          [ -n "$REPO_URL" ] || missing="$missing RUNPOOL_CONTRACT_REPO_URL"
+          [ -n "$ORG_URL" ] || missing="$missing RUNPOOL_CONTRACT_ORG_URL"
+          [ -n "$ORG" ] || missing="$missing RUNPOOL_CONTRACT_ORGANIZATION"
+          [ -n "$REPO_A" ] || missing="$missing RUNPOOL_CONTRACT_REPO_A"
+          [ -n "$REPO_B" ] || missing="$missing RUNPOOL_CONTRACT_REPO_B"
+          if [ -n "$QUALIFYING" ]; then
+            [ -n "$RUNNER_CMD" ] || missing="$missing RUNPOOL_CONTRACT_RUNNER_CMD"
+          fi
+          if [ -n "$missing" ]; then
+            echo "the upstream-contracts environment is missing:$missing"; exit 1
+          fi
+
+      - name: Mint the repository installation token
+        id: repo-token
+        # Installation tokens expire automatically and are revoked when
+        # the job ends. Each token receives only the permissions and scope
+        # required by its fixture.
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RUNPOOL_CONTRACT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNPOOL_CONTRACT_APP_PRIVATE_KEY }}
+          owner: ${{ vars.RUNPOOL_CONTRACT_ORGANIZATION }}
+          repositories: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+          permission-actions: write
+          permission-administration: write
+          permission-contents: read
+
+      - name: Mint the organization installation token
+        id: org-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RUNPOOL_CONTRACT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNPOOL_CONTRACT_APP_PRIVATE_KEY }}
+          owner: ${{ vars.RUNPOOL_CONTRACT_ORGANIZATION }}
+          repositories: |
+            ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+            ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
+          permission-actions: write
+          permission-contents: read
+          permission-organization-self-hosted-runners: write
+
+      - name: Upstream contracts
+        # The suite creates its own scale sets and removes them through
+        # t.Cleanup, including on failure, so a run leaves the fixture
+        # as it found it. Release-qualification mode turns every skip into a
+        # failure: a contract that did not run cannot qualify a release.
+        env:
+          RUNPOOL_CONTRACT_REPO_URL: ${{ vars.RUNPOOL_CONTRACT_REPO_URL }}
+          RUNPOOL_CONTRACT_REPO_TOKEN: ${{ steps.repo-token.outputs.token }}
+          RUNPOOL_CONTRACT_ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
+          RUNPOOL_CONTRACT_ORG_TOKEN: ${{ steps.org-token.outputs.token }}
+          RUNPOOL_CONTRACT_REPO_A: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+          RUNPOOL_CONTRACT_REPO_B: ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
+          RUNPOOL_CONTRACT_RUNNER_CMD: ${{ vars.RUNPOOL_CONTRACT_RUNNER_CMD }}
+          RUNPOOL_CONTRACT_ARTIFACT_DIR: ${{ github.workspace }}/upstream-evidence
+          RUNPOOL_CONTRACT_QUALIFY: ${{ inputs.qualify && '1' || '' }}
+          # The lapse-and-requeue behaviour is the most drift-prone thing
+          # this suite watches: unversioned, and described in one
+          # paragraph of an upstream README. The weekly schedule exists to
+          # find that drift, so it runs there too and not only when a
+          # release is being qualified.
+          RUNPOOL_CONTRACT_REASSIGNMENT: "1"
+        run: |
+          mkdir -p upstream-evidence
+          go test -count=1 -v -timeout 40m ./test/contract/githubactions/... 2>&1 | tee upstream-evidence/contract.log
+
+      - name: Redact the evidence before it is kept
+        id: evidence-check
+        # The identity evidence records upstream message and job
+        # identifiers, which is the point of keeping it. It must not
+        # also carry the token: Actions masks it in the live log, but a
+        # file leaves the run. Fail rather than upload if anything that
+        # looks like a token survives.
+        if: always()
+        env:
+          REPO_TOKEN: ${{ steps.repo-token.outputs.token }}
+          ORG_TOKEN: ${{ steps.org-token.outputs.token }}
+        run: |
+          [ -d upstream-evidence ] || exit 0
+          for token in "$REPO_TOKEN" "$ORG_TOKEN"; do
+            [ -n "$token" ] || continue
+            if grep -rlF "$token" upstream-evidence 2>/dev/null; then
+              echo "a fixture credential appears in the evidence; refusing to archive it"
+              exit 1
+            fi
+          done
+          grep -rlE '(gh[pousr]_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,})' upstream-evidence 2>/dev/null && {
+            echo "a token-shaped string appears in the evidence; refusing to archive it"; exit 1
+          }
+          echo "evidence carries no credential"
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the upstream evidence
+        if: ${{ always() && steps.evidence-check.outputs.safe == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: upstream-evidence
+          path: upstream-evidence
+          retention-days: 90
+          if-no-files-found: warn

@@ -7,6 +7,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Release qualification runs this same gate rather than a copy of it: two
+  # definitions of "the hermetic gate" would drift, and the one that
+  # decides a release must be the one every change already passed.
+  workflow_call:
 
 # Read-only by default; no job in this workflow needs more.
 defaults:

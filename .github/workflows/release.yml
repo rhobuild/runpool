@@ -1,0 +1,302 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+defaults:
+  run:
+    # GitHub's default shell omits pipefail, so a step that pipes into tee
+    # reports tee's exit status and a failing suite reads as a pass.
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: validate release tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate the version stamped into the artifact
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          go build -trimpath -ldflags "-X main.version=${VERSION}" -o /tmp/runpool-version ./cmd/runpool
+          /tmp/runpool-version version --check-release
+
+  candidate:
+    name: build immutable candidates
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      capsule_image: ${{ steps.capsule.outputs.reference }}
+      controller_image: ${{ steps.controller.outputs.reference }}
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push the capsule candidate
+        id: capsule
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/capsule:candidate-${{ github.sha }}
+        run: |
+          docker build -f build/capsule/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          case "$reference" in
+            *@sha256:*) ;;
+            *) echo "registry returned no immutable capsule digest"; exit 1 ;;
+          esac
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push the controller candidate
+        id: controller
+        env:
+          CAPSULE_IMAGE: ${{ steps.capsule.outputs.reference }}
+          IMAGE: ghcr.io/${{ github.repository }}:candidate-${{ github.sha }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          docker build -f build/controller/Dockerfile \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "CAPSULE_IMAGE=${CAPSULE_IMAGE}" \
+            -t "$IMAGE" .
+          docker push "$IMAGE"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          case "$reference" in
+            *@sha256:*) ;;
+            *) echo "registry returned no immutable controller digest"; exit 1 ;;
+          esac
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
+
+      - name: Build the standalone release artifacts
+        env:
+          CAPSULE_IMAGE: ${{ steps.capsule.outputs.reference }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p release-artifacts
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.capsuleImage=${CAPSULE_IMAGE}" \
+            -o release-artifacts/runpool-linux-amd64 ./cmd/runpool
+          go generate ./internal/command/...
+          git diff --exit-code docs/reference/cli
+          tar -C dist/completions -czf release-artifacts/runpool-completions.tar.gz .
+          (cd release-artifacts && sha256sum runpool-linux-amd64 runpool-completions.tar.gz > checksums.txt)
+          release-artifacts/runpool-linux-amd64 version --check-release
+          release-artifacts/runpool-linux-amd64 version --json
+          (cd release-artifacts && sha256sum -c checksums.txt)
+
+      - name: Keep the immutable release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts-candidate
+          path: release-artifacts
+          retention-days: 90
+          if-no-files-found: error
+
+  qualify:
+    name: qualify the exact commit and candidates
+    needs: candidate
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/qualify-release.yml
+    with:
+      capsule_image: ${{ needs.candidate.outputs.capsule_image }}
+      controller_image: ${{ needs.candidate.outputs.controller_image }}
+    secrets: inherit
+
+  publish:
+    name: attest and publish qualified artifacts
+    needs: [candidate, qualify]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download the release-qualification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-qualification
+          path: qualification
+
+      - name: Download the exact standalone artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts-candidate
+          path: dist
+
+      - name: Verify the release record and artifacts
+        env:
+          CAPSULE_IMAGE: ${{ needs.candidate.outputs.capsule_image }}
+          COMMIT: ${{ github.sha }}
+          CONTROLLER_IMAGE: ${{ needs.candidate.outputs.controller_image }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          record = json.load(open("qualification/release-qualification.json", encoding="utf-8"))
+          expected = {
+              "commit": os.environ["COMMIT"],
+              "controller_image": os.environ["CONTROLLER_IMAGE"],
+              "capsule_image": os.environ["CAPSULE_IMAGE"],
+          }
+          for key, value in expected.items():
+              if record.get(key) != value:
+                  sys.exit(f"release-qualification record has the wrong {key}")
+          PY
+          (cd dist && sha256sum -c checksums.txt)
+          go run ./internal/platform/cmd/verify -observed qualification/evidence/live/platform-facts.json
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Promote the qualified images
+        id: promote
+        env:
+          CAPSULE_CANDIDATE: ${{ needs.candidate.outputs.capsule_image }}
+          CAPSULE_NAME: ghcr.io/${{ github.repository }}/capsule
+          CONTROLLER_CANDIDATE: ${{ needs.candidate.outputs.controller_image }}
+          CONTROLLER_NAME: ghcr.io/${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          promote() {
+            candidate=$1
+            name=$2
+            docker pull "$candidate" >&2
+            docker tag "$candidate" "${name}:${VERSION}"
+            docker push "${name}:${VERSION}" >&2
+            docker pull "${name}:${VERSION}" >&2
+            reference="${name}@${candidate#*@}"
+            docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${name}:${VERSION}" | grep -Fxq "$reference" || {
+              echo "promoted digest differs from the qualified candidate"
+              exit 1
+            }
+            printf '%s' "$reference"
+          }
+          controller_reference=$(promote "$CONTROLLER_CANDIDATE" "$CONTROLLER_NAME")
+          capsule_reference=$(promote "$CAPSULE_CANDIDATE" "$CAPSULE_NAME")
+          {
+            echo "controller_name=$CONTROLLER_NAME"
+            echo "controller_digest=${controller_reference#*@}"
+            echo "controller_reference=$controller_reference"
+            echo "capsule_name=$CAPSULE_NAME"
+            echo "capsule_digest=${capsule_reference#*@}"
+            echo "capsule_reference=$capsule_reference"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate controller SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.promote.outputs.controller_reference }}
+          format: spdx-json
+          output-file: dist/controller.sbom.spdx.json
+          upload-artifact: false
+
+      - name: Generate capsule SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.promote.outputs.capsule_reference }}
+          format: spdx-json
+          output-file: dist/capsule.sbom.spdx.json
+          upload-artifact: false
+
+      - name: Attest standalone artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: Attest controller provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.promote.outputs.controller_name }}
+          subject-digest: ${{ steps.promote.outputs.controller_digest }}
+          push-to-registry: true
+
+      - name: Attest controller SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.promote.outputs.controller_name }}
+          subject-digest: ${{ steps.promote.outputs.controller_digest }}
+          sbom-path: dist/controller.sbom.spdx.json
+          push-to-registry: true
+
+      - name: Attest capsule provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.promote.outputs.capsule_name }}
+          subject-digest: ${{ steps.promote.outputs.capsule_digest }}
+          push-to-registry: true
+
+      - name: Attest capsule SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.promote.outputs.capsule_name }}
+          subject-digest: ${{ steps.promote.outputs.capsule_digest }}
+          sbom-path: dist/capsule.sbom.spdx.json
+          push-to-registry: true
+
+      - name: Publish a draft GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: |
+            dist/runpool-linux-amd64
+            dist/runpool-completions.tar.gz
+            dist/checksums.txt
+            dist/controller.sbom.spdx.json
+            dist/capsule.sbom.spdx.json
+            qualification/release-qualification.json
+          body: |
+            Release-qualified commit: `${{ github.sha }}`
+
+            Controller: `${{ steps.promote.outputs.controller_reference }}`
+
+            Capsule: `${{ steps.promote.outputs.capsule_reference }}`
+          draft: true
+          fail_on_unmatched_files: true
