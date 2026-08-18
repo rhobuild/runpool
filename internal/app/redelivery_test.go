@@ -1,0 +1,440 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/store"
+)
+
+// Regressions for the ways an assignment can be lost — as opposed to
+// run twice, the failure the design guarded first. None of them is
+// visible from the outside: the controller reports a clean release
+// while the work never happens. They shared one root: identity keyed on
+// the job id alone, and recovery inferred from the lease state a crash
+// happened to leave behind rather than from what execution was
+// observed.
+
+// A lease that reached failed without ever provisioning a runner
+// carried no execution. Cleanup state is not execution evidence: this
+// attempt was never consumed, so it belongs back in the queue.
+func TestFailedBeforeAnyRunnerRequeuesItsAttempt(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-prerun", "app", 40)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-prerun")
+	// reserved -> provisioning -> failed: no runner was ever registered,
+	// so nothing can have executed.
+	driveLeaseTo(t, h, lease.ID, store.LeaseFailed)
+
+	h.resolveWithoutRuntime(t.Context(), reloadLease(t, h, lease.ID))
+
+	ready := h.ready()
+	if len(ready) != 1 {
+		t.Fatalf("ready attempts = %d; want 1 — a lease that failed before "+
+			"provisioning a runner never consumed its delivery, and settling it "+
+			"drops the job with no trace", len(ready))
+	}
+
+	// Servable means the scheduler leases it again. Asserting only that it
+	// is back in the queue left the second serving untested, and it could
+	// not happen: the attempt already held a lease, and one per attempt
+	// was all the schema allowed.
+	h.srv.scheduleReadyAttempts(t.Context(), h.bind)
+	if got := len(h.ready()); got != 0 {
+		t.Fatalf("%d attempts still ready after a scheduling pass; the requeued "+
+			"attempt was not served again, so it waits at the head of a queue "+
+			"nothing drains", got)
+	}
+	var second store.Lease
+	h.inStore(func(tx *store.Tx) error {
+		var err error
+		second, err = tx.LeaseByAttempt(ready[0].ID)
+		return err
+	})
+	if second.ID == lease.ID {
+		t.Error("the second serving reused the first lease; each serving is its own")
+	}
+}
+
+// Reconciliation runs at startup, where a shutdown can cancel the
+// context mid-pass. Releasing the lease and requeueing its attempt are
+// one recovery: if the release survives cancellation but the requeue
+// does not, the attempt stays leased to a lease that no longer exists
+// and no query will ever return it again.
+func TestRequeueSurvivesACancelledReconciliation(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-cancelled", "app", 41)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-cancelled")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	h.resolveWithoutRuntime(ctx, reloadLease(t, h, lease.ID))
+
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+		t.Fatalf("lease ended %s; the release itself is expected to survive cancellation", got.State)
+	}
+	if got := len(h.ready()); got != 1 {
+		t.Errorf("ready attempts = %d; want 1 — the lease was released but its "+
+			"attempt stayed leased to it, so the job is now invisible to "+
+			"every query and is never retried", got)
+	}
+}
+
+// GitHub can cancel an assignment and reassign the same workflow job up
+// to three times. Each reassignment arrives as a new delivery. The
+// settled predecessor must not hide the new attempt, and the new
+// attempt must carry its own observed identifiers.
+func TestReassignmentOfASettledJobIsServable(t *testing.T) {
+	h := newHarness(t, 1)
+
+	first := demand("job-reassigned", "app", 42)
+	first.SourceRequestID = 201
+	if err := h.deliverMsg(1, first); err != nil {
+		t.Fatal(err)
+	}
+	// The first attempt runs and settles: a redelivery of *that*
+	// delivery must never start a second capsule, and does not here.
+	lease, attemptID := leaseFor(t, h, "job-reassigned")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceExitObserved)
+	if err := h.srv.leases.Finalize(t.Context(), lease.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(h.ready()); got != 0 {
+		t.Fatalf("a settled attempt is still servable (%d); the tombstone is not holding", got)
+	}
+
+	// GitHub cancels and reassigns the same job: same workload key, new
+	// message, new request id. This is work that has never run.
+	second := demand("job-reassigned", "app", 42)
+	second.SourceRequestID = 202
+	if err := h.deliverMsg(2, second); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := h.ready()
+	if len(ready) != 1 {
+		t.Fatalf("ready attempts = %d; want 1 — a reassignment is a new attempt, "+
+			"and deduplicating on the workload key alone hides it behind the "+
+			"attempt that already completed", len(ready))
+	}
+	if ready[0].SourceWorkloadKey != "job-reassigned" || ready[0].ID == attemptID {
+		t.Errorf("servable attempt = %+v; want a fresh attempt of the same workload", ready[0])
+	}
+}
+
+// A reassignment can also race a predecessor that was assigned but
+// never served. The predecessor consumed nothing, so it is superseded
+// in the same transaction that records the new delivery — never do two
+// attempts of one workload serve together.
+func TestReassignmentSupersedesAReadyPredecessor(t *testing.T) {
+	h := newHarness(t, 1)
+
+	if err := h.deliverMsg(1, demand("job-raced", "app", 43)); err != nil {
+		t.Fatal(err)
+	}
+	old := h.ready()[0]
+
+	if err := h.deliverMsg(2, demand("job-raced", "app", 43)); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := h.ready()
+	if len(ready) != 1 || ready[0].ID == old.ID {
+		t.Fatalf("ready = %+v; want exactly the new attempt", ready)
+	}
+	if got := attemptState(t, h, old.ID); got.State != "superseded" || got.Resolution != assignment.ResolutionSuperseded {
+		t.Errorf("predecessor = %s/%s; want superseded/%s", got.State, got.Resolution, assignment.ResolutionSuperseded)
+	}
+}
+
+// Each of the following is a distinct way for an attempt to be resolved
+// as if its job had run, or to stop being visible at all, while the
+// controller reports success.
+
+// A capsule is a network, five volumes, a daemon, a container and a
+// credential before anything is asked to start. Recording a start at the
+// top of that stretch means every failure inside it — a volume, the
+// daemon, the JIT delivery — reads as work that may have executed, and
+// the job is settled instead of retried.
+func TestPreparationFailureLeavesTheAttemptServable(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-prepare", "app", 50)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-prepare")
+	driveLeaseTo(t, h, lease.ID, store.LeaseRuntimeRegistered)
+	// The capsule was built; no start was ever authorized.
+	h.recordEvidence(lease.ID, store.EvidenceRuntimePrepared)
+
+	h.resolveWithoutRuntime(t.Context(), reloadLease(t, h, lease.ID))
+
+	if got := len(h.ready()); got != 1 {
+		t.Errorf("ready attempts = %d; want 1 — a capsule that was prepared but "+
+			"never authorized to start consumed no delivery", got)
+	}
+}
+
+// recoverCapsuleFailure can carry a lease from provisioning to failed and on to
+// cleaning without a runner ever existing, so "this far along" says
+// nothing about execution. Cleanup removes resources; it must not decide
+// what became of the work.
+func TestCleaningDoesNotDecideExecution(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-cleaning", "app", 51)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-cleaning")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceNotStarted)
+
+	h.resolveWithoutRuntime(t.Context(), reloadLease(t, h, lease.ID))
+
+	if got := len(h.ready()); got != 1 {
+		t.Errorf("ready attempts = %d; want 1 — a lease reaches cleaning from "+
+			"recoverCapsuleFailure too, and settling every lease this far along as executed "+
+			"drops the jobs that never ran", got)
+	}
+}
+
+// Releasing a lease and disposing of its attempt are two commits. A
+// crash in between leaves the attempt leased to a lease that is
+// terminal, and therefore outside every working set the next startup
+// builds: no query returns it and nothing ever retries it.
+func TestAttemptStrandedOnAReleasedLeaseIsRecovered(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-stranded", "app", 52)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-stranded")
+	driveLeaseTo(t, h, lease.ID, store.LeaseReleased)
+	h.recordEvidence(lease.ID, store.EvidenceNotStarted)
+
+	// This is the reachable state: the lease is released, the attempt
+	// still leased to it, and nothing disposed of it.
+	var stranded int
+	h.inStore(func(s *store.Tx) error {
+		attempts, err := s.StrandedAttempts()
+		if err != nil {
+			return err
+		}
+		stranded = len(attempts)
+		return nil
+	})
+	if stranded != 1 {
+		t.Fatalf("the invariant sweep found %d stranded attempts; want 1 — an attempt "+
+			"leased to a released lease is invisible to every other query", stranded)
+	}
+
+	h.resolveWithoutRuntime(t.Context(), reloadLease(t, h, lease.ID))
+
+	if got := len(h.ready()); got != 1 {
+		t.Errorf("ready attempts = %d; want 1 — recovery did not dispose of an "+
+			"attempt left behind by a crash between the two commits", got)
+	}
+}
+
+// RecordEvidence must reject values outside the monotonic evidence model.
+func TestRecordEvidenceClassifiesEveryOutcome(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-observe", "app", 53)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-observe")
+
+	record := func(id string, e store.Evidence) error {
+		return h.store.Tx(t.Context(), func(tx *store.Tx) error {
+			return tx.RecordEvidenceForLease(id, e)
+		})
+	}
+
+	if err := record(lease.ID, store.Evidence("definitely-not-a-value")); !errors.Is(err, store.ErrInvalidExecutionObservation) {
+		t.Errorf("an unknown value returned %v; want ErrInvalidExecutionObservation — "+
+			"a silent no-op tells the caller something was recorded when nothing was", err)
+	}
+	if err := record("no-such-lease", store.EvidenceRunningObserved); err == nil {
+		t.Error("recording against a missing lease succeeded; the target's absence was swallowed")
+	}
+
+	if err := record(lease.ID, store.EvidenceRunningObserved); err != nil {
+		t.Fatalf("recording a running observation: %v", err)
+	}
+	// Re-observing the same fact is not a fault.
+	if err := record(lease.ID, store.EvidenceRunningObserved); err != nil {
+		t.Errorf("repeating an identical observation returned %v; want explicit idempotent success", err)
+	}
+	// A slower writer cannot unmake an observation.
+	if err := record(lease.ID, store.EvidenceRuntimePrepared); !errors.Is(err, store.ErrObservationConflict) {
+		t.Errorf("a backwards write returned %v; want ErrObservationConflict — a runner "+
+			"that was seen running cannot become one that never started", err)
+	}
+	if got := h.attemptByLease(lease.ID); got.Evidence != store.EvidenceRunningObserved {
+		t.Errorf("evidence = %s after the rejected writes; want running_observed untouched", got.Evidence)
+	}
+}
+
+// TestRedeliveryToleratesADifferentAcquisition is the binding-wedge guard.
+// A message's availables are acquired by a separate call whose result
+// depends on who else asked, so two deliveries of one message id can
+// legitimately carry different acquired sets. Folding those into the
+// fingerprint made that read as the provider changing a payload under a
+// stable key: RecordDelivery returned contract drift, persistDelivery
+// failed, the message was never acknowledged, and because the queue is
+// ordered nothing behind it was ever served again.
+func TestRedeliveryToleratesADifferentAcquisition(t *testing.T) {
+	h := newHarness(t, 2)
+
+	// First arrival: the broker assigned one job and the session acquired
+	// one available.
+	first := &githubactions.Message{
+		ID:       7,
+		Assigned: []assignment.WorkloadAssignment{demand("job-assigned", "app", 80)},
+		Acquired: []assignment.WorkloadAssignment{demand("job-acquired-a", "app", 81)},
+	}
+	if _, err := h.srv.persistDelivery(t.Context(), h.bind, first); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+
+	// Redelivery of the same message id: the acknowledgement was lost, and
+	// this time the acquisition granted a different job.
+	second := &githubactions.Message{
+		ID:       7,
+		Assigned: []assignment.WorkloadAssignment{demand("job-assigned", "app", 80)},
+		Acquired: []assignment.WorkloadAssignment{demand("job-acquired-b", "app", 82)},
+	}
+	if _, err := h.srv.persistDelivery(t.Context(), h.bind, second); err != nil {
+		t.Fatalf("a redelivery with a different acquisition wedged the binding: %v", err)
+	}
+
+	// The broker's own payload is still what identity is checked against,
+	// so a message id whose assigned set changed is still refused.
+	drifted := &githubactions.Message{
+		ID:       7,
+		Assigned: []assignment.WorkloadAssignment{demand("job-different", "app", 99)},
+	}
+	if _, err := h.srv.persistDelivery(t.Context(), h.bind, drifted); err == nil {
+		t.Error("a changed assigned set was accepted; contract drift is no longer detected")
+	}
+}
+
+// TestAWedgedRedeliveryStillLandsItsHints. A message the binding already
+// acknowledged can come back anyway - the wedge the acknowledgement Warn
+// describes - and the loop throttles rather than spinning on it. What the
+// throttle must not do is skip the message's content: a cancellation hint
+// riding in the redelivery has to land, or the wedged binding keeps
+// serving, and burning a capsule on, a job the provider already cancelled.
+func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.pollBackoff = time.Millisecond
+
+	// One lane, already busy: the loop schedules before it receives, and
+	// a free lane would lease the attempt before the hint could reach it.
+	// A cancellation matters exactly while the attempt is still waiting.
+	// The credit is taken through the allocator, which is what the
+	// scheduler actually consults.
+	if !h.srv.alloc.TryReserve(h.bind.key) {
+		t.Fatal("the lane was never occupied")
+	}
+
+	// A confirmed delivery: recorded, acknowledged, cursor past it.
+	msg := &githubactions.Message{
+		ID:       41,
+		Assigned: []assignment.WorkloadAssignment{demand("job-cancelled-upstream", "app", 41)},
+	}
+	delivery, err := h.srv.persistDelivery(t.Context(), h.bind, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.inStore(func(tx *store.Tx) error {
+		if _, err := tx.AckRequested(delivery); err != nil {
+			return err
+		}
+		return tx.AckConfirmed(delivery)
+	})
+
+	// The broker sends it again, now carrying the cancellation. One full
+	// loop iteration: the session hands over exactly this message, then
+	// blocks.
+	msg.Completed = []assignment.WorkloadLifecycleEvent{{
+		Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-cancelled-upstream",
+		Result: "canceled",
+	}}
+	redelivery := &replaySession{msg: msg, drained: make(chan struct{})}
+	h.bind.session = redelivery
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(ctx, h.bind)
+	}()
+	select {
+	case <-redelivery.drained:
+	case <-time.After(10 * time.Second):
+		t.Error("the loop never consumed the redelivered message")
+	}
+	cancel()
+	<-done
+
+	// The state, not the queue: an attempt can also leave ready by being
+	// leased, which is exactly the outcome the hint exists to prevent.
+	var attempt store.Attempt
+	h.inStore(func(tx *store.Tx) error {
+		open, err := tx.OpenAttemptByWorkload(h.bind.bindingID, "job-cancelled-upstream")
+		if err == nil {
+			attempt = open
+			return nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		// Settled, then: fetch it through its delivery.
+		attempts, aerr := tx.AttemptsOfDelivery(delivery)
+		if aerr != nil {
+			return aerr
+		}
+		attempt = attempts[0]
+		return nil
+	})
+	if attempt.State != "canceled" || attempt.Resolution != assignment.ResolutionRemoteCanceled {
+		t.Errorf("the attempt is %q/%q; want canceled/remote_canceled - the hint in the "+
+			"wedged redelivery never landed, and the binding will burn a capsule on a "+
+			"job the provider already cancelled", attempt.State, attempt.Resolution)
+	}
+}
+
+// replaySession hands over one message once, then blocks: the shape of a
+// broker stuck redelivering something already acknowledged.
+type replaySession struct {
+	mu      sync.Mutex
+	msg     *githubactions.Message
+	served  bool
+	drained chan struct{}
+}
+
+func (s *replaySession) Receive(ctx context.Context) (*githubactions.Message, error) {
+	s.mu.Lock()
+	first := !s.served
+	s.served = true
+	s.mu.Unlock()
+	if first {
+		return s.msg, nil
+	}
+	close(s.drained)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (s *replaySession) Acknowledge(context.Context, int) error { return nil }
+func (s *replaySession) SetCapacity(int)                        {}
+func (s *replaySession) Initial() *githubactions.Statistics     { return nil }
+func (s *replaySession) Close(context.Context) error            { return nil }
