@@ -1,0 +1,27 @@
+# Dockerfiles copy the Go module and source trees by allowlist. Exclude
+# repository metadata, documentation, tests, local state, and build output so
+# they cannot enter a builder layer accidentally.
+.git
+.github
+deploy
+docs
+scripts
+test
+
+*.md
+NOTICE
+
+/runpool
+/capsule-supervisor
+/dist
+*.test
+coverage.out
+release-qualification.json
+platform-facts.json
+*-contract.log
+
+# Editor and operating-system metadata.
+.DS_Store
+._*
+.idea
+.vscode

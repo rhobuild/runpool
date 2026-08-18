@@ -24,3 +24,23 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /build/capsule
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      capsule-images:
+        patterns: ["*"]
+    ignore:
+      # The builder must compile with the Go that go.mod declares and that
+      # every test ran on. Patch releases keep that true and are welcome;
+      # a minor or major bump does not, and it is also where Go publishes
+      # release candidates, so an unattended update once proposed building
+      # the shipped binary with a compiler no test had used. Those bumps
+      # belong in the same reviewed commit as go.mod.
+      - dependency-name: golang
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major

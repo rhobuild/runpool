@@ -1,0 +1,546 @@
+// Package capsule orchestrates one per-job execution capsule: a single
+// outer container that holds the runner, its own Docker daemon and
+// every inner container the job launches, under one aggregate cgroup.
+// One container means one budget the kernel enforces over the whole job
+// — runner, daemon and inner workloads cannot escape into separate
+// envelopes — and one object whose state answers what became of the
+// work.
+//
+// Inside, the first-party supervisor (cmd/capsule-supervisor) is PID 1:
+// it boots dockerd, proves readiness, holds the runner unstarted until
+// the controller authorizes it, and reports through a versioned
+// filesystem protocol on tmpfs. The daemon's data root is a fresh volume per
+// capsule, and the complete capsule is deleted after the job, so no image,
+// layer, build cache, or runner bootstrap state reaches a later workload.
+package capsule
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/egress"
+	"github.com/rhobuild/runpool/internal/platform/docker"
+)
+
+const (
+	// SupervisorPath is where the capsule image installs the supervisor;
+	// its subcommands are the control protocol's exec surface, used
+	// from here and by the controller's own gateway reloads.
+	SupervisorPath = "/usr/local/bin/capsule-supervisor"
+	supervisorPath = SupervisorPath
+	// controlDir is the tmpfs control surface, declared at creation so
+	// nothing under it can reach a disk or a Docker-persisted field.
+	controlDir = "/run/runpool"
+	// protocolFile is where the supervisor writes the version of the
+	// control protocol it speaks, at boot, before it is asked anything.
+	protocolFile = controlDir + "/protocol"
+	// ProtocolVersion is the control protocol this build speaks. Part of
+	// the control-surface contract; must match the supervisor's own
+	// protocolVersion, which is where a capsule declares it.
+	ProtocolVersion = "1"
+	// dindDataDir is the inner daemon's data root — the one mount that
+	// must be a volume, because overlayfs cannot stack on the
+	// container's own overlayfs.
+	dindDataDir = "/var/lib/docker"
+
+	readyTimeout      = 90 * time.Second
+	readyPollInterval = 500 * time.Millisecond
+)
+
+// Resource kinds and roles stamped on every capsule object, mirrored
+// into the resource intents so reconciliation can find and order them.
+const (
+	KindContainer = "container"
+	KindNetwork   = "network"
+	KindVolume    = "volume"
+
+	RoleNetwork  = "capsule-net"
+	RoleDindData = "dind-data"
+	// RoleCapsule is the outer container itself — the adoptable object
+	// whose exit is the job's exit.
+	RoleCapsule = "capsule"
+	// RoleGateway is the capsule's egress gateway: the only container on
+	// both the internal isolated bridge and the Runpool uplink.
+	RoleGateway = "gateway"
+	// RoleUplink is the instance's one egress network: gateways' second
+	// leg. Like a cache lane it carries no lease, and sweeps must read
+	// that as "infrastructure", never as "orphan".
+	RoleUplink = "uplink"
+)
+
+const (
+	// GatewayProxyPort is where a sandboxed capsule's egress relay
+	// listens; it is the capsule's whole outbound surface. The port is
+	// named in the egress policy vocabulary both sides share, so this
+	// package does not import the gateway to learn one integer.
+	GatewayProxyPort = egress.ProxyPort
+	// innerDockerCIDR is the default bridge the capsule's own daemon
+	// creates. Traffic to it never leaves the capsule, so it must not
+	// be sent to the relay.
+	innerDockerCIDR = "172.17.0.0/16"
+)
+
+type Spec struct {
+	LeaseID    string
+	InstanceID string
+	// AttemptID, TargetID and TierID are provider-neutral correlation
+	// labels. They make ephemeral resources intelligible in a shared
+	// daemon's container view without exposing credentials or source URLs.
+	AttemptID string
+	TargetID  string
+	TierID    string
+	// CapsuleImage is the first-party outer image: supervisor, runner
+	// and engine in one filesystem.
+	CapsuleImage string
+	JITConfig    string
+	// Resources is the tier envelope, applied once to the outer
+	// container: the aggregate cgroup is the whole point of it.
+	Resources config.Resources
+	// Cache, when set, is the repository cache lane mounted at /cache in
+	// the capsule — its only persistent state. The supervisor makes it
+	// writable by the runner uid at boot.
+	Cache CacheMount
+	// Sandbox, when set, encapsulates the capsule's network: internal
+	// isolated bridge, per-capsule egress gateway on the instance
+	// uplink, default-deny policy, gateway DNS. Nil is the
+	// unsafe-open-egress profile: a plain bridge with host egress.
+	Sandbox *Sandbox
+	// CgroupDriver is the daemon's driver ("systemd" or "cgroupfs"). It
+	// decides the form of the lease's parent cgroup, which the daemon
+	// validates — a slice unit for systemd, a path for cgroupfs.
+	CgroupDriver string
+}
+
+// Sandbox is the controller-computed sandbox input: where the uplink
+// is, and the policy the gateway must install before the capsule may
+// run. Deny is a complete snapshot — baseline ranges, host addresses,
+// Docker subnets, the uplink itself; incomplete discovery must fail
+// admission upstream, never launch with a partial deny set.
+type Sandbox struct {
+	UplinkNetworkID string
+	UplinkSubnet    string
+	Allow           []string
+	Deny            []string
+}
+
+// CacheMount names a cache lane: one named volume, mounted whole. No
+// path and no subpath exists to resolve, which is what makes the mount
+// identical however the controller is deployed.
+type CacheMount struct {
+	Volume string
+}
+
+func (c CacheMount) empty() bool { return c.Volume == "" }
+
+// CachePath is where a repository cache lane is mounted in the capsule;
+// workflows point CARGO_HOME, and so on, beneath it.
+const CachePath = "/cache"
+
+// ResourceRecorder makes every external object durable around its
+// creation, not after it. Plan commits the intent — kind, role and the
+// deterministic name — before any effect; Creating marks the ambiguous
+// window just before the create call; Confirm records the object's id
+// once it exists. A crash anywhere leaves an intent whose name finds
+// the object or proves its absence, which is why no compensation logic
+// lives here anymore: the record cannot be lost, only unconfirmed.
+type ResourceRecorder interface {
+	Plan(kind, role, name string) (int64, error)
+	Creating(intentID int64) error
+	Confirm(intentID int64, dockerID string) error
+}
+
+// create wraps one object creation in its intent lifecycle. When the
+// create call reports a name conflict, resolve settles it: the object
+// is ours from an earlier incarnation of this same intent — adopted by
+// proven ownership, never by name — or it is foreign and the launch
+// fails closed.
+func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role, name string,
+	createFn func() (string, error), resolve func() (string, error)) (string, error) {
+	intentID, err := rec.Plan(kind, role, name)
+	if err != nil {
+		return "", err
+	}
+	if err := rec.Creating(intentID); err != nil {
+		return "", err
+	}
+	dockerID, err := createFn()
+	if err != nil {
+		existing, rerr := resolve()
+		if rerr != nil || existing == "" {
+			if rerr == nil {
+				rerr = err
+			}
+			return "", fmt.Errorf("create %s %s: %w", kind, role, rerr)
+		}
+		dockerID = existing
+	}
+	if err := rec.Confirm(intentID, dockerID); err != nil {
+		// The object exists and the intent still names it in its
+		// creating state: recovery resolves it by name. Nothing is
+		// removed here, because losing the object is worse than
+		// re-finding it.
+		return "", fmt.Errorf("confirming %s %s: %w", kind, role, err)
+	}
+	return dockerID, nil
+}
+
+// Launcher builds capsules. It holds no per-capsule state: everything a
+// launch needs arrives in its Spec, and everything it creates is
+// recorded through the caller's ResourceRecorder.
+type Launcher struct {
+	dock *docker.Client
+	// gatewayImage is what every egress gateway runs, whatever a tier
+	// configured for its jobs. It belongs to the launcher rather than to
+	// a Spec because it is not a per-launch decision: the gateway is the
+	// container that applies the policy confining a job, and a deployment
+	// extending the image its jobs run in is not asking to replace that.
+	// A Spec field would be one more thing a caller can leave empty, and
+	// the caller who does is launching an unconfined job.
+	gatewayImage string
+}
+
+func NewLauncher(d *docker.Client, gatewayImage string) *Launcher {
+	return &Launcher{dock: d, gatewayImage: gatewayImage}
+}
+
+// PreparedRuntime is a capsule that exists but has not been asked to
+// run: the outer container is up, its daemon is ready, the credential
+// is delivered, and the supervisor holds the runner unstarted. It is
+// the value that separates preparation from execution.
+type PreparedRuntime struct {
+	// RuntimeID is the outer container: the one object whose state —
+	// and whose supervisor's state file — answers whether execution
+	// ever began.
+	RuntimeID string
+}
+
+// Prepare builds the capsule and stops short of the one effect that can
+// begin execution. The outer container runs from here — its daemon must
+// boot and prove readiness — but the supervisor refuses to launch the
+// runner until Start, so nothing the job could observe has happened. A
+// failure anywhere in here is retriable by construction.
+func (m *Launcher) Prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (PreparedRuntime, error) {
+	outerID, err := m.prepare(ctx, spec, rec)
+	if err != nil {
+		return PreparedRuntime{}, err
+	}
+	return PreparedRuntime{RuntimeID: outerID}, nil
+}
+
+// Start authorizes the runner. It is deliberately one exec that drops
+// the start sentinel: the caller persists the authorization first, so
+// the ambiguous window is exactly one request wide, and
+// InspectExecution can classify whatever a crash left behind.
+func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
+	code, out, err := m.dock.Exec(ctx, prepared.RuntimeID, []string{supervisorPath, "start"})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("start authorization exited %d: %s", code, out)
+	}
+	return nil
+}
+
+func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
+	short := spec.LeaseID
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	name := func(role string) string { return "runpool-" + role + "-" + short }
+	labels := func(kind, role string) map[string]string {
+		return map[string]string{
+			docker.LabelManaged:  "true",
+			docker.LabelInstance: spec.InstanceID,
+			docker.LabelKind:     kind,
+			docker.LabelLease:    spec.LeaseID,
+			docker.LabelRole:     role,
+			docker.LabelAttempt:  spec.AttemptID,
+			docker.LabelTarget:   spec.TargetID,
+			docker.LabelTier:     spec.TierID,
+		}
+	}
+	resolve := func(kind, objName string) func() (string, error) {
+		return func() (string, error) {
+			return m.dock.OwnedIDByName(ctx, kind, objName, spec.InstanceID, spec.LeaseID)
+		}
+	}
+
+	// Sandboxed, the capsule's only network is internal with Engine 28's
+	// isolated gateway mode: the bridge holds no host address, so the
+	// gateway container is the single path out. Unsandboxed (the
+	// explicit unsafe-open-egress profile) it is a plain bridge.
+	sandboxed := spec.Sandbox != nil
+
+	// One envelope for the lease, split between the capsule and — when
+	// there is one — its gateway, and placed under one parent cgroup.
+	cgroupParent := LeaseCgroupParent(spec.CgroupDriver, spec.LeaseID)
+	capsuleShare := SplitEnvelope(spec.Resources, sandboxed)
+	netID, err := m.create(ctx, rec, KindNetwork, RoleNetwork, name(RoleNetwork),
+		func() (string, error) {
+			return m.dock.CreateNetwork(ctx, docker.NetworkSpec{
+				Name:     name(RoleNetwork),
+				Internal: sandboxed,
+				Isolated: sandboxed,
+				Labels:   labels(KindNetwork, RoleNetwork),
+			})
+		}, resolve(KindNetwork, name(RoleNetwork)))
+	if err != nil {
+		return "", err
+	}
+
+	var gatewayIP netip.Addr
+	var internalSubnet string
+	if sandboxed {
+		if gatewayIP, internalSubnet, err = m.prepareGateway(ctx, spec, rec, netID, name, labels, resolve); err != nil {
+			return "", err
+		}
+	}
+
+	dindData, err := m.create(ctx, rec, KindVolume, RoleDindData, name(RoleDindData),
+		func() (string, error) {
+			return m.dock.CreateVolume(ctx, name(RoleDindData), labels(KindVolume, RoleDindData))
+		}, resolve(KindVolume, name(RoleDindData)))
+	if err != nil {
+		return "", err
+	}
+
+	mounts := []docker.Mount{{Volume: dindData, Target: dindDataDir}}
+	if !spec.Cache.empty() {
+		mounts = append(mounts, docker.Mount{Volume: spec.Cache.Volume, Target: CachePath})
+	}
+
+	capsuleSpec := docker.ContainerSpec{
+		Name:       name(RoleCapsule),
+		Image:      spec.CapsuleImage,
+		Labels:     labels(KindContainer, RoleCapsule),
+		Privileged: true,
+		Network:    netID,
+		Mounts:     mounts,
+		// The control surface and delivered JIT bundle live on tmpfs and
+		// die with the container.
+		Tmpfs: map[string]string{controlDir: "rw,size=1m,mode=0755"},
+		// The capsule's share of the tier envelope, applied exactly
+		// once: this cgroup is the aggregate over runner, daemon and
+		// every inner container the job launches. When a gateway
+		// exists it holds the rest of the same envelope, so the two
+		// together are the tier and never more.
+		MemoryBytes:     capsuleShare.MemoryBytes,
+		MemorySwapBytes: capsuleShare.MemorySwapBytes,
+		NanoCPUs:        capsuleShare.NanoCPUs,
+		PIDsLimit:       capsuleShare.PIDsLimit,
+		CgroupParent:    cgroupParent,
+	}
+	if sandboxed {
+		// The capsule resolves and reaches the network only through its
+		// gateway. Both are pinned at creation: the resolver because
+		// the runner must not consult the daemon's default, and the
+		// proxy because it is the only egress that exists — the host
+		// drops anything the capsule addresses beyond its own bridge.
+		// The environment is inherited by the runner, by the job, and
+		// by the inner daemon the supervisor starts, so image pulls
+		// take the same path as everything else.
+		capsuleSpec.DNS = []netip.Addr{gatewayIP}
+		proxy := fmt.Sprintf("http://%s:%d", gatewayIP, GatewayProxyPort)
+		noProxy := strings.Join([]string{"localhost", "127.0.0.1", innerDockerCIDR, internalSubnet}, ",")
+		capsuleSpec.Env = append(capsuleSpec.Env,
+			"HTTP_PROXY="+proxy, "http_proxy="+proxy,
+			"HTTPS_PROXY="+proxy, "https_proxy="+proxy,
+			"NO_PROXY="+noProxy, "no_proxy="+noProxy,
+		)
+	}
+	outerID, err := m.create(ctx, rec, KindContainer, RoleCapsule, name(RoleCapsule),
+		func() (string, error) {
+			return m.dock.CreateContainer(ctx, capsuleSpec)
+		}, resolve(KindContainer, name(RoleCapsule)))
+	if err != nil {
+		return "", err
+	}
+	if err := m.dock.StartContainer(ctx, outerID); err != nil {
+		return "", err
+	}
+	if err := m.awaitReady(ctx, outerID); err != nil {
+		return "", err
+	}
+	if err := m.checkProtocol(ctx, outerID); err != nil {
+		return "", err
+	}
+	// The JIT bundle travels over exec stdin onto the capsule's tmpfs, where
+	// the supervisor holds it 0600 and runner-owned until Start consumes it.
+	// The upstream runner's required --jitconfig argv boundary is inside the
+	// capsule and is documented as accepted exposure in the threat model.
+	code, out, err := m.dock.ExecWithInput(ctx, outerID,
+		[]string{supervisorPath, "deliver"}, []byte(spec.JITConfig))
+	if err != nil {
+		return "", fmt.Errorf("deliver credential: %w", err)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("deliver credential: exited %d: %s", code, out)
+	}
+	return outerID, nil
+}
+
+// checkProtocol refuses a capsule that does not speak this build's
+// control protocol, before anything is handed to it.
+//
+// It runs after readiness rather than before it. The supervisor writes the
+// file at boot, ahead of the daemon, so an earlier read would be racing a
+// capsule that has not written it yet and would need a poll of its own.
+// Readiness is the first moment a capsule is known to answer anything,
+// and it is still before the credential.
+//
+// The supervisor writes its version at boot, so this reads a fact the
+// capsule states about itself rather than inferring one from a verb that
+// happened to work. Without it a capsule whose supervisor is older
+// answers some verbs and not others, and the mismatch arrives as a job
+// that failed rather than as an image that cannot be used — which is the
+// difference between one operator reading one error and every job on that
+// tier failing until someone correlates them.
+func (m *Launcher) checkProtocol(ctx context.Context, outerID string) error {
+	code, out, err := m.dock.Exec(ctx, outerID, []string{"cat", protocolFile})
+	if err != nil {
+		return fmt.Errorf("read the capsule control protocol: %w", err)
+	}
+	return protocolVerdict(code, out)
+}
+
+// ErrIncompatibleImage reports a capsule that does not speak this
+// controller's control protocol. It is named so the caller can tell it
+// from every other preparation failure: retrying is what a transient
+// deserves, and this is a configured image that will fail the same way on
+// every attempt until someone changes it.
+var ErrIncompatibleImage = errors.New("the capsule image and this controller are not a pair")
+
+// protocolVerdict is the decision the read produces, separated from the
+// read so what can be wrong about it — the trimming, an exit code that is
+// not zero, the message an operator acts on — is decidable without a
+// daemon. The read itself is exercised by every capsule the live contract
+// suite prepares, since a capsule that could not answer would not launch.
+func protocolVerdict(code int, out string) error {
+	got := strings.TrimSpace(out)
+	switch {
+	case code != 0:
+		return fmt.Errorf("%w: it declares no control protocol at %s: exited %d: %s; "+
+			"an operator's capsule image is built from the one this controller ships",
+			ErrIncompatibleImage, protocolFile, code, got)
+	case got != ProtocolVersion:
+		return fmt.Errorf("%w: it speaks control protocol %q and this controller speaks %q",
+			ErrIncompatibleImage, got, ProtocolVersion)
+	}
+	return nil
+}
+
+// prepareGateway builds the capsule's egress path before the capsule
+// exists: gateway container on the internal bridge, second leg on the
+// uplink, policy installed atomically, forwarder up — proven by the
+// gateway reporting ready. Any failure here fails the launch closed;
+// a capsule is never started with a half-made sandbox.
+func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRecorder, netID string,
+	name func(string) string, labels func(string, string) map[string]string,
+	resolve func(string, string) func() (string, error)) (netip.Addr, string, error) {
+
+	subnet, err := m.dock.NetworkSubnet(ctx, netID)
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("internal subnet: %w", err)
+	}
+	policy := egress.Policy{
+		InternalSubnet: subnet,
+		UplinkSubnet:   spec.Sandbox.UplinkSubnet,
+		Allow:          spec.Sandbox.Allow,
+		Deny:           spec.Sandbox.Deny,
+	}
+	if err := policy.Validate(); err != nil {
+		return netip.Addr{}, "", fmt.Errorf("gateway policy: %w", err)
+	}
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		return netip.Addr{}, "", err
+	}
+
+	gwID, err := m.create(ctx, rec, KindContainer, RoleGateway, name(RoleGateway),
+		func() (string, error) {
+			return m.dock.CreateContainer(ctx, docker.ContainerSpec{
+				Name:       name(RoleGateway),
+				Image:      m.gatewayImage,
+				Entrypoint: []string{supervisorPath, "gateway"},
+				// The policy is configuration, not secret; the one
+				// secret in the system never touches the gateway.
+				Env:     []string{"RUNPOOL_GATEWAY_POLICY=" + string(policyJSON)},
+				Labels:  labels(KindContainer, RoleGateway),
+				Network: netID,
+				// NET_ADMIN for the ruleset, and nothing else: not
+				// privileged, no socket, no volumes, no credentials.
+				CapAdd: []string{"NET_ADMIN"},
+				Tmpfs:  map[string]string{controlDir: "rw,size=1m,mode=0755"},
+				// The gateway's share of the lease's envelope, under
+				// the lease's parent cgroup. Every connection a job
+				// opens is work this container performs, so it lives
+				// inside the budget rather than beside it.
+				MemoryBytes:     GatewayEnvelope().MemoryBytes,
+				MemorySwapBytes: GatewayEnvelope().MemorySwapBytes,
+				NanoCPUs:        GatewayEnvelope().NanoCPUs,
+				PIDsLimit:       GatewayEnvelope().PIDsLimit,
+				CgroupParent:    LeaseCgroupParent(spec.CgroupDriver, spec.LeaseID),
+			})
+		}, resolve(KindContainer, name(RoleGateway)))
+	if err != nil {
+		return netip.Addr{}, "", err
+	}
+	if err := m.dock.ConnectNetwork(ctx, spec.Sandbox.UplinkNetworkID, gwID); err != nil {
+		return netip.Addr{}, "", fmt.Errorf("attach gateway to uplink: %w", err)
+	}
+	if err := m.dock.StartContainer(ctx, gwID); err != nil {
+		return netip.Addr{}, "", err
+	}
+	if err := m.awaitState(ctx, gwID, "ready"); err != nil {
+		return netip.Addr{}, "", fmt.Errorf("gateway: %w", err)
+	}
+	ip, _, err := m.dock.ContainerIPOn(ctx, gwID, netID)
+	if err != nil {
+		return netip.Addr{}, "", err
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return netip.Addr{}, "", err
+	}
+	return addr, subnet, nil
+}
+
+// awaitReady polls the supervisor's state until the capsule reports
+// waiting: daemon booted, readiness proven, runner deliberately not
+// started.
+func (m *Launcher) awaitReady(ctx context.Context, outerID string) error {
+	return m.awaitState(ctx, outerID, "waiting")
+}
+
+// awaitState polls a supervisor-family container until it reports the
+// wanted state. The supervisor writing `failed:` is a boot failure
+// worth its reason.
+func (m *Launcher) awaitState(ctx context.Context, containerID, want string) error {
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		code, out, err := m.dock.Exec(ctx, containerID, []string{supervisorPath, "state"})
+		if err == nil && code == 0 {
+			switch s := strings.TrimSpace(out); {
+			case s == want:
+				return nil
+			case strings.HasPrefix(s, "failed:"):
+				return fmt.Errorf("boot failed: %s", strings.TrimPrefix(s, "failed:"))
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("container %s did not reach %q within %s", containerID[:12], want, readyTimeout)
+		}
+		select {
+		case <-time.After(readyPollInterval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
