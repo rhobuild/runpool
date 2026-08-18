@@ -66,8 +66,9 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Static analysis
-        # The check set lives in staticcheck.conf (all checks); a -checks
-        # flag here would override the file.
+        # The check set lives in staticcheck.conf (all checks, with the
+        # generated persistence directory subtracting the package-comment
+        # rule); a -checks flag here would override those files.
         #
         # Staticcheck exits zero both when clean and when it matched no
         # packages, so an older release paired with a newer Go once
@@ -84,17 +85,11 @@ jobs:
           go tool staticcheck ./...
       - name: Test with the race detector
         # Shuffled, so a test that depends on another's leftovers fails
-        # here rather than on the day the order happens to change.
+        # here rather than on the day the order happens to change. The
+        # contract suites are gated by environment and skip in this job:
+        # they need a Docker host and real targets, and release qualification
+        # runs them without skips before any release.
         run: go test -race -shuffle=on -count=1 ./...
-      - name: Verify the generated persistence layer is current
-        # sqlc diff regenerates and compares against the committed code;
-        # the schema parity test in internal/store does the same for the
-        # snapshot the generation reads. Together they leave no second
-        # source of truth: migrations produce the snapshot, the snapshot
-        # produces the code, and drift anywhere fails here.
-        run: |
-          go tool sqlc diff
-          go tool sqlc vet
       - name: Verify coverage meets the floor
         # The global floor protects the hermetic surface from regression;
         # live contracts cover the Docker and provider adapters separately.
@@ -110,15 +105,19 @@ jobs:
           path: coverage.out
           retention-days: 14
           if-no-files-found: error
+      - name: Verify the generated persistence layer is current
+        # sqlc diff regenerates and compares against the committed code;
+        # the schema parity test in internal/store does the same for the
+        # snapshot the generation reads. Together they leave no second
+        # source of truth: migrations produce the snapshot, the snapshot
+        # produces the code, and drift anywhere fails here.
+        run: |
+          go tool sqlc diff
+          go tool sqlc vet
       - name: Verify generated CLI documentation is current
         run: |
           go generate ./internal/command/...
           git diff --exit-code docs/reference/cli
-      - name: Verify the locked image digests have not drifted
-        # Only the registry half: that each locked tag still resolves to the
-        # digest recorded beside it. That the Dockerfiles build from those
-        # digests is hermetic, so internal/app carries it as a test.
-        run: scripts/verify/image-lock.sh
       - name: Verify the module is tidy
         run: |
           go mod tidy
@@ -137,6 +136,11 @@ jobs:
         run: |
           /tmp/runpool config validate --file internal/config/testdata/example.yaml
           /tmp/runpool config validate --file deploy/compose/config.example.yaml
+      - name: Verify the locked image digests have not drifted
+        # Only the registry half: that each locked tag still resolves to the
+        # digest recorded beside it. That the Dockerfiles build from those
+        # digests is hermetic, so internal/app carries it as a test.
+        run: scripts/verify/image-lock.sh
 
   lint:
     name: workflows, scripts and containers
@@ -159,10 +163,10 @@ jobs:
         # checks is worse than none — a reader copies it.
         run: go tool actionlint && go tool actionlint deploy/workflows/*.yml
       - name: Lint the shell scripts
-        # shellcheck ships with the runner image; the verification
-        # scripts run against real hosts, where a quoting bug deletes
-        # the wrong thing.
-        run: shellcheck scripts/*/*.sh
+        # shellcheck ships with the runner image; the harness scripts
+        # run against real hosts, where a quoting bug deletes the wrong
+        # thing.
+        run: shellcheck scripts/*/*.sh test/contract/*/testdata/*.sh
       - name: Lint the Dockerfiles
         uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
@@ -180,16 +184,16 @@ jobs:
         # An image tag and a module directive belong to different
         # updaters, so nothing but this keeps them in step.
         run: scripts/verify/go-version.sh
-      - name: Verify the capsule control surface agrees on both sides
-        # The supervisor cannot import the controller and the controller
-        # cannot import the supervisor, so every shared value is declared
-        # twice. This is the comment on each declaration made executable.
-        run: scripts/verify/capsule-protocol.sh
       - name: Verify the drain window fits the stop grace period
         # A Go constant and a Compose key, with nothing between them: a
         # drain that outlasts the grace period is killed before it closes
         # its sessions.
         run: scripts/verify/drain-window.sh
+      - name: Verify the capsule control surface agrees on both sides
+        # The supervisor cannot import the controller and the controller
+        # cannot import the supervisor, so every shared value is declared
+        # twice. This is the comment on each declaration made executable.
+        run: scripts/verify/capsule-protocol.sh
       - name: Validate the reference deployment
         run: |
           mkdir -p /tmp/runpool-ci-credentials
@@ -197,6 +201,24 @@ jobs:
             RUNPOOL_CONFIG_PATH="$GITHUB_WORKSPACE/deploy/compose/config.example.yaml" \
             RUNPOOL_CREDENTIALS_PATH=/tmp/runpool-ci-credentials \
             docker compose -f deploy/compose/compose.yaml config --quiet
+
+  vulnerabilities:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Scan for known vulnerabilities
+        # The scanner is pinned in go.mod and run with `go tool`: a gate
+        # that resolves @latest at run time cannot be reproduced, and a
+        # security gate that changes under you is not a gate.
+        run: go tool govulncheck ./...
 
   image:
     name: controller image
@@ -217,21 +239,3 @@ jobs:
           fi
       - name: The image must run
         run: docker run --rm runpool:ci version
-
-  vulnerabilities:
-    name: govulncheck
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out the tree
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Scan for known vulnerabilities
-        # The scanner is pinned in go.mod and run with `go tool`: a gate
-        # that resolves @latest at run time cannot be reproduced, and a
-        # security gate that changes under you is not a gate.
-        run: go tool govulncheck ./...
