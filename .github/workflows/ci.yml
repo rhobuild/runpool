@@ -117,10 +117,28 @@ jobs:
         # scripts run against real hosts, where a quoting bug deletes
         # the wrong thing.
         run: shellcheck scripts/*/*.sh
+      - name: Lint the Dockerfiles
+        uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
+        with:
+          recursive: true
+          dockerfile: build/*/Dockerfile
+          # DL3008 (pin apt versions) is answered by the digest-pinned
+          # base image plus the image lock; pinning apt versions on top
+          # of that pins us to a distribution's mirror lifetime.
+          ignore: DL3008
       - name: Verify documentation links resolve
         # Offline by design: in-repo links only, which is what a
         # documentation reorganization breaks silently.
         run: scripts/verify/doc-links.sh
+      - name: Verify the builder images match go.mod
+        # An image tag and a module directive belong to different
+        # updaters, so nothing but this keeps them in step.
+        run: scripts/verify/go-version.sh
+      - name: Verify the capsule control surface agrees on both sides
+        # The supervisor cannot import the controller and the controller
+        # cannot import the supervisor, so every shared value is declared
+        # twice. This is the comment on each declaration made executable.
+        run: scripts/verify/capsule-protocol.sh
 
   vulnerabilities:
     name: govulncheck
