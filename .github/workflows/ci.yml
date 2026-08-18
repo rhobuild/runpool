@@ -91,6 +91,10 @@ jobs:
         run: |
           go tool sqlc diff
           go tool sqlc vet
+      - name: Verify generated CLI documentation is current
+        run: |
+          go generate ./internal/command/...
+          git diff --exit-code docs/reference/cli
       - name: Verify the locked image digests have not drifted
         # Only the registry half: that each locked tag still resolves to the
         # digest recorded beside it. That the Dockerfiles build from those
@@ -100,6 +104,18 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
+      - name: Build the release binaries
+        # Static and cross-built for the platforms a release ships, so a
+        # build tag or a cgo dependency that only breaks elsewhere
+        # breaks here instead.
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /tmp/runpool ./cmd/runpool
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 \
+              go build -trimpath -o /dev/null ./cmd/runpool ./cmd/capsule-supervisor
+          done
+      - name: Verify the configuration examples still validate
+        run: /tmp/runpool config validate --file internal/config/testdata/example.yaml
 
   lint:
     name: workflows, scripts and containers
