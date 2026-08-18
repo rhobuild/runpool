@@ -1,0 +1,89 @@
+# Copy this file into the operator-managed configuration location. Replace
+# target identities and size host reserves and tier capacity from measurements;
+# the values below are an example, not production defaults.
+apiVersion: runpool.rhobuild.com/v1
+kind: RunpoolConfig
+
+instance:
+  name: primary
+
+host:
+  topology: shared-daemon
+  reserve:
+    cpu: "2"
+    memory: 4GiB
+    swap: 0B
+    freeDisk: 30GiB
+
+scheduling:
+  parallelism: 1
+
+targets:
+  # An organization target. A single-segment URL is an organization, not a
+  # user: a personal account has no runner groups and no org-scoped scale
+  # sets, so it cannot be a target of this shape. The runner group must
+  # already exist on GitHub and must grant access to the repositories
+  # whose workflows will run here — Runpool resolves a group, it never
+  # creates one.
+  - id: company
+    url: https://github.com/example-company
+    credential: github-company-runners
+    runnerGroup: default
+    cache:
+      enabled: false
+    tiers:
+      - tier: standard
+        # Workflows reach this tier with: runs-on: runpool-company-standard
+        scaleSetName: runpool-company-standard
+
+  # A repository target. Smaller to set up — no runner group — and the
+  # only shape that may hold a persistent cache, because a runner bound to
+  # one repository cannot execute another's job against its cache.
+  - id: app
+    url: https://github.com/example-company/app
+    credential: github-company-runners
+    cache:
+      enabled: false
+    tiers:
+      - tier: standard
+        # Workflows reach this tier with: runs-on: runpool-app-standard
+        scaleSetName: runpool-app-standard
+
+credentials:
+  # A token belongs to the person who minted it. For anything long-running
+  # prefer type: github_app, which belongs to the organization — see the
+  # configuration reference.
+  - id: github-company-runners
+    type: token
+    tokenFile: /run/secrets/runpool/github-company-runners
+
+tiers:
+  - id: standard
+    parallelism: 1
+    resources:
+      cpu: "2"
+      memory: 4GiB
+      swap: 0B
+      pids: 1024
+
+cache:
+  storage:
+    mode: volume
+
+retention:
+  leaseHistory: 2160h
+
+observability:
+  log:
+    format: json
+    level: info
+  metrics:
+    enabled: false
+
+network:
+  profile: public-internet-only
+  ipv6: disabled
+  dns:
+    mode: gateway
+  allowPrivateCIDRs: []
+  denyCIDRs: []

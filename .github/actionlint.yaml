@@ -1,0 +1,14 @@
+# Self-hosted runner labels this repository's workflows target.
+#
+# `runpool-release-qualification` identifies the dedicated evidence host
+# described by build/platform.lock.json. Only protected release gates use it.
+# Declaring the label here lets the linter distinguish it from a typo.
+#
+# `runpool-standard` is not a runner of this repository's. It is the label
+# a workflow uses to reach a Runpool tier — the default scale set name for
+# a tier called `standard` — and it appears in the example workflow under
+# deploy/workflows, which is the one place a reader can copy it from.
+self-hosted-runner:
+  labels:
+    - runpool-release-qualification
+    - runpool-standard

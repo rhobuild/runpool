@@ -130,7 +130,9 @@ jobs:
               go build -trimpath -o /dev/null ./cmd/runpool ./cmd/capsule-supervisor
           done
       - name: Verify the configuration examples still validate
-        run: /tmp/runpool config validate --file internal/config/testdata/example.yaml
+        run: |
+          /tmp/runpool config validate --file internal/config/testdata/example.yaml
+          /tmp/runpool config validate --file deploy/compose/config.example.yaml
 
   lint:
     name: workflows, scripts and containers
@@ -147,7 +149,11 @@ jobs:
       - name: Lint the workflows
         # Pinned in go.mod like every other gate: a linter resolved at
         # run time changes what passes without anyone deciding to.
-        run: go tool actionlint
+        #
+        # The example under deploy/ is named explicitly: actionlint scans
+        # .github/workflows by itself, and an example workflow nobody
+        # checks is worse than none — a reader copies it.
+        run: go tool actionlint && go tool actionlint deploy/workflows/*.yml
       - name: Lint the shell scripts
         # shellcheck ships with the runner image; the verification
         # scripts run against real hosts, where a quoting bug deletes
@@ -175,6 +181,18 @@ jobs:
         # cannot import the supervisor, so every shared value is declared
         # twice. This is the comment on each declaration made executable.
         run: scripts/verify/capsule-protocol.sh
+      - name: Verify the drain window fits the stop grace period
+        # A Go constant and a Compose key, with nothing between them: a
+        # drain that outlasts the grace period is killed before it closes
+        # its sessions.
+        run: scripts/verify/drain-window.sh
+      - name: Validate the reference deployment
+        run: |
+          mkdir -p /tmp/runpool-ci-credentials
+          RUNPOOL_IMAGE=ghcr.io/rhobuild/runpool@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            RUNPOOL_CONFIG_PATH="$GITHUB_WORKSPACE/deploy/compose/config.example.yaml" \
+            RUNPOOL_CREDENTIALS_PATH=/tmp/runpool-ci-credentials \
+            docker compose -f deploy/compose/compose.yaml config --quiet
 
   image:
     name: controller image
