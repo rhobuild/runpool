@@ -153,7 +153,7 @@ func reportLeaseHistory(ctx context.Context, streams IO, st *store.Store, cfg *c
 			return err
 		}
 		fmt.Fprintf(streams.Out, "lease history: would forget %d record(s) finished before %s",
-			n, before.UTC().Format(time.RFC3339))
+			n, rfc3339(before))
 		// The count is bounded by the same per-run limit the apply uses, so
 		// reaching it means "at least this many", not "this many". Printed
 		// unqualified it reads as a total, and an operator who ran the apply

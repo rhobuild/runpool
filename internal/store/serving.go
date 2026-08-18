@@ -438,24 +438,17 @@ func (t *Tx) RecordProviderFailure(bindingID int64, at time.Time, reason string)
 	})
 }
 
-// ProviderContacts reads every binding's provider reach. A binding with
-// no row has never reached its provider and has never failed either,
-// which is the shape of one that has not run yet.
-func (t *Tx) ProviderContacts() (map[int64]ProviderContact, error) {
-	rows, err := t.q.ListProviderBindingContact(t.ctx)
-	if err != nil {
-		return nil, err
+// providerContactFromRow builds one binding's reach from its joined
+// columns. Zero milliseconds is a moment that never happened — a binding
+// that has never reached its provider and never failed either, which is
+// the shape of one that has not run yet — and stays a zero time.
+func providerContactFromRow(bindingID, contactMs int64, lastError string, errorMs int64) ProviderContact {
+	c := ProviderContact{BindingID: bindingID, LastError: lastError}
+	if contactMs > 0 {
+		c.LastContact = time.UnixMilli(contactMs).UTC()
 	}
-	out := make(map[int64]ProviderContact, len(rows))
-	for _, r := range rows {
-		c := ProviderContact{BindingID: r.BindingID, LastError: r.LastError}
-		if r.LastContactAtMs > 0 {
-			c.LastContact = time.UnixMilli(r.LastContactAtMs).UTC()
-		}
-		if r.LastErrorAtMs > 0 {
-			c.LastErrorAt = time.UnixMilli(r.LastErrorAtMs).UTC()
-		}
-		out[r.BindingID] = c
+	if errorMs > 0 {
+		c.LastErrorAt = time.UnixMilli(errorMs).UTC()
 	}
-	return out, nil
+	return c
 }

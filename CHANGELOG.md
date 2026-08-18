@@ -248,7 +248,7 @@ by its public and operational effects.
   vulnerability scanning, SHA-pinned actions, and least-privilege workflow
   permissions.
 - The qualification policy is **pending in `build/platform.lock.json`**.
-  Docker Engine 29.6.2 on Debian 13 is selected for the first qualification;
+  Docker Engine 29.7.2 on Debian 13 is selected for the first qualification;
   the exact host facts must be captured, reviewed, and frozen before a release
   candidate is authorized. Contract suites fail closed while the lock is
   pending and later compare the host against the frozen manifest.

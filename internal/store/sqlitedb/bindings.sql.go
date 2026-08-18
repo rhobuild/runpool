@@ -66,40 +66,6 @@ func (q *Queries) InsertProviderBinding(ctx context.Context, arg InsertProviderB
 	return i, err
 }
 
-const listProviderBindingContact = `-- name: ListProviderBindingContact :many
-SELECT binding_id, last_contact_at_ms, last_error, last_error_at_ms
-FROM provider_binding_contact
-ORDER BY binding_id
-`
-
-func (q *Queries) ListProviderBindingContact(ctx context.Context) ([]ProviderBindingContact, error) {
-	rows, err := q.db.QueryContext(ctx, listProviderBindingContact)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ProviderBindingContact{}
-	for rows.Next() {
-		var i ProviderBindingContact
-		if err := rows.Scan(
-			&i.BindingID,
-			&i.LastContactAtMs,
-			&i.LastError,
-			&i.LastErrorAtMs,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProviderBindings = `-- name: ListProviderBindings :many
 SELECT id, target_id, provider_kind, source_binding_key, desired_state, created_at
 FROM provider_bindings
@@ -122,6 +88,66 @@ func (q *Queries) ListProviderBindings(ctx context.Context) ([]ProviderBinding, 
 			&i.SourceBindingKey,
 			&i.DesiredState,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProviderBindingsWithContact = `-- name: ListProviderBindingsWithContact :many
+SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.desired_state, b.created_at,
+       coalesce(c.last_contact_at_ms, 0) AS last_contact_at_ms,
+       coalesce(c.last_error, '')        AS last_error,
+       coalesce(c.last_error_at_ms, 0)   AS last_error_at_ms
+FROM provider_bindings b
+LEFT JOIN provider_binding_contact c ON c.binding_id = b.id
+ORDER BY b.target_id, b.source_binding_key
+`
+
+type ListProviderBindingsWithContactRow struct {
+	ID               int64
+	TargetID         string
+	ProviderKind     string
+	SourceBindingKey string
+	DesiredState     string
+	CreatedAt        int64
+	LastContactAtMs  int64
+	LastError        string
+	LastErrorAtMs    int64
+}
+
+// The reach travels with the binding in one query: a list plus a lookup
+// joined in Go is two reads a write can straddle, and the join is the
+// database's job. A binding that has never run reports zeroes, which is
+// not the same as failing: the first has nothing to say, the second has
+// a reason.
+func (q *Queries) ListProviderBindingsWithContact(ctx context.Context) ([]ListProviderBindingsWithContactRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProviderBindingsWithContact)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProviderBindingsWithContactRow{}
+	for rows.Next() {
+		var i ListProviderBindingsWithContactRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TargetID,
+			&i.ProviderKind,
+			&i.SourceBindingKey,
+			&i.DesiredState,
+			&i.CreatedAt,
+			&i.LastContactAtMs,
+			&i.LastError,
+			&i.LastErrorAtMs,
 		); err != nil {
 			return nil, err
 		}

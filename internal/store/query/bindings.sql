@@ -40,7 +40,16 @@ VALUES (@binding_id, 0, @last_error, @at)
 ON CONFLICT (binding_id) DO UPDATE
 SET last_error = excluded.last_error, last_error_at_ms = excluded.last_error_at_ms;
 
--- name: ListProviderBindingContact :many
-SELECT binding_id, last_contact_at_ms, last_error, last_error_at_ms
-FROM provider_binding_contact
-ORDER BY binding_id;
+-- name: ListProviderBindingsWithContact :many
+-- The reach travels with the binding in one query: a list plus a lookup
+-- joined in Go is two reads a write can straddle, and the join is the
+-- database's job. A binding that has never run reports zeroes, which is
+-- not the same as failing: the first has nothing to say, the second has
+-- a reason.
+SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.desired_state, b.created_at,
+       coalesce(c.last_contact_at_ms, 0) AS last_contact_at_ms,
+       coalesce(c.last_error, '')        AS last_error,
+       coalesce(c.last_error_at_ms, 0)   AS last_error_at_ms
+FROM provider_bindings b
+LEFT JOIN provider_binding_contact c ON c.binding_id = b.id
+ORDER BY b.target_id, b.source_binding_key;

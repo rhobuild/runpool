@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
@@ -40,10 +41,10 @@ const (
 	// protocolFile is where the supervisor writes the version of the
 	// control protocol it speaks, at boot, before it is asked anything.
 	protocolFile = controlDir + "/protocol"
-	// ProtocolVersion is the control protocol this build speaks. Part of
-	// the control-surface contract; must match the supervisor's own
-	// protocolVersion, which is where a capsule declares it.
-	ProtocolVersion = "1"
+	// ProtocolVersion is the control protocol this build speaks. The
+	// declaration itself lives in internal/capsule/protocol, imported by
+	// the supervisor too, so the two sides cannot disagree.
+	ProtocolVersion = protocol.Version
 	// dindDataDir is the inner daemon's data root — the one mount that
 	// must be a volume, because overlayfs cannot stack on the
 	// container's own overlayfs.

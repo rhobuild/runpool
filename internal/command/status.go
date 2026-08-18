@@ -95,9 +95,9 @@ func runStatus(streams IO, asJSON bool, shippedCapsule string) error {
 	}
 
 	if p := snap.Pressure; p != nil {
-		fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s ago)\n",
+		fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
 			p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
-			time.Since(time.Unix(p.MeasuredAt, 0)).Round(time.Second))
+			ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
 		if p.Level != "normal" {
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what this level means and what to do")
 		}

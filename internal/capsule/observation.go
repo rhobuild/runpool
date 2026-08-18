@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"fmt"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -33,17 +34,11 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	return classifySupervisorState(strings.TrimSpace(out))
 }
 
-// SupervisorAbortedExitCode is the status the capsule supervisor exits with
-// when it stops before handing the job to the runner. It is part of the
-// control-surface contract and must match `exitAborted` in
-// cmd/capsule-supervisor.
-//
-// It is a distinct code rather than a state-file value because the state
-// file dies with the container: by the time a controller inspects an
-// aborted capsule, the daemon reports `exited` and nothing inside can be
-// read. Without this, every abort read as an ordinary exit — and an
-// attempt that never ran was settled as complete and never requeued.
-const SupervisorAbortedExitCode = 79
+// SupervisorAbortedExitCode is the status the capsule supervisor exits
+// with when it stops before handing the job to the runner. The
+// declaration lives in internal/capsule/protocol, imported by the
+// supervisor too, so the two sides cannot disagree.
+const SupervisorAbortedExitCode = protocol.AbortedExitCode
 
 // classifySupervisorExit reads a stopped capsule's exit code. Any code but
 // the reserved one means the runner owned the job, which includes a job

@@ -20,6 +20,7 @@ import (
 // flakyScaleSets fails a fixed number of times before it succeeds, which
 // is what an unreachable provider looks like from the loop.
 type flakyScaleSets struct {
+	nullProvider
 	failures int32
 	calls    atomic.Int32
 }
@@ -45,7 +46,7 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	h.bind.ensured = false
 	h.bind.scaleSetID = 0
 	sets := &flakyScaleSets{failures: 2}
-	h.bind.sets = sets
+	h.bind.gh = sets
 	h.srv.pollBackoff = time.Millisecond
 	// The broker stays unreachable too, so the loop is exercised in the
 	// state this test is about: connected to nothing, still running.
@@ -94,8 +95,12 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	// reached, and the broker behind it is what is failing now.
 	var contact store.ProviderContact
 	if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
-		contacts, err := tx.ProviderContacts()
-		contact = contacts[h.bind.bindingID]
+		bindings, err := tx.Bindings()
+		for _, b := range bindings {
+			if b.ID == h.bind.bindingID {
+				contact = b.Contact
+			}
+		}
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -143,7 +148,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 	tried := make(chan struct{})
 	var once sync.Once
 	h.bind.ensured = false
-	h.bind.sets = &refusingScaleSets{calls: &attempts, reached: func() {
+	h.bind.gh = &refusingScaleSets{calls: &attempts, reached: func() {
 		once.Do(func() { close(tried) })
 	}}
 	h.srv.pollBackoff = time.Millisecond
@@ -175,6 +180,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 }
 
 type refusingScaleSets struct {
+	nullProvider
 	calls   *atomic.Int32
 	reached func()
 }
@@ -200,8 +206,12 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 		t.Helper()
 		var c store.ProviderContact
 		if err := h.srv.store.Tx(ctx, func(tx *store.Tx) error {
-			all, err := tx.ProviderContacts()
-			c = all[h.bind.bindingID]
+			bindings, err := tx.Bindings()
+			for _, b := range bindings {
+				if b.ID == h.bind.bindingID {
+					c = b.Contact
+				}
+			}
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -293,7 +303,7 @@ func TestACrashBetweenCreatingAndRecordingConverges(t *testing.T) {
 					return err
 				})
 			}}
-			h.bind.sets = sets
+			h.bind.gh = sets
 			if err := h.srv.ensureScaleSet(t.Context(), h.bind); err != nil {
 				t.Fatalf("ensureScaleSet: %v", err)
 			}
@@ -323,6 +333,7 @@ func TestACrashBetweenCreatingAndRecordingConverges(t *testing.T) {
 }
 
 type recordingScaleSets struct {
+	nullProvider
 	id           int
 	lastIntended bool
 	// duringCall runs while the provider call is in flight, which is the

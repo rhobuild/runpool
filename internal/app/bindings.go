@@ -93,8 +93,6 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				tier:   tier,
 				ref:    ref,
 				gh:     gh,
-				jit:    gh,
-				sets:   gh,
 				// The recorded id is what lets the loop adopt the set it
 				// created on an earlier start instead of refusing a
 				// stranger's set of the same name. Zero means this binding
@@ -155,7 +153,7 @@ func (s *Controller) ensureScaleSet(ctx context.Context, b *binding) error {
 		return err
 	}
 
-	set, err := b.sets.EnsureScaleSet(ctx, b.target.RunnerGroup, b.scaleSetName, b.scaleSetID, intended)
+	set, err := b.gh.EnsureScaleSet(ctx, b.target.RunnerGroup, b.scaleSetName, b.scaleSetID, intended)
 	if err != nil {
 		return err
 	}

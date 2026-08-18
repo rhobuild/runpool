@@ -50,13 +50,11 @@ type BindingInfo struct {
 	Contact ProviderContact
 }
 
-// Bindings lists every recorded binding, in a stable order.
+// Bindings lists every recorded binding with its provider reach, in a
+// stable order and in one query: a list plus a lookup joined in Go is
+// two reads a write can straddle.
 func (t *Tx) Bindings() ([]BindingInfo, error) {
-	rows, err := t.q.ListProviderBindings(t.ctx)
-	if err != nil {
-		return nil, err
-	}
-	contacts, err := t.ProviderContacts()
+	rows, err := t.q.ListProviderBindingsWithContact(t.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +63,7 @@ func (t *Tx) Bindings() ([]BindingInfo, error) {
 		out[i] = BindingInfo{
 			ID: r.ID, TargetID: r.TargetID, ProviderKind: r.ProviderKind,
 			SourceBindingKey: r.SourceBindingKey, DesiredState: r.DesiredState,
-			Contact: contacts[r.ID],
+			Contact: providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
 		}
 	}
 	return out, nil

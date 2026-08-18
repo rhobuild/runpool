@@ -370,16 +370,7 @@ func Validate(c *Config) error {
 // credential carrying both is a deployment that believes something about
 // which one is in use, and only one of those beliefs is right.
 func (v *validator) tokenCredential(path string, cr Credential) {
-	switch {
-	case cr.TokenEnv == "" && cr.TokenFile == "":
-		v.errf(path, "exactly one of tokenEnv or tokenFile is required")
-	case cr.TokenEnv != "" && cr.TokenFile != "":
-		v.errf(path, "tokenEnv and tokenFile are mutually exclusive")
-	case cr.TokenEnv != "" && !envNameRe.MatchString(cr.TokenEnv):
-		v.errf(path+".tokenEnv", "must be an environment variable name")
-	default:
-		v.secretPath(path+".tokenFile", cr.TokenFile)
-	}
+	v.secretRef(path, "tokenEnv", "tokenFile", cr.TokenEnv, cr.TokenFile)
 	if cr.ClientID != "" || cr.InstallationID != 0 ||
 		cr.PrivateKeyEnv != "" || cr.PrivateKeyFile != "" {
 		v.errf(path, "clientID, installationID and the private key belong to a %q credential",
@@ -397,16 +388,7 @@ func (v *validator) appCredential(path string, cr Credential) {
 	if cr.InstallationID <= 0 {
 		v.errf(path+".installationID", "must be > 0; it identifies the installation this deployment acts as")
 	}
-	switch {
-	case cr.PrivateKeyEnv == "" && cr.PrivateKeyFile == "":
-		v.errf(path, "exactly one of privateKeyEnv or privateKeyFile is required")
-	case cr.PrivateKeyEnv != "" && cr.PrivateKeyFile != "":
-		v.errf(path, "privateKeyEnv and privateKeyFile are mutually exclusive")
-	case cr.PrivateKeyEnv != "" && !envNameRe.MatchString(cr.PrivateKeyEnv):
-		v.errf(path+".privateKeyEnv", "must be an environment variable name")
-	default:
-		v.secretPath(path+".privateKeyFile", cr.PrivateKeyFile)
-	}
+	v.secretRef(path, "privateKeyEnv", "privateKeyFile", cr.PrivateKeyEnv, cr.PrivateKeyFile)
 	if cr.TokenEnv != "" || cr.TokenFile != "" {
 		v.errf(path, "tokenEnv and tokenFile belong to a %q credential", CredentialTypeToken)
 	}
@@ -415,6 +397,24 @@ func (v *validator) appCredential(path string, cr Credential) {
 // secretPath refuses a reference that names a different file depending on
 // how the process was started. The controller's working directory is not
 // part of the contract.
+// secretRef holds every env-xor-file secret reference to one rule:
+// exactly one side set, a well-formed variable name, a reviewable file
+// path. The field names arrive as parameters so the third credential
+// type costs a call here rather than a third copy of the ladder — and
+// so the two existing copies cannot drift apart again.
+func (v *validator) secretRef(path, envField, fileField, envName, filePath string) {
+	switch {
+	case envName == "" && filePath == "":
+		v.errf(path, "exactly one of %s or %s is required", envField, fileField)
+	case envName != "" && filePath != "":
+		v.errf(path, "%s and %s are mutually exclusive", envField, fileField)
+	case envName != "" && !envNameRe.MatchString(envName):
+		v.errf(path+"."+envField, "must be an environment variable name")
+	default:
+		v.secretPath(path+"."+fileField, filePath)
+	}
+}
+
 func (v *validator) secretPath(path, ref string) {
 	switch {
 	case ref == "":
