@@ -1,0 +1,483 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/capsule"
+	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/store"
+)
+
+// The Start fault matrix: every way the launch orchestration can fail,
+// driven through the real runCapsule with the capsule, registry and
+// waiter seams faulted. The invariant across the whole table is that no
+// combination produces a false "executed" — an attempt settles only
+// when execution was observed, returns to ready only when a start
+// provably never took effect, and is held for a person whenever neither
+// can be shown.
+
+type fakeCapsule struct {
+	prepareErr error
+	startErr   error
+	obs        assignment.ExecutionObservation
+	obsErr     error
+	// spec is what the controller asked for, which is the only place the
+	// image decisions are observable.
+	spec capsule.Spec
+}
+
+func (f *fakeCapsule) Prepare(_ context.Context, spec capsule.Spec, rec capsule.ResourceRecorder) (capsule.PreparedRuntime, error) {
+	f.spec = spec
+	if f.prepareErr != nil {
+		return capsule.PreparedRuntime{}, f.prepareErr
+	}
+	// A successful preparation records its objects the way the real one
+	// does — plan, creating, confirm — so the finalizing transaction has
+	// real intents to verify and remove.
+	id, err := rec.Plan("container", "runner", "runpool-runner-fake")
+	if err != nil {
+		return capsule.PreparedRuntime{}, err
+	}
+	if err := rec.Creating(id); err != nil {
+		return capsule.PreparedRuntime{}, err
+	}
+	if err := rec.Confirm(id, "fake-runner"); err != nil {
+		return capsule.PreparedRuntime{}, err
+	}
+	return capsule.PreparedRuntime{RuntimeID: "fake-runner"}, nil
+}
+
+func (f *fakeCapsule) Start(context.Context, capsule.PreparedRuntime) error { return f.startErr }
+
+func (f *fakeCapsule) InspectExecution(context.Context, capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+	return f.obs, f.obsErr
+}
+
+type fakeRegistry struct{ jitErr error }
+
+func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (githubactions.JITConfig, error) {
+	if f.jitErr != nil {
+		return githubactions.JITConfig{}, f.jitErr
+	}
+	return githubactions.JITConfig{RunnerID: 5, RunnerName: "fake", Encoded: "fake-jit"}, nil
+}
+
+func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return nil }
+
+type fakeWaiter struct {
+	exit    int64
+	waitErr error
+}
+
+func (f *fakeWaiter) WaitExit(context.Context, string) (int64, error) { return f.exit, f.waitErr }
+func (f *fakeWaiter) TailLogs(context.Context, string, int) (string, error) {
+	return "", nil
+}
+
+// runFaulted claims one attempt and drives runCapsule synchronously
+// against the given fakes.
+func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, wait *fakeWaiter, workload string) (store.Lease, string) {
+	t.Helper()
+	h.srv.caps = caps
+	h.srv.wait = wait
+	h.bind.jit = reg
+	if err := h.deliver(demand(workload, "app", 60)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, workload)
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, lease)
+	return lease, attemptID
+}
+
+func TestStartFaultMatrix(t *testing.T) {
+	boom := errors.New("injected failure")
+	cases := []struct {
+		name    string
+		caps    *fakeCapsule
+		reg     *fakeRegistry
+		wait    *fakeWaiter
+		want    string // attempt state afterwards
+		wantRes string // attempt resolution, when settled
+	}{
+		{
+			// The credential could not be minted: nothing was prepared,
+			// nothing could have run.
+			name: "jit generation fails",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{jitErr: boom}, wait: &fakeWaiter{},
+			want: "ready",
+		},
+		{
+			// Preparation died building the capsule: by construction no
+			// start was possible.
+			name: "prepare fails",
+			caps: &fakeCapsule{prepareErr: boom}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: "ready",
+		},
+		{
+			// Start errored and the daemon shows the container never left
+			// created: the one provable requeue past the authorization.
+			name: "start error, runtime proven inert",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: "ready",
+		},
+		{
+			// Start errored but the container ran and exited: the error
+			// was noise, the execution was real.
+			name: "start error, runtime ran and exited",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedExited}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+		},
+		{
+			// Start errored but the container is running: continue as if
+			// the start succeeded, await it, settle on its exit.
+			name: "start error, runtime running",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedRunning}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 0},
+			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+		},
+		{
+			// Start errored and the container is gone: nothing can be
+			// proven in either direction, so a person decides.
+			name: "start error, runtime absent",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: "manual_review",
+		},
+		{
+			// Start errored and the daemon cannot be asked: same ruling.
+			name: "start error, daemon unavailable",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedUnavailable, obsErr: boom}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: "manual_review",
+		},
+		{
+			// The runner started and the daemon was lost mid-run: running
+			// was observed, so the attempt settles as exactly that.
+			name: "wait fails after a clean start",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{waitErr: boom},
+			want: "settled", wantRes: assignment.ResolutionStartedObserved,
+		},
+		{
+			// A non-zero exit is the job's business, not the machine's:
+			// the runner ran and completed.
+			name: "runner exits non-zero",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 7},
+			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+		},
+		{
+			name: "happy path",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 0},
+			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 1)
+			lease, attemptID := runFaulted(t, h, tc.caps, tc.reg, tc.wait, "job-fault")
+
+			got := attemptState(t, h, attemptID)
+			if got.State != tc.want {
+				t.Errorf("attempt = %s; want %s", got.State, tc.want)
+			}
+			if tc.wantRes != "" && got.Resolution != tc.wantRes {
+				t.Errorf("resolution = %s; want %s", got.Resolution, tc.wantRes)
+			}
+			// No combination may leave the lease holding its credit: every
+			// path ends terminal, whatever became of the attempt.
+			if final := reloadLease(t, h, lease.ID); final.State != store.LeaseReleased {
+				t.Errorf("lease ended %s; want released", final.State)
+			}
+			// The invariant the atomic ending exists for: after any
+			// normal path, no attempt is left open under a finished
+			// lease. The reconciler's sweep should never find one.
+			h.inStore(func(s *store.Tx) error {
+				stranded, err := s.StrandedAttempts()
+				if err != nil {
+					return err
+				}
+				if len(stranded) != 0 {
+					t.Errorf("stranded attempts = %d after a normal path; release and "+
+						"disposition came apart", len(stranded))
+				}
+				return nil
+			})
+		})
+	}
+}
+
+// The operator's two decisions over held work, with their audit trail.
+// Retry is only offered because the operator verified externally that
+// the workload never executed; settle is the safe reading when it
+// cannot be ruled out.
+func TestOperatorResolvesHeldAttempts(t *testing.T) {
+	boom := errors.New("injected failure")
+	for _, decision := range []string{"retry", "settle"} {
+		t.Run(decision, func(t *testing.T) {
+			h := newHarness(t, 1)
+			// An unprovable start outcome puts the attempt in review.
+			_, attemptID := runFaulted(t, h,
+				&fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent},
+				&fakeRegistry{}, &fakeWaiter{}, "job-held")
+			if got := attemptState(t, h, attemptID); got.State != "manual_review" {
+				t.Fatalf("attempt = %s; want manual_review", got.State)
+			}
+
+			h.inStore(func(s *store.Tx) error {
+				if decision == "retry" {
+					return s.ResolveReviewToReady(attemptID, "provider shows the job never started", "matias")
+				}
+				return s.ResolveReviewToSettled(attemptID, assignment.ResolutionMayHaveExecuted,
+					"cannot rule out execution", "matias")
+			})
+
+			got := attemptState(t, h, attemptID)
+			switch decision {
+			case "retry":
+				if got.State != "ready" {
+					t.Errorf("attempt = %s; want ready", got.State)
+				}
+				if len(h.ready()) != 1 {
+					t.Error("a retried attempt is not servable")
+				}
+			case "settle":
+				if got.State != "settled" || got.Resolution != assignment.ResolutionMayHaveExecuted {
+					t.Errorf("attempt = %s/%s; want settled/%s", got.State, got.Resolution, assignment.ResolutionMayHaveExecuted)
+				}
+			}
+			if got.ReviewedBy != "matias" {
+				t.Errorf("reviewed_by = %q; every resolution names its actor", got.ReviewedBy)
+			}
+			// The decision and its reason are in the lifecycle, where an
+			// audit reads them back.
+			var sawResolution bool
+			h.inStore(func(s *store.Tx) error {
+				events, err := s.Events(attemptID)
+				if err != nil {
+					return err
+				}
+				for _, ev := range events {
+					if ev.Kind == "operator_resolved" && ev.Detail != "{}" {
+						sawResolution = true
+					}
+				}
+				return nil
+			})
+			if !sawResolution {
+				t.Error("no operator_resolved event with detail; the audit trail is missing")
+			}
+		})
+	}
+}
+
+// faultyRemover fails removals until healed — a wedged daemon the
+// periodic reconciler must outlast.
+type faultyRemover struct {
+	healed bool
+}
+
+func (f *faultyRemover) fail() error {
+	if f.healed {
+		return nil
+	}
+	return errors.New("daemon wedged")
+}
+func (f *faultyRemover) RemoveOwnedContainer(context.Context, string, string, string) error {
+	return f.fail()
+}
+func (f *faultyRemover) RemoveOwnedNetwork(context.Context, string, string, string) error {
+	return f.fail()
+}
+func (f *faultyRemover) RemoveOwnedVolume(context.Context, string, string, string) error {
+	return f.fail()
+}
+
+// The periodic reconciler converges a quarantined lease without a
+// restart: the wedged removal parks the lease and books backoff on the
+// intent; the pass respects the backoff while it lasts, and once the
+// daemon heals and the window elapses, one pass drives the whole ending
+// — removal, release, disposition.
+func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
+	h := newHarness(t, 1)
+	remover := &faultyRemover{}
+	h.useRemover(remover)
+	if err := h.deliver(demand("job-wedged", "app", 80)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-wedged")
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-wedge")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(id, "wedge-1")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The removal fails: the lease parks in quarantine with backoff
+	// booked on the intent, and the attempt stays leased — unresolved,
+	// visible, waiting.
+	if err := h.srv.recoverCapsuleFailure(h.bind, lease.ID, ""); err == nil {
+		t.Fatal("recoverCapsuleFailure with a wedged daemon succeeded")
+	}
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
+		t.Fatalf("lease = %s; want quarantined", got.State)
+	}
+
+	// The backoff has not elapsed: a periodic pass must not retry yet.
+	h.srv.retryStranded(t.Context())
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
+		t.Fatalf("a pass inside the backoff window touched the lease: %s", got.State)
+	}
+
+	// The daemon heals and the backoff elapses.
+	remover.healed = true
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		intents, err := tx.Resources(lease.ID)
+		if err != nil {
+			return err
+		}
+		return tx.RecordResourceError(intents[0].ID, errors.New("previous failure"), time.Now().Add(-time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+		t.Errorf("lease = %s after the periodic pass; want released", got.State)
+	}
+	if got := attemptState(t, h, attempt); got.State != "ready" {
+		t.Errorf("attempt = %s; want ready — nothing was ever authorized", got.State)
+	}
+}
+
+// A provider cancellation closes unstarted work and nothing else: the
+// ready attempt cancels, while an attempt already serving is left to
+// its own lifecycle — a cancellation aimed at old work must never touch
+// a live capsule.
+func TestRemoteCancellationClosesOnlyReadyWork(t *testing.T) {
+	h := newHarness(t, 2)
+	if err := h.deliver(demand("job-idle", "app", 70)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deliver(demand("job-busy", "app", 71)); err != nil {
+		t.Fatal(err)
+	}
+	_, busyAttempt := leaseFor(t, h, "job-busy") // now leased, not ready
+
+	cancelled := &githubactions.Message{ID: 900, Completed: []assignment.WorkloadLifecycleEvent{
+		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-idle", Result: "canceled"},
+		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-busy", Result: "canceled"},
+	}}
+	s := h.srv
+	s.recordLifecycleEvents(t.Context(), h.bind, cancelled)
+
+	idle := h.ready()
+	if len(idle) != 0 {
+		t.Errorf("a cancelled ready attempt is still servable: %+v", idle)
+	}
+	if got := attemptState(t, h, busyAttempt); got.State != "leased" {
+		t.Errorf("a serving attempt was touched by a remote cancellation: %s", got.State)
+	}
+}
+
+// TestPeriodicReconcileConvergesAStrandedCleaningLease is the credit-leak
+// guard. Quarantine is not the only way an owner stops: a failed
+// finalization leaves the lease in `cleaning` with no goroutine driving it.
+// The old pass listed quarantined leases only, so such a lease held its
+// admission credit until the process restarted — the tier permanently
+// admitting one less than its parallelism.
+func TestPeriodicReconcileConvergesAStrandedCleaningLease(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-stranded", "app", 80)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-stranded")
+
+	// Park the lease in cleaning with nobody driving it, which is where a
+	// failed Finalize leaves it, and take the credit its owner held.
+	if _, err := h.srv.leases.ToCleaning(t.Context(), lease.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseCleaning {
+		t.Fatalf("lease = %s; want cleaning", got)
+	}
+	h.srv.alloc.Adopt(h.bind.key)
+	if h.srv.alloc.TryReserve(h.bind.key) {
+		t.Fatal("the stranded lease should be holding the tier's only credit")
+	}
+
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReleased {
+		t.Errorf("stranded cleaning lease = %s after a periodic pass; want released", got)
+	}
+	if !h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the stranded lease's admission credit was never returned")
+	}
+	if got := attemptState(t, h, attempt); got.State == "leased" {
+		t.Error("the attempt was left leased to a lease that no longer exists")
+	}
+}
+
+// A lease a goroutine is still driving is not stranded, and the periodic
+// pass must not touch it — two owners each concluding it is done would
+// release the same admission credit twice and oversubscribe the host.
+func TestPeriodicReconcileSkipsOwnedLeases(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-owned", "app", 80)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-owned")
+
+	if !h.srv.claimLease(lease.ID) {
+		t.Fatal("the lease should be claimable")
+	}
+	defer h.srv.releaseLease(lease.ID)
+
+	before := reloadLease(t, h, lease.ID).State
+	h.srv.retryStranded(t.Context())
+	if got := reloadLease(t, h, lease.ID).State; got != before {
+		t.Errorf("a claimed lease moved %s -> %s; the pass must leave owned leases alone", before, got)
+	}
+}
+
+// TestPeriodicReconcileSpareAJobBeingLaunched closes the window the
+// ownership claim opened. createLease commits a lease in `reserved` — a
+// live state the periodic pass now lists — and the goroutine that drives
+// it starts afterwards. If the claim were taken inside that goroutine, a
+// pass landing in between would find the lease ownerless and drive it
+// through recoverCapsuleFailure: the capsule, its network and its volume
+// destroyed under a job that was starting, and its admission credit
+// released twice.
+func TestPeriodicReconcileSpareAJobBeingLaunched(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-launching", "app", 80)); err != nil {
+		t.Fatal(err)
+	}
+	h.serve()
+
+	launched := h.launchedAttempts()
+	if len(launched) != 1 {
+		t.Fatalf("launched %v; want exactly one attempt", launched)
+	}
+	h.mu.Lock()
+	lease := h.leases[launched[0]]
+	h.mu.Unlock()
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReserved {
+		t.Fatalf("lease = %s; the harness launch leaves it reserved", got)
+	}
+
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReserved {
+		t.Errorf("the periodic pass drove a lease being launched: %s -> %s",
+			store.LeaseReserved, got)
+	}
+	if h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the launching lease's admission credit was released out from under it")
+	}
+}

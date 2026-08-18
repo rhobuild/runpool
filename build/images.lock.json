@@ -1,0 +1,26 @@
+{
+  "$comment": [
+    "Runtime images Runpool creates containers from, pinned by digest.",
+    "A tag can move; a digest cannot, so a release always runs the images",
+    "it was tested against. The runner and dind pair is versioned together:",
+    "the runner's externals tree and the daemon it drives must match.",
+    "scripts/verify/image-lock.sh re-resolves each tag and fails when a",
+    "digest has drifted from what is recorded here."
+  ],
+  "resolved": "2026-08-15",
+  "platform": "linux/amd64",
+  "images": {
+    "runner": {
+      "ref": "ghcr.io/actions/actions-runner:2.336.0",
+      "digest": "sha256:0cfdcc701ce933c6d243c6b0b2da767366dc9f2e99961d4c3754b0b78084cdda",
+      "upstream": "https://github.com/actions/runner/releases/tag/v2.336.0",
+      "note": "GitHub requires a runner with auto-update disabled to be updated within 30 days of a release."
+    },
+    "dind": {
+      "ref": "docker:29.7.2-dind",
+      "digest": "sha256:12e683a161823b2a839aeea999b9d960e6e1f9a97b1679ad6b441982e2d9cf07",
+      "upstream": "https://hub.docker.com/_/docker",
+      "note": "Runs privileged inside the capsule; its data root is a fresh volume per job. Release qualification exercises this exact digest through the capsule candidate."
+    }
+  }
+}

@@ -1,0 +1,262 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/credential"
+	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/store"
+)
+
+// buildBindings resolves every configured (target, tier) pair into a
+// binding registered with the allocator. One GitHub client per target;
+// tokens are resolved once.
+//
+// It reaches no provider. Startup reconciliation needs every binding in
+// hand to adopt a running capsule or resolve an interrupted lease, so a
+// binding must exist before the first provider call rather than as its
+// result. Creating-or-adopting the scale set is the binding's own loop's
+// first act, where a failure is retried instead of ending the process.
+func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, environ func(string) string) error {
+	tiers := make(map[string]config.Tier, len(cfg.Tiers))
+	for _, t := range cfg.Tiers {
+		tiers[t.ID] = t
+	}
+	creds := make(map[string]config.Credential, len(cfg.Credentials))
+	for _, c := range cfg.Credentials {
+		creds[c.ID] = c
+	}
+
+	for _, target := range cfg.Targets {
+		ref, err := config.ParseTargetURL(target.URL)
+		if err != nil {
+			return err
+		}
+		secret, err := credential.Resolve(environ, creds[target.CredentialID])
+		if err != nil {
+			return err
+		}
+		gh, err := githubactions.NewClient(githubactions.ClientConfig{
+			ConfigURL:  ref.CanonicalURL,
+			Credential: secret,
+			Version:    cfg.Instance.Name,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, tb := range target.Tiers {
+			tier := tiers[tb.TierID]
+
+			// The neutral binding row comes first: it keys the delivery,
+			// attempt and lease machinery. Its source key is a versioned
+			// encoding of the provider identity, never an ambiguous
+			// concatenation.
+			sourceBindingKey := fmt.Sprintf("v1|%s|%s|%s|%s",
+				ref.Scope, ref.CanonicalURL, target.RunnerGroup, tb.ScaleSetName)
+			var bindingID, knownSetID int64
+			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+				var err error
+				if bindingID, err = tx.EnsureBinding(target.ID, "github_actions", sourceBindingKey); err != nil {
+					return err
+				}
+				// The scale set id recorded against this binding is the
+				// proof of ownership that lets an existing set be adopted.
+				// Without it, a set that merely shares the name is a
+				// stranger's.
+				knownSetID, err = tx.GitHubScaleSetID(bindingID)
+				return err
+			}); err != nil {
+				return err
+			}
+			b := &binding{
+				key:    target.ID + "/" + tier.ID,
+				target: target,
+				tier:   tier,
+				ref:    ref,
+				gh:     gh,
+				jit:    gh,
+				sets:   gh,
+				// The recorded id is what lets the loop adopt the set it
+				// created on an earlier start instead of refusing a
+				// stranger's set of the same name. Zero means this binding
+				// has never had one.
+				scaleSetID:   int(knownSetID),
+				scaleSetName: tb.ScaleSetName,
+				bindingID:    bindingID,
+				// Only a repository-scoped binding may bind a persistent
+				// cache: an organization runner is not bound to the job
+				// whose demand created it, so it could execute any
+				// repository's job against another repository's cache.
+				cacheEnabled: ref.Scope == config.ScopeRepository && target.Cache.Enabled,
+				generation:   target.Cache.Generation,
+				maxLanes:     laneCeiling(cfg, tier),
+				capsuleImage: tierCapsuleImage(tier, s.shippedCapsuleImage),
+			}
+			if err := s.alloc.Register(tier.ID, b.key, tier.Parallelism); err != nil {
+				return err
+			}
+			s.bindings = append(s.bindings, b)
+			s.byBinding[bindingID] = b
+		}
+	}
+	if len(s.bindings) == 0 {
+		return errors.New("no bindings configured")
+	}
+	return nil
+}
+
+// ensureScaleSet creates or adopts this binding's scale set and records
+// the provider's own id against it. It runs from the binding's loop, so a
+// provider that is unreachable costs this binding its turn rather than
+// costing the process its startup: the capsules other bindings adopted
+// keep running, and their exits are still observed.
+func (s *Controller) ensureScaleSet(ctx context.Context, b *binding) error {
+	// Creating a set at the provider and writing its id here are two
+	// steps, and the gap between them is where the process can die. The
+	// name is therefore written down first, as an intention: a row with
+	// no id says this binding asked for this name and does not yet know
+	// what it got. Without it, a crash in that gap leaves a set the
+	// provider has and this instance cannot account for, and every later
+	// start refuses to adopt it — correctly, because a set that merely
+	// shares a name is a stranger's. The intention is what tells the two
+	// apart.
+	var intended bool
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		_, recorded, err := tx.GitHubScaleSet(b.bindingID)
+		if err != nil {
+			return err
+		}
+		intended = recorded
+		if recorded {
+			return nil
+		}
+		return tx.RecordGitHubBindingMetadata(b.bindingID, string(b.ref.Scope),
+			b.ref.CanonicalURL, b.target.RunnerGroup, b.scaleSetName, 0)
+	}); err != nil {
+		return err
+	}
+
+	set, err := b.sets.EnsureScaleSet(ctx, b.target.RunnerGroup, b.scaleSetName, b.scaleSetID, intended)
+	if err != nil {
+		return err
+	}
+	// The id is written on a context that outlives this one: the set now
+	// exists, and a shutdown arriving here would otherwise discard the
+	// only record of which one, leaving the next start to adopt it
+	// through the intention above rather than by knowing its id.
+	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := s.store.Tx(record, func(tx *store.Tx) error {
+		return tx.RecordGitHubBindingMetadata(b.bindingID, string(b.ref.Scope),
+			b.ref.CanonicalURL, b.target.RunnerGroup, b.scaleSetName, int64(set.ID))
+	}); err != nil {
+		return err
+	}
+	b.scaleSetID = set.ID
+	b.ensured = true
+	s.log.Info("scale set ready", "binding", b.key, "name", b.scaleSetName,
+		"id", set.ID, "adopted", set.Adopted, "scope", string(b.ref.Scope))
+	return nil
+}
+
+// laneCeiling is the real concurrency ceiling for one tier: its own
+// parallelism, capped by the instance-wide limit when that is tighter.
+// Sizing cache lanes off the tier alone would provision a lane for every
+// lease the tier could theoretically hold, which a global limit forbids.
+func laneCeiling(cfg *config.Config, tier config.Tier) int {
+	if cfg.Scheduling.Parallelism == nil {
+		return tier.Parallelism
+	}
+	return min(tier.Parallelism, *cfg.Scheduling.Parallelism)
+}
+
+// contactHeartbeat is the longest a recorded reach may go unrefreshed
+// while nothing about it changes. What the record answers is "how long
+// has this been so", so a state that persists is written on a heartbeat
+// rather than on every observation of it — the loop's own pace is the
+// broker's long poll, but a broker that answers at once would otherwise
+// turn a reporting field into a write per iteration, on a database whose
+// single connection every lease transition also needs.
+const contactHeartbeat = 15 * time.Second
+
+// recordProviderContact marks this binding as reaching its provider.
+//
+// Failing to record it is not worth interrupting serving for: the record
+// exists so an operator can see a binding that reaches nothing, and a
+// binding that cannot write is one whose store is already reporting for
+// itself.
+func (s *Controller) recordProviderContact(ctx context.Context, b *binding) {
+	// Cancelled on the way out of a shutdown, where a store write would
+	// fail for that reason alone and say nothing about the provider.
+	if ctx.Err() != nil {
+		return
+	}
+	now := time.Now()
+	// A transition is always written; a state that has not changed waits
+	// out the heartbeat. Recovering from a failure is a transition, which
+	// is why the failure path clears the pacing rather than leaving a
+	// recovery to wait.
+	if b.reaching && now.Sub(b.lastContactWrite) < contactHeartbeat {
+		return
+	}
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		return tx.RecordProviderContact(b.bindingID, now)
+	}); err != nil {
+		s.log.Warn("cannot record provider contact", "binding", b.key, "error", err)
+		return
+	}
+	b.lastContactWrite = now
+	b.reaching = true
+}
+
+// recordProviderFailure records what this binding currently cannot do
+// with its provider.
+//
+// A failure is written whenever it is new or different, and otherwise on
+// the same heartbeat as a success: what an operator needs is what is
+// wrong and how long it has been wrong, and neither answer improves by
+// rewriting the same sentence every five seconds.
+func (s *Controller) recordProviderFailure(ctx context.Context, b *binding, cause error) {
+	if ctx.Err() != nil {
+		return
+	}
+	now, reason := time.Now(), cause.Error()
+	if b.reaching || reason != b.lastFailure || now.Sub(b.lastContactWrite) >= contactHeartbeat {
+		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+			return tx.RecordProviderFailure(b.bindingID, now, reason)
+		}); err != nil {
+			s.log.Warn("cannot record provider failure", "binding", b.key, "error", err)
+			return
+		}
+		b.lastContactWrite = now
+	}
+	b.reaching = false
+	b.lastFailure = reason
+}
+
+// tierCapsuleImage is what one tier's jobs run in. A configured image
+// replaces the shipped one for that tier alone; the controller already
+// holds the host's daemon, so an operator naming their own capsule adds
+// nothing they could not already do, and the digest the validator
+// requires keeps the launch as exact as the shipped pin.
+func tierCapsuleImage(tier config.Tier, shipped string) string {
+	if tier.CapsuleImage != "" {
+		return tier.CapsuleImage
+	}
+	return shipped
+}
+
+// firstOf keeps the first moment of a run of like events: the second and
+// later ones are the same episode, and its age is what decides whether it
+// is still ordinary.
+func firstOf(existing, now time.Time) time.Time {
+	if existing.IsZero() {
+		return now
+	}
+	return existing
+}
