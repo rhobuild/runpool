@@ -1,0 +1,141 @@
+name: Runpool controller E2E
+run-name: runpool-e2e-${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Unique E2E run identifier
+        required: true
+        type: string
+      runner_label:
+        description: Run-scoped scale-set label
+        required: true
+        type: string
+      cache_key:
+        description: Marker shared by the cache assertions
+        required: true
+        type: string
+      cache_expectation:
+        description: seed, reuse, or isolated
+        required: true
+        type: choice
+        options: [seed, reuse, isolated]
+      hold_seconds:
+        description: Time reserved for the controller restart assertion
+        required: true
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  workload:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out the fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          cache: false
+
+      - name: Verify the cache contract
+        env:
+          CACHE_EXPECTATION: ${{ inputs.cache_expectation }}
+          CACHE_KEY: ${{ inputs.cache_key }}
+        run: |
+          set -euo pipefail
+          marker="/cache/${CACHE_KEY}"
+          case "$CACHE_EXPECTATION" in
+            seed)
+              test ! -e "$marker"
+              printf '%s\n' "$CACHE_KEY" > "$marker"
+              ;;
+            reuse)
+              test "$(cat "$marker")" = "$CACHE_KEY"
+              ;;
+            isolated)
+              test ! -e "$marker"
+              ;;
+            *)
+              echo "unknown cache expectation: $CACHE_EXPECTATION" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Hold the workload for controller restart
+        if: inputs.hold_seconds != '0'
+        env:
+          HOLD_SECONDS: ${{ inputs.hold_seconds }}
+        run: sleep "$HOLD_SECONDS"
+
+      - name: Download a pinned dependency
+        run: |
+          set -euo pipefail
+          module_dir="${RUNNER_TEMP}/runpool-module"
+          mkdir -p "$module_dir"
+          cd "$module_dir"
+          go mod init example.invalid/runpool-e2e
+          go mod download golang.org/x/sync@v0.17.0
+
+      - name: Build and push through the inner daemon
+        id: push
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${repository}/runpool-e2e:${RUN_ID}"
+          context="${RUNNER_TEMP}/runpool-image"
+          mkdir -p "$context"
+          printf '%s\n' \
+            'FROM busybox:1.37@sha256:f85340bf132ae937d2c2a763b8335c9bab35d6e8293f70f606b9c6178d84f42b' \
+            'ARG RUN_ID' \
+            'RUN test -n "$RUN_ID"' \
+            'CMD ["true"]' > "$context/Dockerfile"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --build-arg "RUN_ID=$RUN_ID" -t "$image" "$context"
+          docker push "$image"
+          docker logout ghcr.io
+          docker image rm "$image"
+
+      - name: Remove the pushed version with the workflow token
+        if: always()
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+        run: |
+          set -euo pipefail
+          repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          package=$(printf '%s/runpool-e2e' "${repository#*/}" | sed 's|/|%2F|g')
+          endpoint="https://api.github.com/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}/versions"
+          versions=$(curl -sSf -H "Authorization: Bearer $GHCR_TOKEN"             -H "Accept: application/vnd.github+json" "${endpoint}?per_page=100")
+          id=$(printf '%s' "$versions" | jq -r --arg tag "$RUN_ID"             '[.[] | select(.metadata.container.tags | index($tag))][0].id // empty')
+          if [ -z "$id" ]; then
+            if [ "$PUSH_OUTCOME" = "success" ]; then
+              echo "the pushed version is missing from the registry" >&2
+              exit 1
+            fi
+            echo "nothing pushed, nothing to remove"
+            exit 0
+          fi
+          curl -sSf -X DELETE -H "Authorization: Bearer $GHCR_TOKEN"             -H "Accept: application/vnd.github+json" "${endpoint}/${id}"
+          echo "removed version ${id} (tag ${RUN_ID})"
+          # The push publishes an index; deleting the tag removes the
+          # index and strands its untagged child manifests. This package
+          # exists for this test alone and its runs are serialized, so
+          # every untagged version is residue by definition.
+          curl -sSf -H "Authorization: Bearer $GHCR_TOKEN" -H "Accept: application/vnd.github+json" "${endpoint}?per_page=100" |
+            jq -r '.[] | select(.metadata.container.tags == []) | .id' |
+            while read -r orphan; do
+              curl -sSf -X DELETE -H "Authorization: Bearer $GHCR_TOKEN" -H "Accept: application/vnd.github+json" "${endpoint}/${orphan}"
+              echo "removed untagged version ${orphan}"
+            done
