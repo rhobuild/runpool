@@ -214,7 +214,7 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
 		return err
 	}
-	return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, startObs))
+	return m.applyDisposition(tx, attempt, lease.ID, startObs, dispositionFor(attempt, startObs))
 }
 
 // disposition is what the books must record about an attempt whose
@@ -313,8 +313,13 @@ func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) 
 }
 
 // applyDisposition writes one decision, inside the caller's transaction.
+//
+// It takes the observation only to report it: a review is the one
+// disposition a person has to act on, and what the runtime was seen
+// doing is the input their choice turns on — absent is not the same
+// answer as unobservable.
 func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
-	leaseID assignment.LeaseID, d disposition) error {
+	leaseID assignment.LeaseID, obs assignment.ExecutionObservation, d disposition) error {
 
 	switch d {
 	case dispositionNone:
@@ -329,7 +334,7 @@ func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionStartedObserved)
 	default:
 		m.log.Warn("start outcome is unproven; the attempt is held for review",
-			"attempt", attempt.ID, "lease", leaseID)
+			"attempt", attempt.ID, "lease", leaseID, "observation", string(obs))
 		return tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown)
 	}
 }
@@ -388,7 +393,7 @@ func (m *Manager) requeueOrReview(tx *store.Tx, attemptID assignment.AttemptID, 
 // disposeAttempt once carried their own switches and drifted apart.
 func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
 	m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-		return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, obs))
+		return m.applyDisposition(tx, attempt, lease.ID, obs, dispositionFor(attempt, obs))
 	})
 }
 

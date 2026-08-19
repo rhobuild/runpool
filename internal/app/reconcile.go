@@ -178,14 +178,14 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 
 	// An exited runtime observed here refines the evidence before any
 	// path destroys the container that proves it: the finalizing
-	// transaction then settles from evidence alone.
+	// transaction then settles from evidence alone. The write is the
+	// whole point — nothing below reads the local copy, because every
+	// disposition re-reads the row inside its own transaction.
 	if obs == assignment.ObservedExited && evidence == store.EvidenceStartAuthorized {
 		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 			return tx.RecordEvidence(lease.AttemptID, store.EvidenceExitObserved)
 		}); err != nil {
 			log.Error("cannot record the observed exit", "error", err)
-		} else {
-			evidence = store.EvidenceExitObserved
 		}
 	}
 
