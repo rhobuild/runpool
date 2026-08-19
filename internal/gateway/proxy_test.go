@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -294,6 +295,10 @@ func TestTunnelCarriesTheBytesTheServerAlreadyRead(t *testing.T) {
 	<-done
 }
 
+// alwaysAllowed is the destination check for tunnels whose policy is not
+// what the test is about.
+func alwaysAllowed() bool { return true }
+
 // tcpPair dials a loopback listener and hands back both ends of one real
 // TCP connection. Real sockets, not net.Pipe: a half-close is a property
 // of the transport, and a pipe has no such thing.
@@ -338,7 +343,7 @@ func TestAHalfClosingClientStillReceivesItsWholeResponse(t *testing.T) {
 	clientEnd, clientSide := tcpPair(t)
 	upstreamSide, upstreamEnd := tcpPair(t)
 
-	go tunnelWith(clientSide, upstreamSide, 5*time.Second, 500*time.Millisecond)
+	go tunnelWith(clientSide, upstreamSide, 5*time.Second, 500*time.Millisecond, alwaysAllowed)
 
 	// The request goes out, then the client is done sending.
 	if _, err := clientEnd.Write([]byte("request")); err != nil {
@@ -426,7 +431,7 @@ func TestAOneWayTransferOutlivesTheIdleBound(t *testing.T) {
 	clientEnd, clientSide := tcpPair(t)
 	upstreamSide, upstreamEnd := tcpPair(t)
 
-	go tunnelWith(clientSide, upstreamSide, idle, poll)
+	go tunnelWith(clientSide, upstreamSide, idle, poll, alwaysAllowed)
 
 	// One direction streams steadily for well past the idle bound; the
 	// other says nothing at all.
@@ -451,5 +456,124 @@ func TestAOneWayTransferOutlivesTheIdleBound(t *testing.T) {
 		t.Errorf("the client received %d of %d bytes over %s with a %s idle bound; "+
 			"the quiet direction expired while the other was streaming",
 			len(got), beats, time.Duration(beats)*30*time.Millisecond, idle)
+	}
+}
+
+// TestADeadTunnelReleasesItsSlotAtOnce: a tunnel that has ended gives up
+// its connection slot when it ends, not when the idle bound expires.
+//
+// Ending it by nudging the peer's read deadline does not end it. The
+// peer wakes, finds the shared clock recent, and re-arms its own
+// deadline on the next turn of its loop, and it repeats that until the
+// idle bound — ten minutes during which the relay's connection quota is
+// one smaller for a tunnel with nothing on either end.
+func TestADeadTunnelReleasesItsSlotAtOnce(t *testing.T) {
+	const (
+		idle = 3 * time.Second
+		poll = 100 * time.Millisecond
+	)
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+	_ = clientEnd
+
+	done := make(chan struct{})
+	go func() {
+		tunnelWith(clientSide, upstreamSide, idle, poll, alwaysAllowed)
+		close(done)
+	}()
+
+	// A reset, not a clean shutdown: the upstream is gone and says so
+	// with an error, which is the abnormal end this is about.
+	if err := upstreamEnd.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstreamEnd.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(idle - time.Second):
+		t.Fatalf("the tunnel outlived its upstream by more than %v; it is waiting out the idle bound", idle-time.Second)
+	}
+}
+
+// TestARevokedDestinationEndsALiveTunnel: a destination the policy stops
+// allowing stops flowing, within one poll interval, while it is still
+// carrying traffic.
+//
+// A tunnel is authorised once, at CONNECT, and then runs for as long as
+// both ends keep talking. A policy tightened underneath it — a lease
+// narrowing its allowances, a redelivery installing a smaller set — has
+// to reach the connections already open, or the tightening only applies
+// to destinations nobody had reached yet.
+//
+// The traffic is the point: this stays busy throughout, and a direction
+// carrying bytes returns from every read before its deadline fires, so a
+// check hung off that deadline would never run here.
+func TestARevokedDestinationEndsALiveTunnel(t *testing.T) {
+	const (
+		idle = 30 * time.Second
+		poll = 50 * time.Millisecond
+	)
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+
+	var allowed atomic.Bool
+	allowed.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		tunnelWith(clientSide, upstreamSide, idle, poll, allowed.Load)
+		close(done)
+	}()
+	go func() {
+		for {
+			if _, err := upstreamEnd.Write([]byte("x")); err != nil {
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	// Do not revoke anything until the tunnel is demonstrably carrying
+	// traffic, or the test could pass against a tunnel that never ran.
+	if err := clientEnd.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(clientEnd, make([]byte, 8)); err != nil {
+		t.Fatalf("the tunnel never carried anything: %v", err)
+	}
+
+	allowed.Store(false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tunnel kept flowing to a destination the policy no longer allows")
+	}
+}
+
+// TestTheTunnelClockIsMonotonic: the clock two directions share measures
+// in a frame no clock correction can move.
+//
+// Every deadline around it is monotonic, because that is what net.Conn
+// deadlines and time.Since are. A wall-clock instant mixed in means an
+// NTP step or a VM resume either severs a tunnel mid-transfer or leaves
+// a finished one holding its slot long past the idle bound, and neither
+// shows up as anything but an unexplained connection.
+func TestTheTunnelClockIsMonotonic(t *testing.T) {
+	c := newTunnelClock()
+
+	// Round(0) is what strips a monotonic reading, so a time that still
+	// carries one is not equal to itself rounded.
+	if c.start == c.start.Round(0) {
+		t.Fatal("the tunnel clock's origin carries no monotonic reading; every bound derived from it moves with the wall clock")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	before := c.idleFor()
+	c.mark()
+	if after := c.idleFor(); after >= before {
+		t.Errorf("idleFor = %v after marking traffic and %v before; a mark must reset it", after, before)
 	}
 }

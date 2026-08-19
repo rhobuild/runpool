@@ -201,7 +201,39 @@ func (r *Relay) establishTunnel(w http.ResponseWriter, upstream net.Conn) {
 		}
 		_ = upstream.SetWriteDeadline(time.Time{})
 	}
-	tunnel(client, upstream)
+	tunnel(client, upstream, r.tunnelDestinationAllowed(upstream))
+}
+
+// tunnelDestinationAllowed builds the check a running tunnel repeats
+// against the policy in force. It closes over the peer address the
+// tunnel is actually joined to rather than the name that was resolved:
+// a name can be made to resolve somewhere else between the dial and the
+// re-check, and the address is what the policy decides about anyway.
+//
+// Anything it cannot answer is a denial. A policy that cannot be read is
+// not in force — the same rule dial applies — and an address that cannot
+// be parsed cannot be checked at all.
+func (r *Relay) tunnelDestinationAllowed(upstream net.Conn) func() bool {
+	peer, parseErr := netip.ParseAddrPort(upstream.RemoteAddr().String())
+	addr := peer.Addr().Unmap()
+	return func() bool {
+		if parseErr != nil {
+			r.Log.Warn("egress tunnel closed: peer address unreadable",
+				"peer", upstream.RemoteAddr().String(), "error", parseErr)
+			return false
+		}
+		policy, err := r.Policy.Current()
+		if err != nil {
+			r.Log.Warn("egress tunnel closed: policy unavailable",
+				"address", addr.String(), "error", err)
+			return false
+		}
+		if policy.Allowed(addr) {
+			return true
+		}
+		r.Log.Warn("egress tunnel closed: destination no longer allowed", "address", addr.String())
+		return false
+	}
 }
 
 // closeWriter is the half-close a tunnel propagates. Every connection a
@@ -232,30 +264,62 @@ const tunnelPollInterval = 30 * time.Second
 // a per-direction deadline severed a large upload or a slow download
 // while it was actively streaming. Each direction now reads in short
 // intervals and consults a clock both of them write.
-func tunnel(client, upstream net.Conn) {
-	tunnelWith(client, upstream, TunnelIdleTimeout, tunnelPollInterval)
+func tunnel(client, upstream net.Conn, stillAllowed func() bool) {
+	tunnelWith(client, upstream, TunnelIdleTimeout, tunnelPollInterval, stillAllowed)
 }
 
-func tunnelWith(client, upstream net.Conn, idle, poll time.Duration) {
-	// One clock for the tunnel: activity in either direction is what
-	// keeps the other alive.
-	var lastActivity atomic.Int64
-	lastActivity.Store(time.Now().UnixNano())
+// tunnelClock is the activity clock two directions of one tunnel share:
+// traffic either way is what keeps the other alive.
+//
+// Every value it holds is a duration since the tunnel began, never a
+// wall-clock instant. The deadlines it is compared against are monotonic
+// — that is what net.Conn deadlines and time.Since are — and mixing the
+// two means an NTP correction or a VM resume either severs a tunnel that
+// is actively streaming or leaves a dead one holding its slot past the
+// idle bound.
+type tunnelClock struct {
+	start time.Time
+	last  atomic.Int64
+}
+
+func newTunnelClock() *tunnelClock { return &tunnelClock{start: time.Now()} }
+
+// mark records traffic. idleFor reports how long ago the last traffic
+// was, in the same monotonic frame.
+func (c *tunnelClock) mark()                     { c.last.Store(int64(time.Since(c.start))) }
+func (c *tunnelClock) sinceStart() time.Duration { return time.Since(c.start) }
+func (c *tunnelClock) idleFor() time.Duration    { return c.sinceStart() - time.Duration(c.last.Load()) }
+
+func tunnelWith(client, upstream net.Conn, idle, poll time.Duration, stillAllowed func() bool) {
+	clock := newTunnelClock()
 
 	var wg sync.WaitGroup
 	copyIdle := func(dst, src net.Conn) {
 		defer wg.Done()
 		buf := make([]byte, 32<<10)
+		nextCheck := poll
 		for {
+			// A tunnel outlives the decision that authorised it, so the
+			// destination is re-checked while it runs. The bound is
+			// elapsed time, not the read deadline below: a direction
+			// carrying traffic returns from every read before that
+			// deadline fires, and a bulk transfer to a destination just
+			// revoked is exactly the case this exists to stop.
+			if elapsed := clock.sinceStart(); elapsed >= nextCheck {
+				nextCheck = elapsed + poll
+				if !stillAllowed() {
+					break
+				}
+			}
 			_ = src.SetReadDeadline(time.Now().Add(poll))
 			n, err := src.Read(buf)
 			if n > 0 {
-				lastActivity.Store(time.Now().UnixNano())
+				clock.mark()
 				_ = dst.SetWriteDeadline(time.Now().Add(idle))
 				if _, werr := dst.Write(buf[:n]); werr != nil {
 					break
 				}
-				lastActivity.Store(time.Now().UnixNano())
+				clock.mark()
 			}
 			switch {
 			case err == nil:
@@ -263,7 +327,7 @@ func tunnelWith(client, upstream net.Conn, idle, poll time.Duration) {
 			case errors.Is(err, os.ErrDeadlineExceeded):
 				// Quiet here. The tunnel is idle only if it is quiet
 				// both ways, which is what the shared clock answers.
-				if time.Since(time.Unix(0, lastActivity.Load())) < idle {
+				if clock.idleFor() < idle {
 					continue
 				}
 			case errors.Is(err, io.EOF):
@@ -277,10 +341,15 @@ func tunnelWith(client, upstream net.Conn, idle, poll time.Duration) {
 			}
 			break
 		}
-		// The tunnel is over rather than half-closed: unblock the peer
-		// instead of leaving its goroutine parked on a read.
-		_ = src.SetReadDeadline(time.Now())
-		_ = dst.SetReadDeadline(time.Now())
+		// The tunnel is over rather than half-closed, so close it.
+		// Waking the peer with a deadline does not end it: the peer
+		// re-arms its own on the next turn of its loop and parks again,
+		// and repeats that until the idle bound — ten minutes of a
+		// connection slot held by a tunnel that has already finished.
+		// A close returns its reads immediately and permanently. The
+		// deferred closes further up are idempotent.
+		_ = src.Close()
+		_ = dst.Close()
 	}
 	wg.Add(2)
 	go copyIdle(upstream, client)
