@@ -79,7 +79,7 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 	binding := seedBinding(t, s)
 	workloads := []WorkloadRow{{SourceWorkloadKey: "job-1", TenantKey: "acme", ProjectKey: "app"}}
 
-	var first sqlitedb.BrokerDelivery
+	var first int64
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		first, err = tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
@@ -92,8 +92,8 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if again.ID != first.ID {
-			t.Errorf("redelivery produced delivery %d; want the original %d", again.ID, first.ID)
+		if again != first {
+			t.Errorf("redelivery produced delivery %d; want the original %d", again, first)
 		}
 		n, err := tx.q.CountOpenAttempts(tx.ctx, binding)
 		if err != nil {
@@ -142,7 +142,7 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	// Supersede-then-record commits together: the partial index admits
 	// the new attempt in the same transaction that closes the old one.
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.SupersedeOpenAttempt(binding, "job-r", "reassigned_by_provider"); err != nil {
+		if err := tx.SupersedeOpenAttempt(binding, "job-r", "reassigned_by_provider", 0); err != nil {
 			return err
 		}
 		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
@@ -238,9 +238,9 @@ func TestAckStateMachineConvergesAfterUncertainty(t *testing.T) {
 
 	var deliveryID int64
 	inTx(t, s, func(tx *Tx) error {
-		d, err := tx.RecordDelivery(binding, "msg-ack", fingerprint("ack"),
+		var err error
+		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", fingerprint("ack"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-ack", TenantKey: "acme", ProjectKey: "app"}})
-		deliveryID = d.ID
 		return err
 	})
 
@@ -497,9 +497,9 @@ func TestAckRequestedIsRetriedAfterACrashInFlight(t *testing.T) {
 
 	var deliveryID int64
 	inTx(t, s, func(tx *Tx) error {
-		d, err := tx.RecordDelivery(binding, "msg-wedge", fingerprint("wedge"),
+		var err error
+		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", fingerprint("wedge"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-wedge", TenantKey: "acme", ProjectKey: "app"}})
-		deliveryID = d.ID
 		return err
 	})
 
@@ -1294,4 +1294,84 @@ func TestAttemptProviderReferences(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A held attempt must not stall its binding's whole ordered queue, and a
+// held attempt whose start was authorized must not be replaced.
+//
+// manual_review is an open state, so the partial unique index refuses
+// every redelivery of that workload while one sits there — the queue is
+// ordered, so the binding stops. The provider reassigning the workload
+// is what makes a pending human decision moot, so the review gives way.
+//
+// Except when it cannot: a review is reachable from `starting` and
+// `running`, and `start_outcome_unknown` is precisely the review of an
+// attempt whose start was authorized and whose outcome nobody could
+// prove. Replacing that one runs work that may already have run, which
+// no queue property is worth. The evidence is what separates the two.
+func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		evidence       Evidence
+		reason         string
+		wantSuperseded bool
+	}{
+		{"nothing was prepared", EvidenceNotStarted, ReviewReasonIncompatibleCapsule, true},
+		{"a runtime was prepared", EvidenceRuntimePrepared, ReviewReasonRetryBudgetExhausted, true},
+		{"a start was authorized", EvidenceStartAuthorized, ReviewReasonStartOutcomeUnknown, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			binding := seedBinding(t, s)
+			workloads := []WorkloadRow{{SourceWorkloadKey: "job-held", TenantKey: "acme", ProjectKey: "app"}}
+
+			var attemptID string
+			inTx(t, s, func(tx *Tx) error {
+				if _, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads); err != nil {
+					return err
+				}
+				ready, err := tx.ReadyAttempts(binding)
+				if err != nil {
+					return err
+				}
+				attemptID = ready[0].ID
+				if err := tx.RecordEvidence(attemptID, tc.evidence); err != nil {
+					return err
+				}
+				return tx.HoldForReview(attemptID, tc.reason)
+			})
+
+			err := s.Tx(t.Context(), func(tx *Tx) error {
+				serr := tx.SupersedeOpenAttempt(binding, "job-held", "reassigned_by_provider", 0)
+				if serr != nil {
+					return serr
+				}
+				_, rerr := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+				return rerr
+			})
+
+			var got Attempt
+			inTx(t, s, func(tx *Tx) error {
+				var err error
+				got, err = tx.Get(attemptID)
+				return err
+			})
+
+			if tc.wantSuperseded {
+				if err != nil {
+					t.Fatalf("the redelivery was refused: %v", err)
+				}
+				if got.State != "superseded" {
+					t.Errorf("held attempt = %s; want superseded so the queue moves", got.State)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("the redelivery replaced an attempt whose start was authorized")
+			}
+			if got.State != "manual_review" {
+				t.Errorf("held attempt = %s; want it left in manual_review", got.State)
+			}
+		})
+	}
 }

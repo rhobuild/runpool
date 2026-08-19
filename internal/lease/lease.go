@@ -211,6 +211,20 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+lease.ID, "cleanup_completed"); err != nil {
 		return err
 	}
+	// A redelivery of the same workload supersedes the attempt this
+	// lease was serving. The serving still ends — the capsule is
+	// destroyed and the lease released — but the attempt is already
+	// resolved, and forcing a disposition onto it would match no row,
+	// fail, and roll the release back with it: the lease would pin in
+	// cleaning holding its credit, for a workload that is being served
+	// by its successor.
+	//
+	// Only superseded. A settled attempt arriving here would be a second
+	// finalize, which the lease transition already refuses, and papering
+	// over that would hide it.
+	if attempt.State == "superseded" {
+		return nil
+	}
 	switch {
 	case startObs == assignment.ObservedCreated:
 		// Authorized, and the runtime proved the start never took
