@@ -3,12 +3,9 @@ package command
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"runtime"
 
 	"github.com/spf13/cobra"
-
-	"github.com/rhobuild/runpool/internal/app"
 )
 
 // Each constructor declares its positional-argument contract with Cobra.
@@ -109,13 +106,7 @@ func newStatusCommand(build BuildInfo) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			operational(cmd)
-			// Resolved by the same rule serve resolves it with, so the
-			// image this reports is the image a launch would run.
-			img, err := app.CapsuleImage(os.Getenv, build.CapsuleImage)
-			if err != nil {
-				return err
-			}
-			return runStatus(streamsOf(cmd), asJSON, img)
+			return runStatus(streamsOf(cmd), asJSON, build.CapsuleImage)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the status as JSON")

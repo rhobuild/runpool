@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
@@ -451,4 +452,51 @@ func providerContactFromRow(bindingID, contactMs int64, lastError string, errorM
 		c.LastErrorAt = time.UnixMilli(errorMs).UTC()
 	}
 	return c
+}
+
+// ForgetUnclaimedBindings removes the binding rows configuration no
+// longer claims, with the adapter metadata and reach records that hang
+// off them, and reports how many went.
+//
+// A binding whose scale set was renamed or whose tier was removed is a
+// row nothing serves: it holds no work, appears in every report, and
+// there is no command that removes it. A binding that still owns a
+// delivery is kept whatever configuration says — those rows are the
+// trail of work that ran, and a report that lost the binding could not
+// say whose work it was.
+//
+// The placeholder list is built here rather than through the generated
+// layer: sqlc's sqlite engine has no slice parameter, and the ids come
+// from the caller's own loop, never from input.
+func (t *Tx) ForgetUnclaimedBindings(claimed []int64) (int, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(claimed)), ",")
+	if placeholders == "" {
+		// No claim at all is a caller with no bindings, which serve
+		// refuses before reaching here. Deleting everything on an empty
+		// list would turn that mistake into data loss.
+		return 0, nil
+	}
+	args := make([]any, len(claimed))
+	for i, id := range claimed {
+		args[i] = id
+	}
+	unclaimed := `
+		SELECT id FROM provider_bindings
+		WHERE id NOT IN (` + placeholders + `)
+		  AND NOT EXISTS (SELECT 1 FROM broker_deliveries d WHERE d.binding_id = provider_bindings.id)`
+
+	// The dependents first: both reference the binding row, so the
+	// delete order is what the foreign keys allow.
+	for _, table := range []string{"github_actions_binding_metadata", "provider_binding_contact"} {
+		if _, err := t.tx.Exec(
+			`DELETE FROM `+table+` WHERE binding_id IN (`+unclaimed+`)`, args...); err != nil {
+			return 0, err
+		}
+	}
+	res, err := t.tx.Exec(`DELETE FROM provider_bindings WHERE id IN (`+unclaimed+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }

@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -215,5 +216,48 @@ func TestTierReportsTheImageItRuns(t *testing.T) {
 	}
 	if got.Tiers[1].CapsuleImage != operators {
 		t.Errorf("a tier naming an image reports %q, want its own", got.Tiers[1].CapsuleImage)
+	}
+}
+
+// TestStatusReportsWithoutAResolvableCapsuleImage: a capsule image this
+// command cannot resolve is a finding to report, not a reason to answer
+// nothing.
+//
+// Resolving it in the command wiring meant one unset or conflicting
+// environment variable returned an error and printed no document at all
+// — taking the daemon comparison, the lease list and every other fact
+// down with it, and answering a --json caller with prose on stderr and a
+// non-zero exit. That is the same parse failure the pre-serve form is
+// careful to avoid.
+func TestStatusReportsWithoutAResolvableCapsuleImage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// A release build refuses an override that disagrees with it, which
+	// is the shape an operator meets after setting the variable by hand.
+	const release = "ghcr.io/rhobuild/runpool/capsule@sha256:" +
+		"1111111111111111111111111111111111111111111111111111111111111111"
+	t.Setenv("RUNPOOL_CAPSULE_IMAGE", "ghcr.io/example/other:latest")
+
+	var out, errOut bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &errOut}, true, release); err != nil {
+		t.Fatalf("status refused to answer: %v", err)
+	}
+
+	var doc statusDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("the document does not decode: %v\n%s", err, out.String())
+	}
+	if !doc.Served {
+		t.Fatal("the served document was not produced")
+	}
+	if doc.CapsuleImageError == "" {
+		t.Error("the document reports no capsule image error; a reader takes the tier images " +
+			"for what a launch would run")
 	}
 }

@@ -3,8 +3,10 @@ package doctor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -692,5 +694,73 @@ func TestCheckCgroupsRefusesWhatItCannotEnforce(t *testing.T) {
 
 	if res := checkCgroups(t.Context(), fakeDaemonInfo{info: good}, cfg); fails(res) {
 		t.Errorf("a conforming host failed: %+v", res)
+	}
+}
+
+// TestDoctorRunsWithoutADaemon is the panic guard, and it exists at the
+// level of Run rather than of any one check.
+//
+// A nil *docker.Client converted into an interface is a non-nil value
+// holding nothing, so every `d == nil` guard inside passes and the next
+// line calls a method on nothing. That is exactly the state doctor is
+// for — an operator whose daemon is not reachable runs it to be told so
+// — and the panic took the whole report with it, including the checks
+// that had already succeeded and would have said why.
+func TestDoctorRunsWithoutADaemon(t *testing.T) {
+	cfg := &config.Config{}
+	config.ApplyDefaults(cfg)
+
+	report := Run(t.Context(), Options{Config: cfg, StateDir: t.TempDir()})
+
+	if len(report.Results) == 0 {
+		t.Fatal("the report is empty; every check was lost with the daemon")
+	}
+	if report.OK() {
+		t.Error("a host with no reachable daemon reported healthy")
+	}
+	var named []string
+	for _, r := range report.Results {
+		named = append(named, r.Name)
+	}
+	for _, want := range []string{"docker daemon", "isolated bridge"} {
+		if !slices.Contains(named, want) {
+			t.Errorf("no %q result in %v; the check never ran", want, named)
+		}
+	}
+}
+
+// TestCheckDaemonFailsClosed covers the three refusals that stop a host
+// from serving. None is reachable from a live daemon — it cannot be
+// asked to be absent, rootless, or older than the floor — so they were
+// untested while the check took the concrete client.
+func TestCheckDaemonFailsClosed(t *testing.T) {
+	current := fmt.Sprintf("%d.0.0", platform.MinimumEngineMajor)
+	tooOld := fmt.Sprintf("%d.9.9", platform.MinimumEngineMajor-1)
+
+	for name, tc := range map[string]struct {
+		d       daemonInfo
+		wantOK  bool
+		wantFix string
+	}{
+		"no daemon at all": {nil, false, "mount the daemon socket"},
+		"the daemon cannot be read": {
+			fakeDaemonInfo{err: errors.New("socket refused")}, false, "check the socket mount"},
+		"rootless": {
+			fakeDaemonInfo{info: docker.HostInfo{Rootless: true, ServerVersion: current}},
+			false, "requires rootful Docker"},
+		"below the engine floor": {
+			fakeDaemonInfo{info: docker.HostInfo{ServerVersion: tooOld}}, false, "upgrade to Docker Engine"},
+		"a daemon that serves": {
+			fakeDaemonInfo{info: docker.HostInfo{ServerVersion: current}}, true, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := checkDaemon(t.Context(), tc.d)
+			if (got.Status != Fail) != tc.wantOK {
+				t.Fatalf("status = %v; want ok=%v (detail %q)", got.Status, tc.wantOK, got.Detail)
+			}
+			if tc.wantFix != "" && !strings.Contains(got.Fix+got.Detail, tc.wantFix) {
+				t.Errorf("fix/detail = %q / %q; want it to mention %q", got.Fix, got.Detail, tc.wantFix)
+			}
+		})
 	}
 }

@@ -122,6 +122,20 @@ by its public and operational effects.
   while the reviewed baseline is still edited in place, which is exactly
   when a database written by an earlier build would otherwise be accepted
   and then fail on a missing table.
+- **A diagnosis answers when the daemon does not.** `runpool doctor`
+  runs to completion against an unreachable daemon and reports every
+  check that could be made, which is the state an operator runs it in.
+- **A report answers its own question.** `runpool status` reports a
+  capsule image it cannot resolve as a finding beside the rest of the
+  document, rather than refusing to answer — so one unset environment
+  variable no longer takes the lease list and the daemon comparison down
+  with it.
+- **A binding is identified by what an operator configured.** Its
+  durable key is built from the target, runner group and scale set name,
+  never from a parsed form of the address, so a deployment that changed
+  nothing keeps the row its whole history hangs off. Bindings the
+  configuration no longer claims are forgotten on the next start, unless
+  they still own a delivery — that trail is kept.
 - **A schema this build cannot account for is refused, not repaired** —
   by reporting as well as by the controller. `status`, a `gc` dry run and
   a `cleanup` or `uninstall` preview apply no migrations, so each says

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/app"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
@@ -18,7 +19,11 @@ import (
 // operator to answer without reading SQLite: what this instance owns,
 // which leases are live, which cache lanes are held, and whether the
 // books agree with the daemon.
-func runStatus(streams IO, asJSON bool, shippedCapsule string) error {
+// runStatus takes the image this build ships rather than the image a
+// launch would run: resolving that is an observation like the daemon
+// read and the configuration read below, and it is made here so a
+// failure is reported rather than answered with nothing.
+func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -77,7 +82,21 @@ func runStatus(streams IO, asJSON bool, shippedCapsule string) error {
 	}
 
 	cfg := configuredStatusConfig(os.Getenv)
+	// Resolved the way serve resolves it, and best-effort like every
+	// other observation here: an environment this cannot resolve is a
+	// finding to report, not a reason to answer nothing. A --json caller
+	// that got a bare error and no document had no way to tell an
+	// unresolvable image from an unreachable host.
+	//
+	// It resolves from the environment of whoever ran this command,
+	// which in the reference deployment is the controller's own, so the
+	// answer is labelled with the failure rather than presented as the
+	// controller's view.
+	shippedCapsule, imageErr := app.CapsuleImage(os.Getenv, buildCapsule)
 	doc := statusDocument(snap, cfg, review, obs, shippedCapsule)
+	if imageErr != nil {
+		doc.CapsuleImageError = imageErr.Error()
+	}
 	if asJSON {
 		enc := json.NewEncoder(streams.Out)
 		enc.SetIndent("", "  ")
@@ -92,6 +111,13 @@ func runStatus(streams IO, asJSON bool, shippedCapsule string) error {
 			fmt.Fprintf(streams.Out, "  %-16s parallelism %-4d active %-4d available %d\n",
 				tier.ID, tier.Parallelism, tier.Active, tier.Available)
 		}
+	}
+
+	if doc.CapsuleImageError != "" {
+		// Said in the text form too: the tier lines above carry what
+		// this build ships, and without this a reader takes them for
+		// the images a launch would run.
+		fmt.Fprintf(streams.Out, "capsule image: unresolved (%s)\n", doc.CapsuleImageError)
 	}
 
 	if p := snap.Pressure; p != nil {

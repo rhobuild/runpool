@@ -1375,3 +1375,77 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 		})
 	}
 }
+
+// A binding configuration no longer claims is forgotten, unless it still
+// owns work.
+//
+// A renamed scale set or a removed tier leaves a row nothing serves: it
+// appears in every report and no command removes it. But a binding that
+// owns a delivery is the trail of work that ran, and a report that lost
+// it could not say whose work it was — so that one is kept whatever the
+// configuration says.
+func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
+	s := newStore(t)
+
+	var kept, dropped, withWork int64
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		if kept, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-standard"); err != nil {
+			return err
+		}
+		if dropped, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-renamed"); err != nil {
+			return err
+		}
+		if withWork, err = tx.EnsureBinding("old", "github_actions", "v2|old|default|runpool-old"); err != nil {
+			return err
+		}
+		_, err = tx.RecordDelivery(withWork, "msg-old", fingerprint("old"),
+			[]WorkloadRow{{SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "old"}})
+		return err
+	})
+
+	var forgotten int
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		forgotten, err = tx.ForgetUnclaimedBindings([]int64{kept})
+		return err
+	})
+	if forgotten != 1 {
+		t.Errorf("forgot %d bindings; want exactly the one that holds no work", forgotten)
+	}
+
+	var ids []int64
+	inTx(t, s, func(tx *Tx) error {
+		rows, err := tx.Bindings()
+		if err != nil {
+			return err
+		}
+		for _, b := range rows {
+			ids = append(ids, b.ID)
+		}
+		return nil
+	})
+	if !slices.Contains(ids, kept) {
+		t.Error("a claimed binding was forgotten")
+	}
+	if slices.Contains(ids, dropped) {
+		t.Error("a binding configuration no longer claims is still reported")
+	}
+	if !slices.Contains(ids, withWork) {
+		t.Error("a binding that still owns a delivery was forgotten with the work it explains")
+	}
+
+	// An empty claim is a caller with no bindings at all, which serve
+	// refuses before reaching here; deleting everything would turn that
+	// mistake into data loss.
+	inTx(t, s, func(tx *Tx) error {
+		n, err := tx.ForgetUnclaimedBindings(nil)
+		if err != nil {
+			return err
+		}
+		if n != 0 {
+			t.Errorf("an empty claim forgot %d bindings", n)
+		}
+		return nil
+	})
+}
