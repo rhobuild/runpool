@@ -190,8 +190,14 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// compare-and-swap is not an effect, and an authorization recorded
 	// for a start that will not be attempted is a claim that never
 	// became true.
+	//
+	// It matches a set rather than the exact predecessor because the two
+	// edges before it are best-effort: advanceAttempt logs a failure and
+	// carries on, which is right for observability and wrong to depend
+	// on. Requiring `prepared` made a transient store error tear down a
+	// capsule that was ready to run.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.Advance(attemptID, "prepared", "starting")
+		return tx.AuthorizeStart(lease.ID, attemptID)
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
 			"attempt", attemptID, "error", err)
@@ -211,7 +217,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		// A failed Start call does not prove no start: the request may
 		// have taken effect before the error. Classify from the daemon
 		// now, before any cleanup can destroy the answer.
-		obs, ierr := s.caps.InspectExecution(ctx, prepared)
+		obs, ierr := s.inspectExecution(ctx, prepared)
 		if ierr != nil {
 			log.Error("start outcome cannot be observed", "start_error", startErr, "inspect_error", ierr)
 		}
@@ -444,4 +450,21 @@ func remainingCeiling(tier config.Tier, createdAt time.Time) time.Duration {
 		return left
 	}
 	return grace
+}
+
+// inspectExecution bounds one observation of a runtime.
+//
+// The observation is a `docker exec` into the capsule, and an exec runs
+// until its context ends: nothing in the Docker API cancels one. Both
+// callers hold something open while they wait — this one is a launch
+// goroutine the drain counts, and the other is startup, before any loop
+// has begun. Handed a context with no deadline, a daemon that accepted
+// the call and stopped answering makes a wedged shutdown out of a slow
+// one.
+func (s *Controller) inspectExecution(ctx context.Context,
+	prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+
+	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	return s.caps.InspectExecution(ctx, prepared)
 }
