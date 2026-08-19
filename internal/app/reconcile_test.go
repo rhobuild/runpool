@@ -109,7 +109,7 @@ func TestCapsuleFailureRecoverySurvivesAMissingBinding(t *testing.T) {
 			t.Fatalf("recoverCapsuleFailure panicked with a missing binding: %v", r)
 		}
 	}()
-	if err := h.srv.recoverCapsuleFailure(nil, lease.ID, ""); err != nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), nil, lease.ID, ""); err != nil {
 		t.Fatalf("recoverCapsuleFailure with a missing binding: %v", err)
 	}
 }

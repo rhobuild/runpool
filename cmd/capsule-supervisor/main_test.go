@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func encodedBundle(t *testing.T, body string) string {
@@ -203,4 +204,34 @@ func TestWriteDockerProxyConfig(t *testing.T) {
 			t.Errorf("stat: %v; want no file at all", err)
 		}
 	})
+}
+
+// TestTheReadinessProbeIsBounded: one probe cannot spend the whole
+// readiness budget.
+//
+// A daemon that accepts the socket and then never answers leaves the
+// probe blocked, and this process is PID 1 — there is nothing outside it
+// to cut the call short. Without a bound of its own the budget is spent
+// inside a single call, and the capsule reports neither ready nor
+// failed until something kills the container.
+func TestTheReadinessProbeIsBounded(t *testing.T) {
+	// A `docker` on PATH that answers nothing, ever.
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "docker")
+	if err := os.WriteFile(shim, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	start := time.Now()
+	err := probeDockerd(t.Context())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a probe that never answered reported the daemon ready")
+	}
+	if elapsed > dockerdProbeTimeout+5*time.Second {
+		t.Errorf("one probe took %s against a %s bound; the readiness budget is spent inside a single call",
+			elapsed.Round(time.Second), dockerdProbeTimeout)
+	}
 }

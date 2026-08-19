@@ -126,10 +126,15 @@ by its public and operational effects.
   session cannot be reached retries on its own loop, so an outage or an
   expired token costs that binding its turn rather than ending the
   process while capsules are still running. The whole shutdown is sized
-  to end inside the deployment's stop grace period: the drain is spent
-  first, then every message session closes concurrently under one shared
-  budget, so the bound does not grow with the binding count and the
-  sessions are closed rather than left for the next start to wait out. A
+  to end inside the deployment's stop grace period, and the deployment is
+  sized against that whole number rather than a subset of its terms: the
+  serve loops are waited out, the drain is spent, then every message
+  session closes concurrently under one shared budget, so the bound does
+  not grow with the binding count and the sessions are closed rather than
+  left for the next start to wait out. The periodic reconciler's recovery
+  ends with that shutdown instead of running a budget of its own, because
+  its work is resumable — the next start finds each lease where the
+  shutdown left it. A
   drain window that elapses leaves live capsules exactly as they are for
   the next start's adoption — a dying controller never dismantles a
   running job on its way down.
@@ -189,6 +194,21 @@ by its public and operational effects.
   before the one effect that can begin execution is a compare-and-swap,
   so a launch whose attempt was resolved while its capsule was being
   prepared stops there, and the capsule is torn down without a job.
+- **A cancellation is durable before its message is given up.**
+  Everything a broker message carries is written down before the message
+  is acknowledged, for the same reason the assignment is: an acknowledged
+  message is never sent again and nothing re-derives a cancellation from
+  the provider, so one lost in that window costs a whole capsule on work
+  the provider already closed.
+- **Every call into a container is bounded.** The daemon's connection
+  for an exec is handed over once and stops consulting the caller's
+  context, so a container that accepts a command and answers nothing
+  held the call open indefinitely — including the gateway control calls
+  a policy refresh makes while holding the lock every launch waits on.
+  The connection now ends with the context, and each gateway call
+  carries its own bound. Inside a capsule the readiness probe is bounded
+  the same way, so a daemon that never answers cannot spend the whole
+  readiness budget in one call.
 - **A capsule that never handed the job over returns it to the queue.**
   The supervisor exits with a status it reserves for stopping before the
   start was authorized — the ordinary end of an idle capsule when a

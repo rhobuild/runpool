@@ -63,7 +63,7 @@ services:
     # message sessions close before the platform kills the container. A
     # session left open is one the next start waits out as a conflict.
     # Anything still running is adopted on the next start.
-    stop_grace_period: 2m
+    stop_grace_period: 150s
 
 volumes:
   # State holds the lease and ownership records: back this up. Cache

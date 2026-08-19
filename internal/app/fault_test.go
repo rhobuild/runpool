@@ -363,7 +363,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	// The removal fails: the lease parks in quarantine with backoff
 	// booked on the intent, and the attempt stays leased — unresolved,
 	// visible, waiting.
-	if err := h.srv.recoverCapsuleFailure(h.bind, lease.ID, ""); err == nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, ""); err == nil {
 		t.Fatal("recoverCapsuleFailure with a wedged daemon succeeded")
 	}
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
@@ -682,5 +682,67 @@ func TestASupersededAttemptIsNeverStarted(t *testing.T) {
 	}
 	if !h.srv.alloc.TryReserve(h.bind.key) {
 		t.Error("the lease's admission credit was never returned")
+	}
+}
+
+// blockingRemover holds every removal until its context ends — a daemon
+// that accepted the call and is answering nothing.
+type blockingRemover struct{}
+
+func (blockingRemover) block(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (b blockingRemover) RemoveOwnedContainer(ctx context.Context, _, _, _ string) error {
+	return b.block(ctx)
+}
+func (b blockingRemover) RemoveOwnedNetwork(ctx context.Context, _, _, _ string) error {
+	return b.block(ctx)
+}
+func (b blockingRemover) RemoveOwnedVolume(ctx context.Context, _, _, _ string) error {
+	return b.block(ctx)
+}
+
+// TestTheReconcilerStopsRecoveringWhenTheShutdownBegins: the periodic
+// pass's recovery ends when the loop's context does.
+//
+// Its work is resumable by definition — the next pass, or the next
+// start, finds the lease exactly where this left it — so there is
+// nothing to protect by detaching it, and a recovery detached from
+// everything runs its own two-minute budget against a wedged daemon
+// while the platform's grace period expires around it. The shutdown
+// bound the deployment is sized against has to be one the process
+// actually keeps.
+func TestTheReconcilerStopsRecoveringWhenTheShutdownBegins(t *testing.T) {
+	h := newHarness(t, 1)
+	h.useRemover(blockingRemover{})
+	if err := h.deliver(demand("job-blocked", "app", 81)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-blocked")
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-blocked")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(id, "blocked-1")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	h.srv.retryStranded(ctx)
+	elapsed := time.Since(start)
+
+	if elapsed > LoopStopBudget {
+		t.Errorf("the pass held the shutdown for %s against a %s budget; a recovery detached "+
+			"from the loop outlives the grace period the deployment is sized for",
+			elapsed.Round(time.Second), LoopStopBudget)
 	}
 }
