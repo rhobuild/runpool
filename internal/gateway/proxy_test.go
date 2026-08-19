@@ -293,3 +293,163 @@ func TestTunnelCarriesTheBytesTheServerAlreadyRead(t *testing.T) {
 	clientSide.Close()
 	<-done
 }
+
+// tcpPair dials a loopback listener and hands back both ends of one real
+// TCP connection. Real sockets, not net.Pipe: a half-close is a property
+// of the transport, and a pipe has no such thing.
+func tcpPair(t *testing.T) (client, server net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- c
+	}()
+	client, err = net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case server = <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener never accepted")
+	}
+	t.Cleanup(func() { client.Close(); server.Close() })
+	return client, server
+}
+
+// TestAHalfClosingClientStillReceivesItsWholeResponse: a client that
+// shuts down its write side once its request is out must still get the
+// whole reply.
+//
+// It is ordinary HTTP client behaviour and a clean EOF on one direction
+// only, not the end of the connection. Treating it as the end of the
+// tunnel closes the socket the upstream is still answering on, and the
+// client gets a truncated response with nothing to say why.
+func TestAHalfClosingClientStillReceivesItsWholeResponse(t *testing.T) {
+	const size = 1 << 20
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+
+	go tunnelWith(clientSide, upstreamSide, 5*time.Second, 500*time.Millisecond)
+
+	// The request goes out, then the client is done sending.
+	if _, err := clientEnd.Write([]byte("request")); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientEnd.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The upstream sees the request and its EOF, then answers at length.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := upstreamEnd.Read(buf); err != nil {
+				break
+			}
+		}
+		payload := bytes.Repeat([]byte("x"), size)
+		_, _ = upstreamEnd.Write(payload)
+		_ = upstreamEnd.(*net.TCPConn).CloseWrite()
+	}()
+
+	if err := clientEnd.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(clientEnd)
+	if err != nil {
+		t.Fatalf("reading the response: %v (got %d of %d bytes)", err, len(got), size)
+	}
+	if len(got) != size {
+		t.Errorf("the client received %d bytes of a %d-byte response; the half-close was "+
+			"read as the end of the tunnel", len(got), size)
+	}
+}
+
+// TestALimitedConnectionForwardsAHalfClose: the wrapper the relay counts
+// connections with must not hide the half-close.
+//
+// It embeds net.Conn, which does not declare CloseWrite, so the method
+// is not promoted — a tunnel looking for one finds nothing and closes
+// the whole connection instead, which is the truncation above by another
+// route.
+func TestALimitedConnectionForwardsAHalfClose(t *testing.T) {
+	peer, raw := tcpPair(t)
+	limited := &limitConn{Conn: raw, release: func() {}}
+
+	var cw closeWriter = limited // fails to compile if the method is gone
+	if err := cw.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+
+	// The peer sees EOF on its read side...
+	if err := peer.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(peer); err != nil {
+		t.Fatalf("the peer could not read to EOF after the half-close: %v", err)
+	}
+	// ...and the half-closed side can still read what the peer sends.
+	if _, err := peer.Write([]byte("reply")); err != nil {
+		t.Fatal(err)
+	}
+	if err := limited.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(limited, buf); err != nil {
+		t.Fatalf("the half-closed connection lost its read side: %v", err)
+	}
+}
+
+// TestAOneWayTransferOutlivesTheIdleBound: a transfer that is silent in
+// one direction is not an idle tunnel.
+//
+// A large upload or a slow download says nothing back for its whole
+// duration, so a deadline applied per direction severed connections
+// that were actively streaming. The bound belongs to the tunnel, and
+// the tunnel is idle only when neither direction has moved.
+func TestAOneWayTransferOutlivesTheIdleBound(t *testing.T) {
+	const (
+		idle  = 200 * time.Millisecond
+		poll  = 20 * time.Millisecond
+		beats = 40
+	)
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+
+	go tunnelWith(clientSide, upstreamSide, idle, poll)
+
+	// One direction streams steadily for well past the idle bound; the
+	// other says nothing at all.
+	go func() {
+		for range beats {
+			if _, err := upstreamEnd.Write([]byte("x")); err != nil {
+				return
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+		_ = upstreamEnd.(*net.TCPConn).CloseWrite()
+	}()
+
+	if err := clientEnd.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(clientEnd)
+	if err != nil {
+		t.Fatalf("reading the stream: %v (got %d of %d bytes)", err, len(got), beats)
+	}
+	if len(got) != beats {
+		t.Errorf("the client received %d of %d bytes over %s with a %s idle bound; "+
+			"the quiet direction expired while the other was streaming",
+			len(got), beats, time.Duration(beats)*30*time.Millisecond, idle)
+	}
+}

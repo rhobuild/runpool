@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,35 +204,88 @@ func (r *Relay) establishTunnel(w http.ResponseWriter, upstream net.Conn) {
 	tunnel(client, upstream)
 }
 
-// tunnel copies both directions and returns when either ends. Each side
-// carries an idle deadline, so a tunnel nobody is using releases its
-// connection slot instead of holding it until the job ends.
+// closeWriter is the half-close a tunnel propagates. Every connection a
+// tunnel joins has it; naming the interface is what lets a wrapper that
+// hides the method be given one back rather than silently falling
+// through to a full close.
+type closeWriter interface{ CloseWrite() error }
+
+// tunnelPollInterval is how often a quiet direction re-checks the
+// tunnel's shared activity clock. It also bounds how far past the idle
+// timeout a genuinely silent tunnel can live.
+const tunnelPollInterval = 30 * time.Second
+
+// tunnel copies both directions and returns when both of them have
+// ended.
+//
+// A clean EOF on one direction is a half-close, not the end of the
+// tunnel. Propagating it as CloseWrite is what lets the peer finish its
+// own reply; returning there truncated the response of every client
+// that shuts down its write side once its request is out — an ordinary
+// thing for an HTTP client to do, and the reason both directions are
+// now waited on: the deferred closes around this call fire when it
+// returns, so ending early closes the connection the peer was still
+// answering on.
+//
+// The idle bound is the tunnel's, not each direction's. A long one-way
+// transfer is silent in the other direction for its whole duration, so
+// a per-direction deadline severed a large upload or a slow download
+// while it was actively streaming. Each direction now reads in short
+// intervals and consults a clock both of them write.
 func tunnel(client, upstream net.Conn) {
-	done := make(chan struct{}, 2)
+	tunnelWith(client, upstream, TunnelIdleTimeout, tunnelPollInterval)
+}
+
+func tunnelWith(client, upstream net.Conn, idle, poll time.Duration) {
+	// One clock for the tunnel: activity in either direction is what
+	// keeps the other alive.
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
+
+	var wg sync.WaitGroup
 	copyIdle := func(dst, src net.Conn) {
+		defer wg.Done()
 		buf := make([]byte, 32<<10)
 		for {
-			_ = src.SetReadDeadline(time.Now().Add(TunnelIdleTimeout))
+			_ = src.SetReadDeadline(time.Now().Add(poll))
 			n, err := src.Read(buf)
 			if n > 0 {
-				_ = dst.SetWriteDeadline(time.Now().Add(TunnelIdleTimeout))
+				lastActivity.Store(time.Now().UnixNano())
+				_ = dst.SetWriteDeadline(time.Now().Add(idle))
 				if _, werr := dst.Write(buf[:n]); werr != nil {
 					break
 				}
+				lastActivity.Store(time.Now().UnixNano())
 			}
-			if err != nil {
-				break
+			switch {
+			case err == nil:
+				continue
+			case errors.Is(err, os.ErrDeadlineExceeded):
+				// Quiet here. The tunnel is idle only if it is quiet
+				// both ways, which is what the shared clock answers.
+				if time.Since(time.Unix(0, lastActivity.Load())) < idle {
+					continue
+				}
+			case errors.Is(err, io.EOF):
+				// This side is done sending and says so, leaving the
+				// peer to finish. The tunnel ends when that one ends
+				// too.
+				if cw, ok := dst.(closeWriter); ok {
+					_ = cw.CloseWrite()
+					return
+				}
 			}
+			break
 		}
-		// Unblock the peer direction rather than leaving its goroutine
-		// parked on a read that will never return.
+		// The tunnel is over rather than half-closed: unblock the peer
+		// instead of leaving its goroutine parked on a read.
 		_ = src.SetReadDeadline(time.Now())
 		_ = dst.SetReadDeadline(time.Now())
-		done <- struct{}{}
 	}
+	wg.Add(2)
 	go copyIdle(upstream, client)
 	go copyIdle(client, upstream)
-	<-done
+	wg.Wait()
 }
 
 // forward relays a plain HTTP request through a shared, bounded
@@ -513,4 +567,17 @@ type limitConn struct {
 func (c *limitConn) Close() error {
 	c.once.Do(c.release)
 	return c.Conn.Close()
+}
+
+// CloseWrite forwards a half-close to the connection underneath.
+// net.Conn does not declare it, so embedding the interface hides the
+// method even though every connection this wraps has it — and a tunnel
+// propagating a half-close would find no closeWriter, close the whole
+// connection instead, and truncate the reply it was making room for.
+func (c *limitConn) CloseWrite() error {
+	cw, ok := c.Conn.(closeWriter)
+	if !ok {
+		return errors.New("the underlying connection cannot be half-closed")
+	}
+	return cw.CloseWrite()
 }

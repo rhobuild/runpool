@@ -23,6 +23,7 @@ on:
       - "internal/capsule/**"
       - "internal/cache/**"
       - "internal/egress/**"
+      - "internal/gateway/**"
       - "internal/disk/**"
       - "internal/store/**"
       - "cmd/capsule-supervisor/**"
