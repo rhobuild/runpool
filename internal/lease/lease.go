@@ -214,7 +214,7 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
 		return err
 	}
-	return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, startObs))
+	return m.applyDisposition(tx, attempt, lease.ID, startObs, dispositionFor(attempt, startObs))
 }
 
 // disposition is what the books must record about an attempt whose
@@ -249,13 +249,31 @@ const (
 	dispositionReview
 )
 
-// attemptIsOpen reports whether an attempt is still this lease's to
-// resolve. Anything else — superseded by a redelivery, settled, canceled
-// by the provider, or held for a person — belongs to whoever put it
-// there, and a serving that ends afterwards leaves it alone.
-func attemptIsOpen(state string) bool {
+// servedByThisLease reports whether an attempt is still this lease's to
+// resolve: the five states one serving passes through, from the claim
+// that created the lease to the runner owning the job.
+//
+// Every other state belongs to whoever put the attempt there — a
+// redelivery that superseded it, a provider that canceled it, a person
+// holding it for review, or an operator who resolved one back to
+// `ready` — and a serving that ends afterwards leaves it alone.
+//
+// `ready` is deliberately absent, and its absence is what makes the
+// requeue total: `leased`, `preparing` and `prepared` are exactly what
+// RequeueAttempt accepts, and `starting` and `running` are exactly what
+// RequeueProvenInertAttempt accepts, so every disposition this set
+// admits matches a row. An attempt found in `ready` was put there by
+// something else, and requeueing it again matches nothing — which fails
+// the finalizing transaction and pins the lease in cleaning with its
+// admission credit, for a workload that is already servable.
+//
+// It is not called "open": GetOpenAttemptByWorkload means a different,
+// wider set — the seven states that block a redelivery, `manual_review`
+// among them — and one word for two sets one grep apart is how the
+// wrong one gets copied.
+func servedByThisLease(state string) bool {
 	switch state {
-	case "ready", "leased", "preparing", "prepared", "starting", "running":
+	case "leased", "preparing", "prepared", "starting", "running":
 		return true
 	}
 	return false
@@ -275,7 +293,7 @@ func attemptIsOpen(state string) bool {
 // code the capsule reserves for exactly that.
 func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
 	switch {
-	case !attemptIsOpen(attempt.State):
+	case !servedByThisLease(attempt.State):
 		return dispositionNone
 	case obs == assignment.ObservedCreated:
 		return dispositionRequeue
@@ -295,15 +313,23 @@ func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) 
 }
 
 // applyDisposition writes one decision, inside the caller's transaction.
+//
+// It takes the observation only to report it. Both warnings carry the
+// same four fields, because both answer the same question after the
+// fact: which attempt, under which lease, how far it had got, and what
+// the runtime was seen doing. On the review — the one disposition a
+// person has to act on — the observation is the input their choice turns
+// on, since absent is not the same answer as unobservable.
 func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
-	leaseID assignment.LeaseID, d disposition) error {
+	leaseID assignment.LeaseID, obs assignment.ExecutionObservation, d disposition) error {
 
 	switch d {
 	case dispositionNone:
 		return nil
 	case dispositionRequeue:
 		m.log.Warn("the workload was not consumed; the attempt stays servable",
-			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State)
+			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State,
+			"observation", string(obs))
 		return m.requeueProven(tx, attempt, leaseID)
 	case dispositionSettleCompleted:
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionCompletedObserved)
@@ -311,7 +337,8 @@ func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionStartedObserved)
 	default:
 		m.log.Warn("start outcome is unproven; the attempt is held for review",
-			"attempt", attempt.ID, "lease", leaseID)
+			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State,
+			"observation", string(obs))
 		return tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown)
 	}
 }
@@ -370,7 +397,7 @@ func (m *Manager) requeueOrReview(tx *store.Tx, attemptID assignment.AttemptID, 
 // disposeAttempt once carried their own switches and drifted apart.
 func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
 	m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-		return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, obs))
+		return m.applyDisposition(tx, attempt, lease.ID, obs, dispositionFor(attempt, obs))
 	})
 }
 

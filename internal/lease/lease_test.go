@@ -528,6 +528,8 @@ func TestBothDispositionPathsAgree(t *testing.T) {
 			"starting", store.EvidenceStartAuthorized, assignment.ObservedRunning, dispositionSettleStarted},
 		"an unprovable start is held": {
 			"starting", store.EvidenceStartAuthorized, assignment.ObservedAbsent, dispositionReview},
+		"an attempt an operator returned to the queue is left alone": {
+			"ready", store.EvidenceNotStarted, "", dispositionNone},
 		"a superseded attempt is left alone": {
 			"superseded", store.EvidenceNotStarted, "", dispositionNone},
 		"a held attempt is left alone": {
@@ -571,5 +573,82 @@ func TestAProvenInertStartIsRequeuedFromEitherPath(t *testing.T) {
 					got.State, got.Resolution)
 			}
 		})
+	}
+}
+
+// attemptStates is every state an attempt can hold, terminal ones
+// included. It is the domain the test below filters, so the test states
+// the question and the predicate states the answer.
+var attemptStates = []string{
+	"ready", "leased", "preparing", "prepared", "starting", "running",
+	"superseded", "settled", "canceled", "manual_review",
+}
+
+// TestEveryServingStateCanBeDisposedOf: no disposition this decision can
+// reach fails to match a row.
+//
+// The requeue is split across two queries whose guards between them
+// cover exactly the five states one serving passes through. A state
+// admitted to the set but absent from both guards produces a requeue
+// that matches nothing, and the finalizing transaction rolls back with
+// it — the lease pins in cleaning holding its admission credit, and a
+// lease already in cleaning cannot move there again, so no later pass
+// recovers it.
+//
+// The states walked come from the predicate itself, not from a list
+// beside it: a state added to the serving set is disposed of here
+// whether or not anyone remembers this test. One the fixture cannot
+// drive to fails in advanceAttemptTo, which names it.
+func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
+	var walked int
+	for _, state := range attemptStates {
+		if !servedByThisLease(state) {
+			continue
+		}
+		walked++
+		t.Run(state, func(t *testing.T) {
+			f := newFixture(t, nopRemover{})
+			f.driveTo(store.LeaseCleaning)
+			if state != "leased" {
+				f.advanceAttemptTo(state)
+			}
+
+			// Retriable evidence is the disposition that reaches the
+			// requeue from every one of these states.
+			if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+				t.Fatalf("Finalize from %s: %v", state, err)
+			}
+			if got := f.reload().State; got != store.LeaseReleased {
+				t.Errorf("lease = %s after disposing an attempt in %s; want released", got, state)
+			}
+		})
+	}
+	if walked == 0 {
+		t.Fatal("the serving set admits no state; this test asserted nothing")
+	}
+}
+
+// TestAnAttemptReturnedToTheQueueDoesNotPinItsLease: an operator can
+// resolve a held attempt back to `ready` while the lease that served it
+// is still cleaning up, and that serving must still end.
+func TestAnAttemptReturnedToTheQueueDoesNotPinItsLease(t *testing.T) {
+	f := newFixture(t, nopRemover{})
+	f.driveTo(store.LeaseCleaning)
+	id := assignment.AttemptID(f.attempt)
+	f.tx(func(tx *store.Tx) error {
+		if err := tx.HoldForReview(id, store.ReviewReasonRetryBudgetExhausted); err != nil {
+			return err
+		}
+		return tx.ResolveReviewToReady(id, "resolved", "operator")
+	})
+
+	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if got := f.reload().State; got != store.LeaseReleased {
+		t.Errorf("lease = %s; want released — an attempt already servable must not pin it", got)
+	}
+	if got := f.attemptState().State; got != "ready" {
+		t.Errorf("attempt = %s; want it left where the operator put it", got)
 	}
 }
