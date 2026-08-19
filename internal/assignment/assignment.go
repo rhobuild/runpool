@@ -125,7 +125,7 @@ type WorkloadLifecycleEvent struct {
 	ProjectKey        string
 	// RuntimeName and RuntimeID identify the provider-side runtime the
 	// observation names, opaque to the domain.
-	RuntimeName string
+	RuntimeName RuntimeName
 	RuntimeID   int64
 	// Result is the provider's stated outcome, populated on completed
 	// observations only.

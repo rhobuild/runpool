@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // CacheLane identifies one exclusive lane: its opaque id and the opaque
@@ -40,7 +42,7 @@ func (t *Tx) EnsureCacheProject(sourceProjectKey string) (string, error) {
 // returns ErrNoLane when every lane is in use — the caller then runs
 // without a cache rather than sharing one, since concurrent writers
 // would corrupt it.
-func (t *Tx) LeaseCacheLane(projectID, generation, leaseID string, maxLanes int) (CacheLane, error) {
+func (t *Tx) LeaseCacheLane(projectID, generation string, leaseID assignment.LeaseID, maxLanes int) (CacheLane, error) {
 	var id string
 	err := t.tx.QueryRow(
 		`SELECT id FROM cache_lanes WHERE project_id = ? AND generation = ? AND leased_by IS NULL
@@ -87,7 +89,7 @@ func (t *Tx) BackdateCacheLane(laneID string, age time.Duration) error {
 
 // ReleaseCacheLane frees whatever lane a lease holds, leaving its data
 // for the next lease. Releasing a lease that holds none is a no-op.
-func (t *Tx) ReleaseCacheLane(leaseID string) error {
+func (t *Tx) ReleaseCacheLane(leaseID assignment.LeaseID) error {
 	_, err := t.tx.Exec(`UPDATE cache_lanes SET leased_by = NULL WHERE leased_by = ?`, leaseID)
 	return err
 }

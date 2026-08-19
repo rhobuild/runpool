@@ -12,6 +12,8 @@ import (
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // Destructive commands default to dry-run: the operator must ask for the
@@ -46,7 +48,7 @@ func runCleanup(streams IO, apply bool) error {
 	}
 	for _, l := range snap.Leases {
 		if !l.State.Terminal() {
-			keep[l.ID] = true
+			keep[string(l.ID)] = true
 		}
 	}
 	removable := plan.exclude(keep)
@@ -217,16 +219,16 @@ type ownedPlan struct {
 }
 
 func planOwnedResources(ctx context.Context, st *store.Store, dock *docker.Client) (ownedPlan, error) {
-	p := ownedPlan{instanceID: st.InstanceID()}
+	p := ownedPlan{instanceID: string(st.InstanceID())}
 	var err error
 	id := p.instanceID
-	if p.containers, err = dock.ListOwnedContainers(ctx, id); err != nil {
+	if p.containers, err = dock.ListOwnedContainers(ctx, assignment.InstanceID(id)); err != nil {
 		return p, err
 	}
-	if p.networks, err = dock.ListOwnedNetworks(ctx, id); err != nil {
+	if p.networks, err = dock.ListOwnedNetworks(ctx, assignment.InstanceID(id)); err != nil {
 		return p, err
 	}
-	p.volumes, err = dock.ListOwnedVolumes(ctx, id)
+	p.volumes, err = dock.ListOwnedVolumes(ctx, assignment.InstanceID(id))
 	return p, err
 }
 
@@ -295,17 +297,17 @@ func (p ownedPlan) describe(verb string, applying bool) string {
 // held open.
 func (p ownedPlan) remove(ctx context.Context, dock *docker.Client) error {
 	for _, c := range p.containers {
-		if err := dock.RemoveOwnedContainer(ctx, c.ID, p.instanceID, c.LeaseID); err != nil {
+		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(c.LeaseID)); err != nil {
 			return fmt.Errorf("remove container %s: %w", c.Name, err)
 		}
 	}
 	for _, n := range p.networks {
-		if err := dock.RemoveOwnedNetwork(ctx, n.ID, p.instanceID, n.LeaseID); err != nil {
+		if err := dock.RemoveOwnedNetwork(ctx, n.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(n.LeaseID)); err != nil {
 			return fmt.Errorf("remove network %.12s: %w", n.ID, err)
 		}
 	}
 	for _, v := range p.volumes {
-		if err := dock.RemoveOwnedVolume(ctx, v.ID, p.instanceID, v.LeaseID); err != nil {
+		if err := dock.RemoveOwnedVolume(ctx, v.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(v.LeaseID)); err != nil {
 			return fmt.Errorf("remove volume %s: %w", v.ID, err)
 		}
 	}

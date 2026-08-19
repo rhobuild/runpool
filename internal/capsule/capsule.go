@@ -27,6 +27,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 const (
@@ -93,14 +95,14 @@ const (
 )
 
 type Spec struct {
-	LeaseID    string
-	InstanceID string
+	LeaseID    assignment.LeaseID
+	InstanceID assignment.InstanceID
 	// AttemptID, TargetID and TierID are provider-neutral correlation
 	// labels. They make ephemeral resources intelligible in a shared
 	// daemon's container view without exposing credentials or source URLs.
-	AttemptID string
-	TargetID  string
-	TierID    string
+	AttemptID assignment.AttemptID
+	TargetID  assignment.TargetID
+	TierID    assignment.TierID
 	// CapsuleImage is the first-party outer image: supervisor, runner
 	// and engine in one filesystem.
 	CapsuleImage string
@@ -156,9 +158,9 @@ const CachePath = "/cache"
 // the object or proves its absence, which is why no compensation logic
 // lives here anymore: the record cannot be lost, only unconfirmed.
 type ResourceRecorder interface {
-	Plan(kind, role, name string) (int64, error)
-	Creating(intentID int64) error
-	Confirm(intentID int64, dockerID string) error
+	Plan(kind, role, name string) (assignment.ResourceIntentID, error)
+	Creating(intentID assignment.ResourceIntentID) error
+	Confirm(intentID assignment.ResourceIntentID, dockerID string) error
 }
 
 // create wraps one object creation in its intent lifecycle. When the
@@ -223,7 +225,7 @@ type PreparedRuntime struct {
 	// RuntimeID is the outer container: the one object whose state —
 	// and whose supervisor's state file — answers whether execution
 	// ever began.
-	RuntimeID string
+	RuntimeID assignment.RuntimeID
 }
 
 // Prepare builds the capsule and stops short of the one effect that can
@@ -236,7 +238,7 @@ func (m *Launcher) Prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	if err != nil {
 		return PreparedRuntime{}, err
 	}
-	return PreparedRuntime{RuntimeID: outerID}, nil
+	return PreparedRuntime{RuntimeID: assignment.RuntimeID(outerID)}, nil
 }
 
 // Start authorizes the runner. It is deliberately one exec that drops
@@ -244,7 +246,7 @@ func (m *Launcher) Prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 // the ambiguous window is exactly one request wide, and
 // InspectExecution can classify whatever a crash left behind.
 func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
-	code, out, err := m.dock.Exec(ctx, prepared.RuntimeID, []string{supervisorPath, "start"})
+	code, out, err := m.dock.Exec(ctx, string(prepared.RuntimeID), []string{supervisorPath, "start"})
 	if err != nil {
 		return err
 	}
@@ -255,18 +257,18 @@ func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
 }
 
 func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
-	short := docker.ShortID(spec.LeaseID)
+	short := docker.ShortID(string(spec.LeaseID))
 	name := func(role string) string { return "runpool-" + role + "-" + short }
 	labels := func(kind, role string) map[string]string {
 		return map[string]string{
 			docker.LabelManaged:  "true",
-			docker.LabelInstance: spec.InstanceID,
+			docker.LabelInstance: string(spec.InstanceID),
 			docker.LabelKind:     kind,
-			docker.LabelLease:    spec.LeaseID,
+			docker.LabelLease:    string(spec.LeaseID),
 			docker.LabelRole:     role,
-			docker.LabelAttempt:  spec.AttemptID,
-			docker.LabelTarget:   spec.TargetID,
-			docker.LabelTier:     spec.TierID,
+			docker.LabelAttempt:  string(spec.AttemptID),
+			docker.LabelTarget:   string(spec.TargetID),
+			docker.LabelTier:     string(spec.TierID),
 		}
 	}
 	resolve := func(kind, objName string) func() (string, error) {
@@ -283,7 +285,7 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 
 	// One envelope for the lease, split between the capsule and — when
 	// there is one — its gateway, and placed under one parent cgroup.
-	cgroupParent := LeaseCgroupParent(spec.CgroupDriver, spec.LeaseID)
+	cgroupParent := LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID))
 	capsuleShare := SplitEnvelope(spec.Resources, sandboxed)
 	netID, err := m.create(ctx, rec, KindNetwork, RoleNetwork, name(RoleNetwork),
 		func() (string, error) {
@@ -513,7 +515,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 				MemorySwapBytes: GatewayEnvelope().MemorySwapBytes,
 				NanoCPUs:        GatewayEnvelope().NanoCPUs,
 				PIDsLimit:       GatewayEnvelope().PIDsLimit,
-				CgroupParent:    LeaseCgroupParent(spec.CgroupDriver, spec.LeaseID),
+				CgroupParent:    LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID)),
 			})
 		}, resolve(KindContainer, name(RoleGateway)))
 	if err != nil {

@@ -201,7 +201,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		// has already been leased.
 		s.recordLifecycleEvents(ctx, b, msg)
 
-		advanced := s.acknowledgeDelivery(ctx, b, delivery, msg.ID)
+		advanced := s.acknowledgeDelivery(ctx, b, assignment.DeliveryID(delivery), msg.ID)
 
 		if msg.Statistics != nil {
 			// TotalAssignedJobs is the upstream scaling signal: what
@@ -238,7 +238,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 // delivery already confirmed, and an acknowledgement that failed - and on
 // both of them the next poll returns this same message with no long-poll
 // delay, so the caller has to wait rather than spin.
-func (s *Controller) acknowledgeDelivery(ctx context.Context, b *binding, deliveryID int64, messageID int) bool {
+func (s *Controller) acknowledgeDelivery(ctx context.Context, b *binding, deliveryID assignment.DeliveryID, messageID int) bool {
 	var proceed bool
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
@@ -329,7 +329,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 		}
 	}
 
-	var deliveryID int64
+	var deliveryID assignment.DeliveryID
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		id, err := tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
 		if errors.Is(err, store.ErrOpenAttemptExists) {
@@ -344,7 +344,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 			// own attempts: those were inserted moments ago, above,
 			// before the conflicting workload was reached.
 			for _, a := range admitted {
-				serr := tx.SupersedeOpenAttempt(b.bindingID, a.SourceWorkloadKey,
+				serr := tx.SupersedeOpenAttempt(b.bindingID, assignment.SourceWorkloadKey(a.SourceWorkloadKey),
 					assignment.ResolutionSuperseded, id)
 				if serr != nil && !errors.Is(serr, store.ErrNotFound) {
 					return serr
@@ -369,7 +369,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 			byKey[a.SourceWorkloadKey] = a
 		}
 		for _, attempt := range attempts {
-			a, ok := byKey[attempt.SourceWorkloadKey]
+			a, ok := byKey[string(attempt.SourceWorkloadKey)]
 			if !ok {
 				continue
 			}
@@ -383,7 +383,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 	if err != nil {
 		return 0, err
 	}
-	return deliveryID, nil
+	return int64(deliveryID), nil
 }
 
 // recordLifecycleEvents persists the provider's started/completed
@@ -404,11 +404,11 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 				// The cancellation and the event it explains commit
 				// together, so no row is closed without the trail that
 				// says what closed it.
-				if err := s.cancelIfReady(tx, attemptID); err != nil {
+				if err := s.cancelIfReady(tx, assignment.AttemptID(attemptID)); err != nil {
 					return err
 				}
 			}
-			return tx.RecordEvent(attemptID, idempotency, kind)
+			return tx.RecordEvent(assignment.AttemptID(attemptID), idempotency, kind)
 		}); err != nil {
 			s.log.Error("cannot record a lifecycle event",
 				"binding", b.key, "workload", ev.SourceWorkloadKey, "error", err)
@@ -423,7 +423,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 	for _, ev := range msg.Started {
 		s.log.Info("workload started",
 			"binding", b.key, "workload", ev.SourceWorkloadKey, "runtime", ev.RuntimeName)
-		record(ev, "running_observed", "remote_running_observed:"+ev.RuntimeName, false)
+		record(ev, "running_observed", "remote_running_observed:"+string(ev.RuntimeName), false)
 	}
 	for _, ev := range msg.Completed {
 		s.log.Info("workload completed (hint)",
@@ -432,7 +432,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 		if ev.Result == "canceled" {
 			kind, idempotency = "remote_canceled", "remote_canceled"
 		}
-		record(ev, kind, idempotency, ev.Result == "canceled")
+		record(ev, kind, string(idempotency), ev.Result == "canceled")
 	}
 }
 
@@ -445,7 +445,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 // It runs in the caller's transaction, on the attempt the caller
 // resolved. Resolving one of its own is how a cancellation of a run that
 // has already been superseded reached the successor instead.
-func (s *Controller) cancelIfReady(tx *store.Tx, attemptID string) error {
+func (s *Controller) cancelIfReady(tx *store.Tx, attemptID assignment.AttemptID) error {
 	err := tx.CancelReady(attemptID, assignment.ResolutionRemoteCanceled)
 	if errors.Is(err, store.ErrConflict) {
 		return nil // nothing ready to cancel; running work drains instead
@@ -531,8 +531,9 @@ func (s *Controller) backoff() time.Duration {
 // The runtime name stays as the fallback. An observation about a workload
 // this instance never recorded, or whose attempt is already settled, is
 // still worth keeping against the attempt whose lease owns that runner.
-func (s *Controller) attemptForObservation(tx *store.Tx, b *binding, ev assignment.WorkloadLifecycleEvent) (string, error) {
-	attempt, err := tx.OpenAttemptByWorkload(b.bindingID, ev.SourceWorkloadKey)
+func (s *Controller) attemptForObservation(tx *store.Tx, b *binding,
+	ev assignment.WorkloadLifecycleEvent) (assignment.AttemptID, error) {
+	attempt, err := tx.OpenAttemptByWorkload(b.bindingID, assignment.SourceWorkloadKey(ev.SourceWorkloadKey))
 	switch {
 	case err == nil:
 		if ev.RuntimeName == "" {
@@ -563,7 +564,7 @@ func (s *Controller) attemptForObservation(tx *store.Tx, b *binding, ev assignme
 			return "", nil
 		case perr != nil:
 			return "", perr
-		case provisioned.SourceWorkloadKey == ev.SourceWorkloadKey:
+		case string(provisioned.SourceWorkloadKey) == ev.SourceWorkloadKey:
 			// Same workload, earlier attempt: a report of the run that
 			// attempt made, arriving after a requeue opened this one in
 			// its place. The open attempt has started nothing, and
@@ -668,13 +669,13 @@ func (s *Controller) announce(b *binding) {
 		return
 	}
 	b.lastAdvertised = credit
-	parallelism, rows := s.alloc.PoolReport(b.tier.ID)
+	parallelism, rows := s.alloc.PoolReport(assignment.TierID(b.tier.ID))
 	total := 0
 	for _, r := range rows {
 		total += r.Advertised
 	}
 	s.log.Info("advertised capacity changed", "binding", b.key, "advertised", credit,
 		"tier", b.tier.ID, "tier_parallelism", parallelism, "tier_advertised", total,
-		"discovery", s.alloc.DiscoveryHolder(b.tier.ID), "instance_capacity", s.alloc.CapacityReport(),
+		"discovery", s.alloc.DiscoveryHolder(assignment.TierID(b.tier.ID)), "instance_capacity", s.alloc.CapacityReport(),
 		"credits", rows)
 }

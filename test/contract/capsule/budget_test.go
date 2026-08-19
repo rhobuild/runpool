@@ -11,6 +11,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // TestLeaseResourceBudget proves on a real kernel what the threat model
@@ -55,7 +57,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 		PIDs:   512,
 	}
 	prepared, err := m.Prepare(ctx, capsule.Spec{
-		LeaseID:      leaseID,
+		LeaseID:      assignment.LeaseID(leaseID),
 		InstanceID:   "contract",
 		CapsuleImage: image,
 		JITConfig:    fakeJITConfig,
@@ -75,7 +77,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+short, "contract", leaseID)
+	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+short, "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}
@@ -83,7 +85,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	// Both containers report the same parent cgroup, so the kernel
 	// accounts them as one aggregate and one path reports the lease.
 	wantParent := capsule.LeaseCgroupParent(info.CgroupDriver, leaseID)
-	for name, id := range map[string]string{"capsule": prepared.RuntimeID, "gateway": gwID} {
+	for name, id := range map[string]string{"capsule": string(prepared.RuntimeID), "gateway": gwID} {
 		got, err := dock.ContainerCgroupParent(ctx, id)
 		if err != nil {
 			t.Fatalf("%s cgroup parent: %v", name, err)
@@ -96,7 +98,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	// The kernel's own numbers, read from inside each container's
 	// cgroup: what the daemon was asked for is not evidence, what the
 	// kernel enforces is.
-	capsuleLimits := readCgroupLimits(ctx, t, dock, prepared.RuntimeID)
+	capsuleLimits := readCgroupLimits(ctx, t, dock, string(prepared.RuntimeID))
 	gatewayLimits := readCgroupLimits(ctx, t, dock, gwID)
 
 	if got := capsuleLimits.memory + gatewayLimits.memory; got != int64(tier.Memory) {

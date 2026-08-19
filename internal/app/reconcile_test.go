@@ -60,7 +60,7 @@ func TestRecoveryMatrix(t *testing.T) {
 				if err := h.deliver(demand(workload, "app", 2)); err != nil {
 					t.Fatal(err)
 				}
-				lease, attemptID := leaseFor(t, h, workload)
+				lease, attemptID := leaseFor(t, h, assignment.SourceWorkloadKey(workload))
 				driveLeaseTo(t, h, lease.ID, from)
 				h.recordEvidence(lease.ID, evidence)
 

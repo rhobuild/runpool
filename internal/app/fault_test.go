@@ -124,18 +124,18 @@ func (f *fakeWaiter) TailLogs(context.Context, string, int) (string, error) {
 
 // runFaulted claims one attempt and drives runCapsule synchronously
 // against the given fakes.
-func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, wait *fakeWaiter, workload string) (store.Lease, string) {
+func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, wait *fakeWaiter, workload assignment.SourceWorkloadKey) (store.Lease, string) {
 	t.Helper()
 	h.srv.caps = caps
 	h.srv.wait = wait
 	h.bind.gh = reg
-	if err := h.deliver(demand(workload, "app", 60)); err != nil {
+	if err := h.deliver(demand(string(workload), "app", 60)); err != nil {
 		t.Fatal(err)
 	}
 	lease, attemptID := leaseFor(t, h, workload)
 	h.srv.wg.Add(1)
 	h.srv.runCapsule(h.bind, lease)
-	return lease, attemptID
+	return lease, string(attemptID)
 }
 
 func TestStartFaultMatrix(t *testing.T) {
@@ -221,7 +221,7 @@ func TestStartFaultMatrix(t *testing.T) {
 			h := newHarness(t, 1)
 			lease, attemptID := runFaulted(t, h, tc.caps, tc.reg, tc.wait, "job-fault")
 
-			got := attemptState(t, h, attemptID)
+			got := attemptState(t, h, assignment.AttemptID(attemptID))
 			if got.State != tc.want {
 				t.Errorf("attempt = %s; want %s", got.State, tc.want)
 			}
@@ -264,19 +264,19 @@ func TestOperatorResolvesHeldAttempts(t *testing.T) {
 			_, attemptID := runFaulted(t, h,
 				&fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent},
 				&fakeRegistry{}, &fakeWaiter{}, "job-held")
-			if got := attemptState(t, h, attemptID); got.State != "manual_review" {
+			if got := attemptState(t, h, assignment.AttemptID(attemptID)); got.State != "manual_review" {
 				t.Fatalf("attempt = %s; want manual_review", got.State)
 			}
 
 			h.inStore(func(s *store.Tx) error {
 				if decision == "retry" {
-					return s.ResolveReviewToReady(attemptID, "provider shows the job never started", "matias")
+					return s.ResolveReviewToReady(assignment.AttemptID(attemptID), "provider shows the job never started", "matias")
 				}
-				return s.ResolveReviewToSettled(attemptID, assignment.ResolutionMayHaveExecuted,
+				return s.ResolveReviewToSettled(assignment.AttemptID(attemptID), assignment.ResolutionMayHaveExecuted,
 					"cannot rule out execution", "matias")
 			})
 
-			got := attemptState(t, h, attemptID)
+			got := attemptState(t, h, assignment.AttemptID(attemptID))
 			switch decision {
 			case "retry":
 				if got.State != "ready" {
@@ -297,7 +297,7 @@ func TestOperatorResolvesHeldAttempts(t *testing.T) {
 			// audit reads them back.
 			var sawResolution bool
 			h.inStore(func(s *store.Tx) error {
-				events, err := s.Events(attemptID)
+				events, err := s.Events(assignment.AttemptID(attemptID))
 				if err != nil {
 					return err
 				}
@@ -327,13 +327,13 @@ func (f *faultyRemover) fail() error {
 	}
 	return errors.New("daemon wedged")
 }
-func (f *faultyRemover) RemoveOwnedContainer(context.Context, string, string, string) error {
+func (f *faultyRemover) RemoveOwnedContainer(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return f.fail()
 }
-func (f *faultyRemover) RemoveOwnedNetwork(context.Context, string, string, string) error {
+func (f *faultyRemover) RemoveOwnedNetwork(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return f.fail()
 }
-func (f *faultyRemover) RemoveOwnedVolume(context.Context, string, string, string) error {
+func (f *faultyRemover) RemoveOwnedVolume(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return f.fail()
 }
 
@@ -601,13 +601,13 @@ func TestARedeliveryNeverSupersedesItsOwnAttempts(t *testing.T) {
 	if len(ready) != 2 {
 		var got []string
 		for _, a := range ready {
-			got = append(got, a.SourceWorkloadKey)
+			got = append(got, string(a.SourceWorkloadKey))
 		}
 		t.Fatalf("servable workloads = %v; want both job-a and job-b under the new delivery", got)
 	}
 	seen := map[string]bool{}
 	for _, a := range ready {
-		seen[a.SourceWorkloadKey] = true
+		seen[string(a.SourceWorkloadKey)] = true
 	}
 	if !seen["job-a"] || !seen["job-b"] {
 		t.Errorf("servable workloads = %v; want both", seen)
@@ -693,13 +693,13 @@ func (blockingRemover) block(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (b blockingRemover) RemoveOwnedContainer(ctx context.Context, _, _, _ string) error {
+func (b blockingRemover) RemoveOwnedContainer(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
 	return b.block(ctx)
 }
-func (b blockingRemover) RemoveOwnedNetwork(ctx context.Context, _, _, _ string) error {
+func (b blockingRemover) RemoveOwnedNetwork(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
 	return b.block(ctx)
 }
-func (b blockingRemover) RemoveOwnedVolume(ctx context.Context, _, _, _ string) error {
+func (b blockingRemover) RemoveOwnedVolume(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
 	return b.block(ctx)
 }
 

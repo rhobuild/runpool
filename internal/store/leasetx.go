@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 var (
@@ -24,8 +26,8 @@ var (
 //
 // The claim runs first on purpose. Inserting the lease first would leave
 // an orphan runtime row behind whenever the claim lost the race.
-func (t *Tx) LeaseAttempt(attemptID string, bindingID int64, tierID string) (Lease, error) {
-	affected, err := t.q.ClaimReadyAttempt(t.ctx, attemptID)
+func (t *Tx) LeaseAttempt(attemptID assignment.AttemptID, bindingID assignment.BindingID, tierID string) (Lease, error) {
+	affected, err := t.q.ClaimReadyAttempt(t.ctx, string(attemptID))
 	if err != nil {
 		return Lease{}, err
 	}
@@ -41,13 +43,13 @@ func (t *Tx) LeaseAttempt(attemptID string, bindingID int64, tierID string) (Lea
 	if err := t.RecordEvent(attemptID, "lease_attached:"+id, "lease_attached"); err != nil {
 		return Lease{}, err
 	}
-	return t.LeaseByID(id)
+	return t.LeaseByID(assignment.LeaseID(id))
 }
 
 // TransitionLease moves a lease along the state machine. The write is
 // guarded by the expected current state: if the lease moved meanwhile,
 // nothing changes and ErrStateConflict reports where it actually is.
-func (t *Tx) TransitionLease(id string, from, to LeaseState) error {
+func (t *Tx) TransitionLease(id assignment.LeaseID, from, to LeaseState) error {
 	if !ValidTransition(from, to) {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, to)
 	}
@@ -72,13 +74,13 @@ func (t *Tx) TransitionLease(id string, from, to LeaseState) error {
 // SetLeaseRuntimeName records the name the runtime registered under. It
 // is the correlation handle for provider lifecycle events: each lease
 // registers its own, so the name cannot cross attempts.
-func (t *Tx) SetLeaseRuntimeName(id, runtimeName string) error {
+func (t *Tx) SetLeaseRuntimeName(id assignment.LeaseID, runtimeName assignment.RuntimeName) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE capsule_leases SET runtime_name = ?, updated_at = unixepoch() WHERE id = ?`,
 		runtimeName, id))
 }
 
-func (t *Tx) LeaseByID(id string) (Lease, error) {
+func (t *Tx) LeaseByID(id assignment.LeaseID) (Lease, error) {
 	l, err := t.scanLease(t.tx.QueryRow(selectLease+`WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Lease{}, fmt.Errorf("%w: lease %s", ErrNotFound, id)
@@ -93,11 +95,11 @@ func (t *Tx) LeaseByID(id string) (Lease, error) {
 // lease is released - so unlike everything else that reads a lease, this
 // does not exclude terminal ones. The name is minted per lease, so it
 // resolves to one attempt or to none.
-func (t *Tx) AttemptOfRuntimeName(runtimeName string) (string, error) {
+func (t *Tx) AttemptOfRuntimeName(runtimeName assignment.RuntimeName) (assignment.AttemptID, error) {
 	if runtimeName == "" {
 		return "", fmt.Errorf("%w: no runtime name to resolve", ErrNotFound)
 	}
-	var attemptID string
+	var attemptID assignment.AttemptID
 	err := t.tx.QueryRow(
 		`SELECT attempt_id FROM capsule_leases WHERE runtime_name = ? ORDER BY rowid DESC LIMIT 1`,
 		runtimeName).Scan(&attemptID)
@@ -116,7 +118,7 @@ func (t *Tx) AttemptOfRuntimeName(runtimeName string) (string, error) {
 // a second, and a tie broken by a random id would answer this with either
 // of them. Insertion order is what "newest" means here and rowid is what
 // records it.
-func (t *Tx) LeaseByAttempt(attemptID string) (Lease, error) {
+func (t *Tx) LeaseByAttempt(attemptID assignment.AttemptID) (Lease, error) {
 	l, err := t.scanLease(t.tx.QueryRow(
 		selectLease+`WHERE attempt_id = ? ORDER BY rowid DESC LIMIT 1`, attemptID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -282,7 +284,7 @@ func (t *Tx) LeasesInStates(states ...LeaseState) ([]Lease, error) {
 // the runtime record of live work leaves an attempt nothing can finish
 // or explain. Resolve the attempt first — settle it, or hold it for
 // review — and the lease becomes purgeable.
-func (t *Tx) PurgeLease(id string) error {
+func (t *Tx) PurgeLease(id assignment.LeaseID) error {
 	res, err := t.tx.Exec(`
 		DELETE FROM capsule_leases
 		WHERE id = ? AND attempt_id NOT IN (
@@ -296,7 +298,7 @@ func (t *Tx) PurgeLease(id string) error {
 		return err
 	}
 	if n == 0 {
-		if _, err := t.LeaseByID(id); err != nil {
+		if _, err := t.LeaseByID(assignment.LeaseID(id)); err != nil {
 			return err
 		}
 		return fmt.Errorf("%w: lease %s still serves an unresolved attempt", ErrConflict, id)
@@ -333,26 +335,27 @@ func (t *Tx) scanIntent(r rowScanner) (ResourceIntent, error) {
 // external effect. The deterministic name is the recovery handle: a
 // crash after the create call finds the object — or proves its absence
 // — by the name this row already carries.
-func (t *Tx) PlanResource(leaseID string, kind ResourceKind, role, name string) (int64, error) {
+func (t *Tx) PlanResource(leaseID assignment.LeaseID, kind ResourceKind, role, name string) (assignment.ResourceIntentID, error) {
 	res, err := t.tx.Exec(
 		`INSERT INTO resource_intents (lease_id, kind, role, name) VALUES (?, ?, ?, ?)`,
 		leaseID, kind, role, name)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	return assignment.ResourceIntentID(id), err
 }
 
 // MarkResourceCreating records that the create call is about to run: the
 // window in which existence is ambiguous, resolved by the name.
-func (t *Tx) MarkResourceCreating(id int64) error {
+func (t *Tx) MarkResourceCreating(id assignment.ResourceIntentID) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE resource_intents SET state = 'creating', updated_at = unixepoch()
 		 WHERE id = ? AND state = 'planned'`, id))
 }
 
 // MarkResourcePresent confirms the object exists under this id.
-func (t *Tx) MarkResourcePresent(id int64, dockerID string) error {
+func (t *Tx) MarkResourcePresent(id assignment.ResourceIntentID, dockerID string) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE resource_intents SET state = 'present', docker_id = ?, updated_at = unixepoch()
 		 WHERE id = ? AND state IN ('planned', 'creating')`, dockerID, id))
@@ -361,7 +364,7 @@ func (t *Tx) MarkResourcePresent(id int64, dockerID string) error {
 // MarkResourceCleanup queues every one of a lease's intents for
 // removal. Objects that never confirmed are queued too: a creating
 // intent's object may exist, and only the delete path proves otherwise.
-func (t *Tx) MarkResourceCleanup(leaseID string) error {
+func (t *Tx) MarkResourceCleanup(leaseID assignment.LeaseID) error {
 	_, err := t.tx.Exec(
 		`UPDATE resource_intents SET state = 'cleanup_pending', updated_at = unixepoch()
 		 WHERE lease_id = ? AND state IN ('planned', 'creating', 'present')`, leaseID)
@@ -369,7 +372,7 @@ func (t *Tx) MarkResourceCleanup(leaseID string) error {
 }
 
 // MarkResourceDeleting records that the delete call is about to run.
-func (t *Tx) MarkResourceDeleting(id int64) error {
+func (t *Tx) MarkResourceDeleting(id assignment.ResourceIntentID) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE resource_intents SET state = 'deleting', updated_at = unixepoch()
 		 WHERE id = ? AND state IN ('cleanup_pending', 'deleting')`, id))
@@ -377,7 +380,7 @@ func (t *Tx) MarkResourceDeleting(id int64) error {
 
 // ForgetResource is the intent reaching absent: the object is proven
 // gone, so the row goes with it.
-func (t *Tx) ForgetResource(id int64) error {
+func (t *Tx) ForgetResource(id assignment.ResourceIntentID) error {
 	return t.mustAffect(t.tx.Exec(`DELETE FROM resource_intents WHERE id = ?`, id))
 }
 
@@ -385,7 +388,7 @@ func (t *Tx) ForgetResource(id int64) error {
 // bounded retries with exponential backoff and jitter live on the row,
 // so the periodic reconciler paces each resource instead of hammering
 // the daemon.
-func (t *Tx) RecordResourceError(id int64, attemptErr error, notBefore time.Time) error {
+func (t *Tx) RecordResourceError(id assignment.ResourceIntentID, attemptErr error, notBefore time.Time) error {
 	msg := ""
 	if attemptErr != nil {
 		msg = attemptErr.Error()
@@ -396,7 +399,7 @@ func (t *Tx) RecordResourceError(id int64, attemptErr error, notBefore time.Time
 }
 
 // Resources lists a lease's intents, oldest first.
-func (t *Tx) Resources(leaseID string) ([]ResourceIntent, error) {
+func (t *Tx) Resources(leaseID assignment.LeaseID) ([]ResourceIntent, error) {
 	rows, err := t.tx.Query(selectIntent+`WHERE lease_id = ? ORDER BY id`, leaseID)
 	if err != nil {
 		return nil, err

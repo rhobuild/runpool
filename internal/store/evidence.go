@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // Evidence is what is durably known about whether an attempt's workload
@@ -108,7 +110,7 @@ const (
 //
 // A silent no-op is the one outcome this must never produce: the caller
 // would believe something was recorded when nothing was.
-func (t *Tx) RecordEvidence(attemptID string, e Evidence) error {
+func (t *Tx) RecordEvidence(attemptID assignment.AttemptID, e Evidence) error {
 	if !e.Valid() {
 		return fmt.Errorf("%w: %q", ErrInvalidExecutionObservation, string(e))
 	}
@@ -134,7 +136,7 @@ func (t *Tx) RecordEvidence(attemptID string, e Evidence) error {
 	// the row in between, nothing is written and the conflict is
 	// reported rather than resolved by overwriting.
 	affected, err := t.q.RecordAttemptEvidence(t.ctx, sqlitedb.RecordAttemptEvidenceParams{
-		Next: string(e), AttemptID: attemptID, Current: string(current),
+		Next: string(e), AttemptID: string(attemptID), Current: string(current),
 	})
 	if err != nil {
 		return err
@@ -149,7 +151,7 @@ func (t *Tx) RecordEvidence(attemptID string, e Evidence) error {
 // RecordEvidenceForLease advances the evidence of the attempt a lease is
 // serving. The runtime paths hold a lease and observe the capsule; the
 // record they are updating is the attempt's.
-func (t *Tx) RecordEvidenceForLease(leaseID string, e Evidence) error {
+func (t *Tx) RecordEvidenceForLease(leaseID assignment.LeaseID, e Evidence) error {
 	lease, err := t.LeaseByID(leaseID)
 	if err != nil {
 		return err

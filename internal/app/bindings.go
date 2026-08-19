@@ -10,6 +10,8 @@ import (
 	"github.com/rhobuild/runpool/internal/credential"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // buildBindings resolves every configured (target, tier) pair into a
@@ -22,7 +24,7 @@ import (
 // result. Creating-or-adopting the scale set is the binding's own loop's
 // first act, where a failure is retried instead of ending the process.
 func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, environ func(string) string) error {
-	var claimed []int64
+	var claimed []assignment.BindingID
 	tiers := make(map[string]config.Tier, len(cfg.Tiers))
 	for _, t := range cfg.Tiers {
 		tiers[t.ID] = t
@@ -70,10 +72,11 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 			// The neutral binding row comes first: it keys the delivery,
 			// attempt and lease machinery.
 			sourceBindingKey := sourceBindingKey(target, tb.ScaleSetName)
-			var bindingID, knownSetID int64
+			var bindingID assignment.BindingID
+			var knownSetID int64
 			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 				var err error
-				if bindingID, err = tx.EnsureBinding(target.ID, "github_actions", sourceBindingKey); err != nil {
+				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID), "github_actions", assignment.SourceBindingKey(sourceBindingKey)); err != nil {
 					return err
 				}
 				// The scale set id recorded against this binding is the
@@ -86,7 +89,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				return err
 			}
 			b := &binding{
-				key:    target.ID + "/" + tier.ID,
+				key:    assignment.BindingKey(target.ID + "/" + tier.ID),
 				target: target,
 				tier:   tier,
 				ref:    ref,
@@ -107,11 +110,11 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				maxLanes:     laneCeiling(cfg, tier),
 				capsuleImage: tier.Image(s.shippedCapsuleImage),
 			}
-			if err := s.alloc.Register(tier.ID, b.key, tier.Parallelism); err != nil {
+			if err := s.alloc.Register(assignment.TierID(tier.ID), b.key, tier.Parallelism); err != nil {
 				return err
 			}
 			s.bindings = append(s.bindings, b)
-			s.byBinding[bindingID] = b
+			s.byBinding[int64(bindingID)] = b
 			claimed = append(claimed, bindingID)
 		}
 	}

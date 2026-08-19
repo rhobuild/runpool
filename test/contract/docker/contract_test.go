@@ -26,6 +26,8 @@ import (
 	"github.com/rhobuild/runpool/internal/platform"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // busybox is the smallest image that can run a command. It is pinned by
@@ -287,7 +289,7 @@ func TestOwnershipQueries(t *testing.T) {
 		}
 	})
 
-	containers, err := c.ListOwnedContainers(ctx, instance)
+	containers, err := c.ListOwnedContainers(ctx, assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatalf("list containers: %v", err)
 	}
@@ -303,7 +305,7 @@ func TestOwnershipQueries(t *testing.T) {
 		t.Error("a started container reported as not running; recovery would clean up live work")
 	}
 
-	volumes, err := c.ListOwnedVolumes(ctx, instance)
+	volumes, err := c.ListOwnedVolumes(ctx, assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatalf("list volumes: %v", err)
 	}
@@ -311,7 +313,7 @@ func TestOwnershipQueries(t *testing.T) {
 		t.Errorf("owned volumes = %+v; want the one just created", volumes)
 	}
 
-	networks, err := c.ListOwnedNetworks(ctx, instance)
+	networks, err := c.ListOwnedNetworks(ctx, assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatalf("list networks: %v", err)
 	}
@@ -322,7 +324,7 @@ func TestOwnershipQueries(t *testing.T) {
 	// Another instance's query must not see any of it: the instance
 	// label is what keeps two controllers on one host from sweeping
 	// each other's capsules.
-	foreign, err := c.ListOwnedContainers(ctx, instance+"-other")
+	foreign, err := c.ListOwnedContainers(ctx, assignment.InstanceID(instance+"-other"))
 	if err != nil {
 		t.Fatalf("list for a foreign instance: %v", err)
 	}
@@ -411,25 +413,25 @@ func TestOwnedIDByName(t *testing.T) {
 	}
 	t.Cleanup(func() { mustRemoveContainer(t, c, ctx, id) })
 
-	got, err := c.OwnedIDByName(ctx, "container", name, instance, "lease-own")
+	got, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "lease-own")
 	if err != nil || got != id {
 		t.Errorf("owned resolution = %q, %v; want the created id", got, err)
 	}
 
 	// Same name, different lease: name equality is not ownership.
-	if _, err := c.OwnedIDByName(ctx, "container", name, instance, "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
+	if _, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
 		t.Errorf("foreign resolution = %v; want ErrForeignResource — adopting by name "+
 			"would run work through someone else's object and later delete it", err)
 	}
-	if err := c.RemoveOwnedContainer(ctx, name, instance, "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedContainer(ctx, name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
 		t.Fatalf("foreign removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "container", name, instance, "lease-own"); err != nil || got != id {
+	if got, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "lease-own"); err != nil || got != id {
 		t.Fatalf("foreign removal changed the owned object: id=%q err=%v", got, err)
 	}
 
 	// Absence is an answer: the create never took effect.
-	if got, err := c.OwnedIDByName(ctx, "container", instance+"-never-existed", instance, "lease-own"); err != nil || got != "" {
+	if got, err := c.OwnedIDByName(ctx, "container", instance+"-never-existed", assignment.InstanceID(instance), "lease-own"); err != nil || got != "" {
 		t.Errorf("absent resolution = %q, %v; want empty and no error", got, err)
 	}
 }
@@ -455,10 +457,10 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 			t.Errorf("cleanup network %s: %v", networkID, err)
 		}
 	})
-	if err := c.RemoveOwnedNetwork(ctx, networkID, instance, "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedNetwork(ctx, networkID, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
 		t.Fatalf("foreign network removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "network", networkName, instance, "lease-owner"); err != nil || got != networkID {
+	if got, err := c.OwnedIDByName(ctx, "network", networkName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != networkID {
 		t.Fatalf("network changed after refused removal: id=%q err=%v", got, err)
 	}
 
@@ -471,10 +473,10 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 			t.Errorf("cleanup volume %s: %v", volumeName, err)
 		}
 	})
-	if err := c.RemoveOwnedVolume(ctx, volumeName, instance, "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedVolume(ctx, volumeName, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
 		t.Fatalf("foreign volume removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "volume", volumeName, instance, "lease-owner"); err != nil || got != volumeName {
+	if got, err := c.OwnedIDByName(ctx, "volume", volumeName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != volumeName {
 		t.Fatalf("volume changed after refused removal: id=%q err=%v", got, err)
 	}
 }
@@ -584,17 +586,17 @@ func TestCacheLaneVolumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	mgr := cache.New(st, c, instance)
+	mgr := cache.New(st, c, assignment.InstanceID(instance))
 
 	release := func(lease string) {
 		t.Helper()
-		if err := st.Tx(ctx, func(tx *store.Tx) error { return tx.ReleaseCacheLane(lease) }); err != nil {
+		if err := st.Tx(ctx, func(tx *store.Tx) error { return tx.ReleaseCacheLane(assignment.LeaseID(lease)) }); err != nil {
 			t.Fatal(err)
 		}
 	}
 	acquire := func(gen, lease string) cache.LaneMount {
 		t.Helper()
-		loc, ok, err := mgr.Acquire(ctx, "https://github.com/acme/app", gen, lease, 2)
+		loc, ok, err := mgr.Acquire(ctx, "https://github.com/acme/app", gen, assignment.LeaseID(lease), 2)
 		if err != nil || !ok {
 			t.Fatalf("acquire %s/%s: ok=%v, %v", gen, lease, ok, err)
 		}
@@ -650,11 +652,11 @@ func TestCacheLaneVolumes(t *testing.T) {
 	if err := mgr.DeleteLane(ctx, first.LaneID); err != nil {
 		t.Fatal(err)
 	}
-	gone, err := c.OwnedIDByName(ctx, "volume", first.Volume, instance, "")
+	gone, err := c.OwnedIDByName(ctx, "volume", first.Volume, assignment.InstanceID(instance), "")
 	if err != nil || gone != "" {
 		t.Errorf("evicted volume still resolves: %q, %v", gone, err)
 	}
-	left, err := c.OwnedIDByName(ctx, "volume", other.Volume, instance, "")
+	left, err := c.OwnedIDByName(ctx, "volume", other.Volume, assignment.InstanceID(instance), "")
 	if err != nil || left == "" {
 		t.Errorf("the surviving lane's volume is gone: %q, %v", left, err)
 	}
@@ -666,7 +668,7 @@ func TestCacheLaneVolumes(t *testing.T) {
 func TestFilesystemProbe(t *testing.T) {
 	c, instance := client(t)
 
-	free, err := c.ProbeFilesystemFree(t.Context(), busybox, instance)
+	free, err := c.ProbeFilesystemFree(t.Context(), busybox, assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +703,7 @@ func TestOwnedVolumeUsage(t *testing.T) {
 		t.Fatalf("writer: exit %d, %v, %s", code, err, out)
 	}
 
-	usage, err := c.OwnedVolumeUsage(ctx, instance)
+	usage, err := c.OwnedVolumeUsage(ctx, assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,7 +790,7 @@ func TestCleanupSurvivesCancellation(t *testing.T) {
 	}
 
 	// The helper is gone despite the cancellation.
-	left, err := c.ListOwnedContainers(context.Background(), instance)
+	left, err := c.ListOwnedContainers(context.Background(), assignment.InstanceID(instance))
 	if err != nil {
 		t.Fatalf("list after cancellation: %v", err)
 	}

@@ -8,6 +8,8 @@ import (
 
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // fakeVolumes stands in for the daemon: it remembers what was ensured
@@ -33,7 +35,7 @@ func (f *fakeVolumes) EnsureOwnedVolume(_ context.Context, name string, labels m
 	return nil
 }
 
-func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind, name, instanceID, leaseID string) (string, error) {
+func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	if f.foreign {
 		return "", docker.ErrForeignResource
 	}
@@ -51,7 +53,7 @@ func (f *fakeVolumes) RemoveVolume(_ context.Context, name string) error {
 
 // sizes lets a GC test weigh volumes; unset names report unknown (-1),
 // like a daemon that could not compute a size.
-func (f *fakeVolumes) OwnedVolumeUsage(context.Context, string) ([]docker.VolumeUsage, error) {
+func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
 	var out []docker.VolumeUsage
 	for name, labels := range f.ensured {
 		size := int64(-1)
@@ -81,10 +83,10 @@ const repoURL = "https://github.com/acme/app"
 // release frees a lease's lane the way production does: inside a store
 // transaction, where the finalizing commit runs it alongside the lease's
 // own release.
-func release(t *testing.T, st *store.Store, leaseID string) error {
+func release(t *testing.T, st *store.Store, leaseID assignment.LeaseID) error {
 	t.Helper()
 	return st.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.ReleaseCacheLane(leaseID)
+		return tx.ReleaseCacheLane(assignment.LeaseID(leaseID))
 	})
 }
 

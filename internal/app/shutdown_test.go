@@ -10,6 +10,8 @@ import (
 
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // gatedSession reports when its Close begins and then holds until the
@@ -48,10 +50,10 @@ func TestSessionsCloseTogether(t *testing.T) {
 	defer close(release)
 
 	s := &Controller{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	for _, key := range []string{"a", "b", "c"} {
+	for _, key := range []assignment.BindingKey{"a", "b", "c"} {
 		s.bindings = append(s.bindings, &binding{
 			key:     key,
-			session: &gatedSession{started: started, release: release, key: key},
+			session: &gatedSession{started: started, release: release, key: string(key)},
 		})
 	}
 	// A binding whose loop never opened a session has nothing to close;
@@ -82,15 +84,15 @@ func TestSessionsCloseTogether(t *testing.T) {
 // mutation half needs to see some.
 type countingRemover struct{ calls atomic.Int64 }
 
-func (c *countingRemover) RemoveOwnedContainer(context.Context, string, string, string) error {
+func (c *countingRemover) RemoveOwnedContainer(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	c.calls.Add(1)
 	return nil
 }
-func (c *countingRemover) RemoveOwnedNetwork(context.Context, string, string, string) error {
+func (c *countingRemover) RemoveOwnedNetwork(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	c.calls.Add(1)
 	return nil
 }
-func (c *countingRemover) RemoveOwnedVolume(context.Context, string, string, string) error {
+func (c *countingRemover) RemoveOwnedVolume(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	c.calls.Add(1)
 	return nil
 }

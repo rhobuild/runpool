@@ -14,14 +14,14 @@ import (
 func nameRuntime(t *testing.T, h *harness, lease store.Lease, runtimeName string) {
 	t.Helper()
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLeaseRuntimeName(lease.ID, runtimeName)
+		return tx.SetLeaseRuntimeName(lease.ID, assignment.RuntimeName(runtimeName))
 	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // eventsOf lists an attempt's recorded lifecycle.
-func eventsOf(t *testing.T, h *harness, attemptID string) []string {
+func eventsOf(t *testing.T, h *harness, attemptID assignment.AttemptID) []string {
 	t.Helper()
 	var kinds []string
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
@@ -79,7 +79,7 @@ func TestExecutionIsRecordedAgainstTheWorkloadThatRan(t *testing.T) {
 	var requeuedAttempt string
 	for _, a := range h.ready() {
 		if a.SourceWorkloadKey == "job-requeued" {
-			requeuedAttempt = a.ID
+			requeuedAttempt = string(a.ID)
 		}
 	}
 	if requeuedAttempt == "" {
@@ -96,7 +96,7 @@ func TestExecutionIsRecordedAgainstTheWorkloadThatRan(t *testing.T) {
 		}},
 	})
 
-	if !contains(eventsOf(t, h, requeuedAttempt), "running_observed") {
+	if !contains(eventsOf(t, h, assignment.AttemptID(requeuedAttempt)), "running_observed") {
 		t.Error("the workload that ran has no record of running; its evidence went elsewhere")
 	}
 	if contains(eventsOf(t, h, lapsedAttempt), "running_observed") {
@@ -163,10 +163,10 @@ func TestALateObservationStaysWithTheAttemptThatRanIt(t *testing.T) {
 	var successor string
 	for _, a := range h.ready() {
 		if a.SourceWorkloadKey == "job-requeued" {
-			successor = a.ID
+			successor = string(a.ID)
 		}
 	}
-	if successor == "" || successor == firstAttempt {
+	if successor == "" || assignment.AttemptID(successor) == firstAttempt {
 		t.Fatalf("the requeue left no successor attempt (got %q against the first %q); "+
 			"this case needs two attempts for one workload", successor, firstAttempt)
 	}
@@ -183,7 +183,7 @@ func TestALateObservationStaysWithTheAttemptThatRanIt(t *testing.T) {
 	if !contains(eventsOf(t, h, firstAttempt), "exit_observed") {
 		t.Error("the attempt whose runner produced the observation has no record of it")
 	}
-	if contains(eventsOf(t, h, successor), "exit_observed") {
+	if contains(eventsOf(t, h, assignment.AttemptID(successor)), "exit_observed") {
 		t.Error("the successor is recorded as having exited; it holds no lease and has " +
 			"started nothing, so an operator reading its trail is told a run happened")
 	}
@@ -212,10 +212,10 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 	var successor string
 	for _, a := range h.ready() {
 		if a.SourceWorkloadKey == "job-requeued" {
-			successor = a.ID
+			successor = string(a.ID)
 		}
 	}
-	if successor == "" || successor == firstAttempt {
+	if successor == "" || assignment.AttemptID(successor) == firstAttempt {
 		t.Fatalf("the requeue left no successor attempt (got %q against the first %q)",
 			successor, firstAttempt)
 	}
@@ -236,7 +236,7 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 	var after store.Attempt
 	h.inStore(func(tx *store.Tx) error {
 		var err error
-		after, err = tx.Get(successor)
+		after, err = tx.Get(assignment.AttemptID(successor))
 		return err
 	})
 	if after.State != "ready" {
@@ -259,7 +259,7 @@ func TestASecondServingsHintsAreNotSwallowed(t *testing.T) {
 	firstLease, attemptID := leaseFor(t, h, "job-retried")
 	nameRuntime(t, h, firstLease, "runpool-first")
 
-	hint := func(runtime string) {
+	hint := func(runtime assignment.RuntimeName) {
 		h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 			ID: 910,
 			Started: []assignment.WorkloadLifecycleEvent{{

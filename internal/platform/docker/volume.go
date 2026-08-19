@@ -6,6 +6,8 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // CreateVolume creates a named, labeled volume — an ephemeral capsule
@@ -49,7 +51,7 @@ func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	return ignoreNotFound(err)
 }
 
-func (c *Client) ListOwnedVolumes(ctx context.Context, instanceID string) ([]OwnedResource, error) {
+func (c *Client) ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]OwnedResource, error) {
 	resp, err := c.cli.VolumeList(ctx, client.VolumeListOptions{Filters: ownedFilter(instanceID)})
 	if err != nil {
 		return nil, err

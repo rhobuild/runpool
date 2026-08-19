@@ -32,7 +32,7 @@ func TestReconcileAdoptsWhatIsStillRunning(t *testing.T) {
 	}
 
 	h.objects.containers = []docker.OwnedContainer{
-		{ID: "runner-alive", Role: capsule.RoleCapsule, LeaseID: alive.ID, Running: true},
+		{ID: "runner-alive", Role: capsule.RoleCapsule, LeaseID: string(alive.ID), Running: true},
 	}
 	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
 	h.srv.wait = &fakeWaiter{}
@@ -83,7 +83,7 @@ func TestSweepPeriodicallyKeepsWhatIsBeingWorkedOn(t *testing.T) {
 	}
 	live, _ := leaseFor(t, h, "job-1")
 	h.objects.containers = []docker.OwnedContainer{
-		{ID: "runner-live", Role: capsule.RoleCapsule, LeaseID: live.ID, Running: true},
+		{ID: "runner-live", Role: capsule.RoleCapsule, LeaseID: string(live.ID), Running: true},
 		{ID: "runner-orphan", Role: capsule.RoleCapsule, LeaseID: "lse-vanished"},
 	}
 

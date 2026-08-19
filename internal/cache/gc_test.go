@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // gcFixture builds lanes with controlled ages and sizes. Ages are set
@@ -17,7 +19,7 @@ func gcFixture(t *testing.T) (*LaneManager, *store.Store, *fakeVolumes) {
 
 func addLane(t *testing.T, m *LaneManager, st *store.Store, vols *fakeVolumes, repo, gen, lease string, ageDays int, size int64) LaneMount {
 	t.Helper()
-	loc, ok, err := m.Acquire(t.Context(), repo, gen, lease, 10)
+	loc, ok, err := m.Acquire(t.Context(), repo, gen, assignment.LeaseID(lease), 10)
 	if err != nil || !ok {
 		t.Fatalf("acquire: ok=%v, %v", ok, err)
 	}
@@ -26,7 +28,7 @@ func addLane(t *testing.T, m *LaneManager, st *store.Store, vols *fakeVolumes, r
 		if err := tx.BackdateCacheLane(loc.LaneID, time.Duration(ageDays)*day); err != nil {
 			return err
 		}
-		return tx.ReleaseCacheLane(lease)
+		return tx.ReleaseCacheLane(assignment.LeaseID(lease))
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // stubSession is a message session a test can break on purpose. The
@@ -323,7 +325,7 @@ func TestAReopenedSessionPublishesItsBacklog(t *testing.T) {
 	// at zero demand it is left with the discovery credit, which this
 	// one's demand of 1 matches.
 	const rival = "other/standard"
-	if err := h.srv.alloc.Register(h.bind.tier.ID, rival, 4); err != nil {
+	if err := h.srv.alloc.Register(assignment.TierID(h.bind.tier.ID), rival, 4); err != nil {
 		t.Fatal(err)
 	}
 	h.srv.alloc.SetAssignedDemand(rival, 1)

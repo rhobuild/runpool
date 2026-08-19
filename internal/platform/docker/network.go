@@ -6,6 +6,8 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // NetworkSpec describes a user-defined bridge. Isolated is Engine 28's
@@ -150,7 +152,7 @@ type OwnedResource struct {
 	Role    string
 }
 
-func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID string) ([]OwnedResource, error) {
+func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]OwnedResource, error) {
 	nets, err := c.cli.NetworkList(ctx, client.NetworkListOptions{Filters: ownedFilter(instanceID)})
 	if err != nil {
 		return nil, err

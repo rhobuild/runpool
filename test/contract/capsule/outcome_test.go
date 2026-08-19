@@ -38,7 +38,7 @@ func prepared(t *testing.T) (*capsule.Launcher, *docker.Client, capsule.Prepared
 	t.Cleanup(func() { rec.cleanup(t, dock) })
 
 	runtime, err := m.Prepare(ctx, capsule.Spec{
-		LeaseID:      leaseID,
+		LeaseID:      assignment.LeaseID(leaseID),
 		InstanceID:   "contract",
 		CapsuleImage: image,
 		JITConfig:    fakeJITConfig,
@@ -67,7 +67,7 @@ func TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 
-	code, out, err := dock.Exec(ctx, runtime.RuntimeID, []string{"cat", controlProtocolFile})
+	code, out, err := dock.Exec(ctx, string(runtime.RuntimeID), []string{"cat", controlProtocolFile})
 	if err != nil || code != 0 {
 		t.Fatalf("read %s: exit %d, %v: %s", controlProtocolFile, code, err, out)
 	}
@@ -95,7 +95,7 @@ func TestPrepareWaitsForAProvenDaemon(t *testing.T) {
 	// Asked once, with no retry on purpose. A poll here would prove only
 	// that the daemon comes up eventually, which was never in doubt; the
 	// claim is that it is already up at the instant prepare returned.
-	code, out, err := dock.Exec(ctx, runtime.RuntimeID, []string{"docker", "--host=" + innerDockerSocket, "info"})
+	code, out, err := dock.Exec(ctx, string(runtime.RuntimeID), []string{"docker", "--host=" + innerDockerSocket, "info"})
 	if err != nil {
 		t.Fatalf("probe the inner daemon: %v", err)
 	}
@@ -124,11 +124,11 @@ func TestAbortBeforeStartExitsWithTheReservedCode(t *testing.T) {
 		t.Fatalf("pre-stop observation = %s, %v; want created", obs, err)
 	}
 
-	if code, out, err := dock.ExecWithInput(ctx, runtime.RuntimeID, []string{"kill", "-TERM", "1"}, nil); err != nil || code != 0 {
+	if code, out, err := dock.ExecWithInput(ctx, string(runtime.RuntimeID), []string{"kill", "-TERM", "1"}, nil); err != nil || code != 0 {
 		t.Fatalf("signal the supervisor: exit %d, %v: %s", code, err, out)
 	}
 
-	exit, err := dock.WaitExit(ctx, runtime.RuntimeID)
+	exit, err := dock.WaitExit(ctx, string(runtime.RuntimeID))
 	if err != nil {
 		t.Fatalf("wait: %v", err)
 	}

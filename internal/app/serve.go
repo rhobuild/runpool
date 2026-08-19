@@ -112,7 +112,7 @@ type Options struct {
 // delivery and attempt identity live in the store, and claiming an
 // attempt is a compare-and-swap only one caller can win.
 type binding struct {
-	key    string
+	key    assignment.BindingKey
 	target config.Target
 	tier   config.Tier
 	ref    config.TargetRef
@@ -153,7 +153,7 @@ type binding struct {
 	// broker expires a session on is not, and only elapsed time tells the
 	// two apart. Owned by the binding's own loop.
 	conflictSince time.Time
-	bindingID     int64
+	bindingID     assignment.BindingID
 	cacheEnabled  bool
 	generation    string
 	// capsuleImage is what this binding launches: its tier's image where
@@ -324,7 +324,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	owner := "runpool-" + st.InstanceID()[:8]
 	for _, b := range s.bindings {
 		b.newSession = func(ctx context.Context) (providerSession, error) {
-			return b.gh.OpenSession(ctx, b.scaleSetID, owner)
+			return b.gh.OpenSession(ctx, b.scaleSetID, string(owner))
 		}
 	}
 	// A session the broker still holds is one the next start has to wait
@@ -425,9 +425,9 @@ type providerSession interface {
 // this interface rather than the client itself, the whole startup and
 // sweep path becomes reachable from a test.
 type ownedObjects interface {
-	ListOwnedContainers(ctx context.Context, instanceID string) ([]docker.OwnedContainer, error)
-	ListOwnedNetworks(ctx context.Context, instanceID string) ([]docker.OwnedResource, error)
-	ListOwnedVolumes(ctx context.Context, instanceID string) ([]docker.OwnedResource, error)
+	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedContainer, error)
+	ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedResource, error)
+	ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedResource, error)
 	RemoveContainer(ctx context.Context, id string) error
 	RemoveNetwork(ctx context.Context, id string) error
 	RemoveVolume(ctx context.Context, name string) error
@@ -470,7 +470,14 @@ type Controller struct {
 	// are stranded — nobody's — and which are simply being worked on, and
 	// it is the mutual exclusion that keeps two owners from releasing the
 	// same admission credit twice.
-	inFlight sync.Map
+	//
+	// A typed map under a mutex rather than a sync.Map: a sync.Map keys on
+	// `any`, so a caller passing a plain string where the id type is
+	// meant compiles, misses every entry, and hands two owners the same
+	// lease. The type checker covers the key here, and the map is only
+	// ever as large as the live leases, so the lock is uncontended.
+	inFlightMu sync.Mutex
+	inFlight   map[assignment.LeaseID]struct{}
 
 	// disk owns the pressure level and everything that moves it. The
 	// controller reads the level in force on the admission path and does
@@ -583,9 +590,21 @@ func (s *Controller) closeSessions() {
 // another goroutine already holds it, which is what keeps the periodic
 // reconciler off a lease that is still being driven — and keeps two owners
 // from each concluding the lease is done and releasing its credit.
-func (s *Controller) claimLease(leaseID string) bool {
-	_, loaded := s.inFlight.LoadOrStore(leaseID, struct{}{})
-	return !loaded
+func (s *Controller) claimLease(leaseID assignment.LeaseID) bool {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if _, held := s.inFlight[leaseID]; held {
+		return false
+	}
+	if s.inFlight == nil {
+		s.inFlight = map[assignment.LeaseID]struct{}{}
+	}
+	s.inFlight[leaseID] = struct{}{}
+	return true
 }
 
-func (s *Controller) releaseLease(leaseID string) { s.inFlight.Delete(leaseID) }
+func (s *Controller) releaseLease(leaseID assignment.LeaseID) {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	delete(s.inFlight, leaseID)
+}

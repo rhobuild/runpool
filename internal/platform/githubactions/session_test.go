@@ -8,9 +8,9 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
-func offer(key string, request int64) assignment.WorkloadAssignment {
+func offer(key assignment.SourceWorkloadKey, request int64) assignment.WorkloadAssignment {
 	return assignment.WorkloadAssignment{
-		SourceWorkloadKey: key, TenantKey: "acme", ProjectKey: "app",
+		SourceWorkloadKey: string(key), TenantKey: "acme", ProjectKey: "app",
 		SourceRequestID: request,
 	}
 }

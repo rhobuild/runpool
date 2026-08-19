@@ -18,6 +18,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // Ownership labels: every resource Runpool creates is identifiable and
@@ -295,14 +297,14 @@ var ErrForeignResource = errors.New("an object with the expected name exists but
 // create-side conflict it means the conflict was transient, and for
 // recovery it proves the create never took effect. A name match with
 // foreign labels is ErrForeignResource — name equality is not ownership.
-func (c *Client) OwnedIDByName(ctx context.Context, kind, name, instanceID, leaseID string) (string, error) {
+func (c *Client) OwnedIDByName(ctx context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	return c.resolveOwnedID(ctx, kind, name, instanceID, leaseID)
 }
 
 // resolveOwnedID accepts either a deterministic name or an immutable daemon
 // id. Creation recovery calls it by name; destructive cleanup calls it by the
 // confirmed id when one was persisted.
-func (c *Client) resolveOwnedID(ctx context.Context, kind, reference, instanceID, leaseID string) (string, error) {
+func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	var id string
 	var labels map[string]string
 	switch kind {
@@ -336,7 +338,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference, instanceID
 	default:
 		return "", fmt.Errorf("unknown resource kind %q", kind)
 	}
-	if labels[LabelManaged] != "true" || labels[LabelInstance] != instanceID || labels[LabelLease] != leaseID {
+	if labels[LabelManaged] != "true" || labels[LabelInstance] != string(instanceID) || labels[LabelLease] != string(leaseID) {
 		return "", fmt.Errorf("%w: %s %q", ErrForeignResource, kind, reference)
 	}
 	return id, nil
@@ -346,7 +348,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference, instanceID
 // expected instance and lease, then removes the exact inspected id. This is
 // the destructive counterpart of OwnedIDByName: a stale intent must never
 // delete a foreign object that later reused its deterministic name.
-func (c *Client) RemoveOwnedContainer(ctx context.Context, reference, instanceID, leaseID string) error {
+func (c *Client) RemoveOwnedContainer(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
 	id, err := c.resolveOwnedID(ctx, "container", reference, instanceID, leaseID)
 	if err != nil || id == "" {
 		return err
@@ -354,7 +356,7 @@ func (c *Client) RemoveOwnedContainer(ctx context.Context, reference, instanceID
 	return c.RemoveContainer(ctx, id)
 }
 
-func (c *Client) RemoveOwnedNetwork(ctx context.Context, reference, instanceID, leaseID string) error {
+func (c *Client) RemoveOwnedNetwork(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
 	id, err := c.resolveOwnedID(ctx, "network", reference, instanceID, leaseID)
 	if err != nil || id == "" {
 		return err
@@ -362,7 +364,7 @@ func (c *Client) RemoveOwnedNetwork(ctx context.Context, reference, instanceID, 
 	return c.RemoveNetwork(ctx, id)
 }
 
-func (c *Client) RemoveOwnedVolume(ctx context.Context, reference, instanceID, leaseID string) error {
+func (c *Client) RemoveOwnedVolume(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
 	name, err := c.resolveOwnedID(ctx, "volume", reference, instanceID, leaseID)
 	if err != nil || name == "" {
 		return err
@@ -438,7 +440,7 @@ func (c OwnedContainer) HelperInFlight() bool { return c.LeaseID == "" && c.Runn
 
 // ListOwnedContainers finds every container this instance stamped,
 // running or not — the reconciliation working set after a crash.
-func (c *Client) ListOwnedContainers(ctx context.Context, instanceID string) ([]OwnedContainer, error) {
+func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]OwnedContainer, error) {
 	list, err := c.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: ownedFilter(instanceID),
@@ -464,8 +466,8 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID string) ([]
 	return out, nil
 }
 
-func ownedFilter(instanceID string) client.Filters {
+func ownedFilter(instanceID assignment.InstanceID) client.Filters {
 	return client.Filters{}.
 		Add("label", LabelManaged+"=true").
-		Add("label", LabelInstance+"="+instanceID)
+		Add("label", LabelInstance+"="+string(instanceID))
 }

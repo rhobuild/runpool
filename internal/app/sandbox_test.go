@@ -12,6 +12,8 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/docker"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 func TestSandboxStateSnapshotsAreIndependent(t *testing.T) {
@@ -113,7 +115,7 @@ func (f *fakeSandboxDaemon) AllNetworkSubnets(context.Context) ([]string, error)
 func (f *fakeSandboxDaemon) RunTask(context.Context, docker.ContainerSpec) (int64, string, error) {
 	return 0, f.probeOut, f.probeErr
 }
-func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, string) ([]docker.OwnedContainer, error) {
+func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

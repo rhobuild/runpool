@@ -119,7 +119,7 @@ func observation(kind assignment.LifecycleKind, b scaleset.JobMessageBase, runne
 		SourceWorkloadKey: b.JobID,
 		TenantKey:         b.OwnerName,
 		ProjectKey:        b.RepositoryName,
-		RuntimeName:       runnerName,
+		RuntimeName:       assignment.RuntimeName(runnerName),
 		RuntimeID:         int64(runnerID),
 		Result:            result,
 	}

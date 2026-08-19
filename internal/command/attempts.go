@@ -39,8 +39,8 @@ type attemptView struct {
 
 func viewOf(a store.Attempt, now time.Time) attemptView {
 	return attemptView{
-		ID:           a.ID,
-		Workload:     a.SourceWorkloadKey,
+		ID:           string(a.ID),
+		Workload:     string(a.SourceWorkloadKey),
 		Project:      a.TenantKey + "/" + a.ProjectKey,
 		State:        a.State,
 		ReviewReason: a.ReviewReason,
@@ -139,15 +139,15 @@ func listAttempts(s *store.Tx, stateFilter string) ([]store.Attempt, error) {
 
 func runAttemptsInspect(streams IO, id string, asJSON bool) error {
 	err := inReadOnlyStore(func(s *store.Tx) error {
-		attempt, err := s.Get(id)
+		attempt, err := s.Get(assignment.AttemptID(id))
 		if err != nil {
 			return err
 		}
-		events, err := s.Events(id)
+		events, err := s.Events(assignment.AttemptID(id))
 		if err != nil {
 			return err
 		}
-		refs, err := s.AttemptProviderReferences(id)
+		refs, err := s.AttemptProviderReferences(assignment.AttemptID(id))
 		if err != nil {
 			return err
 		}
@@ -235,9 +235,9 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 
 	if err := st.Tx(ctx, func(tx *store.Tx) error {
 		if retry {
-			return tx.ResolveReviewToReady(id, reason, actor)
+			return tx.ResolveReviewToReady(assignment.AttemptID(id), reason, actor)
 		}
-		return tx.ResolveReviewToSettled(id, assignment.ResolutionMayHaveExecuted, reason, actor)
+		return tx.ResolveReviewToSettled(assignment.AttemptID(id), assignment.ResolutionMayHaveExecuted, reason, actor)
 	}); err != nil {
 		return err
 	}

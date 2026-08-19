@@ -32,9 +32,12 @@ import (
 // absent through. Removal of an already-absent object is success — that
 // contract is what makes retrying a removal safe.
 type Remover interface {
-	RemoveOwnedContainer(ctx context.Context, reference, instanceID, leaseID string) error
-	RemoveOwnedNetwork(ctx context.Context, reference, instanceID, leaseID string) error
-	RemoveOwnedVolume(ctx context.Context, reference, instanceID, leaseID string) error
+	RemoveOwnedContainer(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
+	RemoveOwnedNetwork(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
+	RemoveOwnedVolume(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
 }
 
 // Manager drives leases. One per controller; it holds no per-lease
@@ -50,7 +53,7 @@ func NewManager(st *store.Store, remove Remover, log *slog.Logger) *Manager {
 }
 
 // Transition moves a lease along its state machine.
-func (m *Manager) Transition(ctx context.Context, leaseID string, from, to store.LeaseState) error {
+func (m *Manager) Transition(ctx context.Context, leaseID assignment.LeaseID, from, to store.LeaseState) error {
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.TransitionLease(leaseID, from, to)
 	})
@@ -60,7 +63,7 @@ func (m *Manager) Transition(ctx context.Context, leaseID string, from, to store
 // the attempt the lease serves. It runs on a context detached from the
 // job's: the observation must outlive a cancelled job, because it is
 // what stops that job being run twice.
-func (m *Manager) RecordEvidence(ctx context.Context, leaseID string, e store.Evidence) error {
+func (m *Manager) RecordEvidence(ctx context.Context, leaseID assignment.LeaseID, e store.Evidence) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
@@ -86,7 +89,7 @@ func (m *Manager) EvidenceOf(ctx context.Context, lease store.Lease) (store.Evid
 // Release walks a live lease from `from` through cleaning to released,
 // removing every owned resource on the way. A removal failure parks the
 // lease in quarantined until a later reconciliation retries.
-func (m *Manager) Release(ctx context.Context, leaseID string, from store.LeaseState) error {
+func (m *Manager) Release(ctx context.Context, leaseID assignment.LeaseID, from store.LeaseState) error {
 	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.TransitionLease(leaseID, from, store.LeaseDraining); err != nil {
 			return err
@@ -107,7 +110,7 @@ func (m *Manager) Release(ctx context.Context, leaseID string, from store.LeaseS
 // lease's actual state is the point: a lease already failed or
 // quarantined cannot move to failed again, and attempting it once
 // aborted the very cleanup those states exist to retry.
-func (m *Manager) ToCleaning(ctx context.Context, leaseID string) (store.Lease, error) {
+func (m *Manager) ToCleaning(ctx context.Context, leaseID assignment.LeaseID) (store.Lease, error) {
 	var was store.Lease
 	err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		lease, err := tx.LeaseByID(leaseID)
@@ -155,7 +158,7 @@ func (m *Manager) FinishCleaning(ctx context.Context, lease store.Lease, obs ass
 // disposed of by evidence. One commit, so no crash can separate a
 // released lease from its attempt's disposition. Only after this commit
 // may the admission credit be released.
-func (m *Manager) Finalize(ctx context.Context, leaseID string, startObs assignment.ExecutionObservation) error {
+func (m *Manager) Finalize(ctx context.Context, leaseID assignment.LeaseID, startObs assignment.ExecutionObservation) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
@@ -208,7 +211,7 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	// Keyed by lease: an attempt is served once per lease, and a fixed key
 	// would have the second serving's cleanup swallowed as a replay of the
 	// first.
-	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+lease.ID, "cleanup_completed"); err != nil {
+	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
 		return err
 	}
 	// A redelivery of the same workload supersedes the attempt this
@@ -265,7 +268,7 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 // launch the same configured image, meet the same answer, and spend
 // another of the three servings finding out. Naming the reason is what
 // turns three identical failures per job into one thing to change.
-func (m *Manager) HoldAttempt(ctx context.Context, leaseID, reason string) {
+func (m *Manager) HoldAttempt(ctx context.Context, leaseID assignment.LeaseID, reason string) {
 	m.withAttemptOfLease(ctx, leaseID, func(tx *store.Tx, attempt store.Attempt) error {
 		m.log.Warn("holding the attempt for review", "attempt", attempt.ID,
 			"lease", leaseID, "reason", reason)
@@ -284,7 +287,7 @@ func (m *Manager) HoldAttempt(ctx context.Context, leaseID, reason string) {
 // the proof can land at either. Naming only one leaves the other
 // matching no row, and a requeue that matches nothing rolls the whole
 // finalizing transaction back and pins the lease in cleaning.
-func (m *Manager) requeueProven(tx *store.Tx, attempt store.Attempt, leaseID string) error {
+func (m *Manager) requeueProven(tx *store.Tx, attempt store.Attempt, leaseID assignment.LeaseID) error {
 	if attempt.State == "starting" || attempt.State == "running" {
 		return m.requeueOrReview(tx, attempt.ID, tx.RequeueProvenInert(attempt.ID), leaseID)
 	}
@@ -295,7 +298,7 @@ func (m *Manager) requeueProven(tx *store.Tx, attempt store.Attempt, leaseID str
 // error. The budget is not a safety rule - the work provably never began
 // either way - so the attempt is held for someone to look at, not
 // settled and not retried forever.
-func (m *Manager) requeueOrReview(tx *store.Tx, attemptID string, err error, leaseID string) error {
+func (m *Manager) requeueOrReview(tx *store.Tx, attemptID assignment.AttemptID, err error, leaseID assignment.LeaseID) error {
 	if !errors.Is(err, store.ErrRetryBudgetExhausted) {
 		return err
 	}
@@ -333,7 +336,7 @@ func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, eviden
 // withAttemptOfLease resolves the attempt a lease serves and runs one
 // disposition against it in the same transaction. A lease with no
 // attempt is quietly complete: disposition already happened.
-func (m *Manager) withAttemptOfLease(ctx context.Context, leaseID string, fn func(*store.Tx, store.Attempt) error) {
+func (m *Manager) withAttemptOfLease(ctx context.Context, leaseID assignment.LeaseID, fn func(*store.Tx, store.Attempt) error) {
 	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		attempt, err := tx.AttemptByLease(leaseID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -349,7 +352,7 @@ func (m *Manager) withAttemptOfLease(ctx context.Context, leaseID string, fn fun
 	}
 }
 
-func (m *Manager) settleAttemptOfLease(ctx context.Context, leaseID, resolution string) {
+func (m *Manager) settleAttemptOfLease(ctx context.Context, leaseID assignment.LeaseID, resolution string) {
 	m.withAttemptOfLease(ctx, leaseID, func(tx *store.Tx, attempt store.Attempt) error {
 		return tx.Settle(attempt.ID, attempt.State, resolution)
 	})
@@ -358,7 +361,7 @@ func (m *Manager) settleAttemptOfLease(ctx context.Context, leaseID, resolution 
 // Quarantine parks a lease whose cleanup failed. It keeps consuming
 // capacity until a later pass resolves it, which is the honest shape of
 // "its privileged containers may still exist".
-func (m *Manager) Quarantine(leaseID string) {
+func (m *Manager) Quarantine(leaseID assignment.LeaseID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
@@ -382,7 +385,7 @@ func (m *Manager) Quarantine(leaseID string) {
 // is proven. A failure is booked on the intent with backoff, so the
 // periodic reconciler retries that resource alone; the FK RESTRICT
 // means a surviving intent keeps the lease un-releasable.
-func (m *Manager) RemoveResources(ctx context.Context, leaseID string) error {
+func (m *Manager) RemoveResources(ctx context.Context, leaseID assignment.LeaseID) error {
 	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.MarkResourceCleanup(leaseID)
 	}); err != nil {
@@ -446,7 +449,8 @@ func removalBackoff(retries int64) time.Duration {
 	return backoff + jitter
 }
 
-func (m *Manager) removeObject(ctx context.Context, kind store.ResourceKind, handle, leaseID string) error {
+func (m *Manager) removeObject(ctx context.Context, kind store.ResourceKind,
+	handle string, leaseID assignment.LeaseID) error {
 	instanceID := m.store.InstanceID()
 	switch kind {
 	case store.ResourceContainer:
@@ -470,7 +474,7 @@ func (m *Manager) ForgetResource(ctx context.Context, leaseID, dockerID string) 
 		return nil // never recorded, so nothing to reconcile
 	}
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
-		intents, err := tx.Resources(leaseID)
+		intents, err := tx.Resources(assignment.LeaseID(leaseID))
 		if err != nil {
 			return err
 		}
@@ -486,7 +490,7 @@ func (m *Manager) ForgetResource(ctx context.Context, leaseID, dockerID string) 
 // IntentsDue reports whether every booked backoff on the lease's intents
 // has elapsed. A lease with no intents is due by definition: only its
 // finalizing transaction remains.
-func (m *Manager) IntentsDue(ctx context.Context, leaseID string) (bool, error) {
+func (m *Manager) IntentsDue(ctx context.Context, leaseID assignment.LeaseID) (bool, error) {
 	var due bool
 	err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		intents, err := tx.Resources(leaseID)
@@ -541,18 +545,18 @@ func (m *Manager) WalkToRunning(ctx context.Context, lease store.Lease) error {
 // consumer declares that interface — capsule.ResourceRecorder — and Go
 // satisfies it structurally at the call site, so this package produces a
 // recorder without linking a container runtime to do it.
-func (m *Manager) Recorder(ctx context.Context, leaseID string) *intentRecorder {
+func (m *Manager) Recorder(ctx context.Context, leaseID assignment.LeaseID) *intentRecorder {
 	return &intentRecorder{store: m.store, ctx: ctx, leaseID: leaseID}
 }
 
 type intentRecorder struct {
 	store   *store.Store
 	ctx     context.Context
-	leaseID string
+	leaseID assignment.LeaseID
 }
 
-func (r *intentRecorder) Plan(kind, role, name string) (int64, error) {
-	var id int64
+func (r *intentRecorder) Plan(kind, role, name string) (assignment.ResourceIntentID, error) {
+	var id assignment.ResourceIntentID
 	err := r.store.Tx(r.ctx, func(tx *store.Tx) error {
 		var err error
 		id, err = tx.PlanResource(r.leaseID, store.ResourceKind(kind), role, name)
@@ -561,14 +565,14 @@ func (r *intentRecorder) Plan(kind, role, name string) (int64, error) {
 	return id, err
 }
 
-func (r *intentRecorder) Creating(intentID int64) error {
+func (r *intentRecorder) Creating(intentID assignment.ResourceIntentID) error {
 	return r.store.Tx(r.ctx, func(tx *store.Tx) error {
 		return tx.MarkResourceCreating(intentID)
 	})
 }
 
-func (r *intentRecorder) Confirm(intentID int64, dockerID string) error {
+func (r *intentRecorder) Confirm(intentID assignment.ResourceIntentID, dockerID string) error {
 	return r.store.Tx(r.ctx, func(tx *store.Tx) error {
-		return tx.MarkResourcePresent(intentID, dockerID)
+		return tx.MarkResourcePresent(assignment.ResourceIntentID(intentID), dockerID)
 	})
 }
