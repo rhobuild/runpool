@@ -242,9 +242,12 @@ func (r *Relay) tunnelDestinationAllowed(upstream net.Conn) func() bool {
 // through to a full close.
 type closeWriter interface{ CloseWrite() error }
 
-// tunnelPollInterval is how often a quiet direction re-checks the
-// tunnel's shared activity clock. It also bounds how far past the idle
-// timeout a genuinely silent tunnel can live.
+// tunnelPollInterval is how often a direction re-checks the tunnel's
+// shared activity clock and the policy its destination was authorised
+// under. It bounds two things: how far past the idle timeout a genuinely
+// silent tunnel can live, and — the one that matters for egress — how
+// long a destination the policy has stopped allowing keeps flowing
+// through a tunnel that is already open.
 const tunnelPollInterval = 30 * time.Second
 
 // tunnel copies both directions and returns when both of them have
@@ -264,6 +267,10 @@ const tunnelPollInterval = 30 * time.Second
 // a per-direction deadline severed a large upload or a slow download
 // while it was actively streaming. Each direction now reads in short
 // intervals and consults a clock both of them write.
+// stillAllowed is consulted once per poll interval by each direction:
+// a tunnel is authorised at CONNECT and then runs for as long as both
+// ends keep talking, so without it a policy tightened underneath one
+// applies only to destinations nobody had reached yet.
 func tunnel(client, upstream net.Conn, stillAllowed func() bool) {
 	tunnelWith(client, upstream, TunnelIdleTimeout, tunnelPollInterval, stillAllowed)
 }
@@ -341,13 +348,23 @@ func tunnelWith(client, upstream net.Conn, idle, poll time.Duration, stillAllowe
 			}
 			break
 		}
-		// The tunnel is over rather than half-closed, so close it.
+		// This is an abnormal end — a write that failed, a read error,
+		// an idle bound reached, a destination revoked — not the clean
+		// half-close above, which returns before here. Close both.
+		//
 		// Waking the peer with a deadline does not end it: the peer
 		// re-arms its own on the next turn of its loop and parks again,
-		// and repeats that until the idle bound — ten minutes of a
-		// connection slot held by a tunnel that has already finished.
-		// A close returns its reads immediately and permanently. The
-		// deferred closes further up are idempotent.
+		// and repeats that until the idle bound. That is ten minutes of
+		// a connection slot held by a tunnel whose other end has already
+		// gone. A close returns the peer's reads immediately and
+		// permanently, and the deferred closes further up are the same
+		// two calls, only later — this brings them forward to the moment
+		// the tunnel actually ended.
+		//
+		// Closing a socket with unread inbound data sends a reset rather
+		// than a clean shutdown, so a revoked destination reaches its
+		// client as a reset connection. That is the intent: the transfer
+		// is being stopped, not allowed to drain.
 		_ = src.Close()
 		_ = dst.Close()
 	}

@@ -376,7 +376,15 @@ func TestAConcurrentWriteIsNeverReadHalfWritten(t *testing.T) {
 			}
 			raw, err := os.ReadFile(path)
 			if err != nil {
-				continue // the rename is atomic; a missing file is not
+				// A rename never leaves the target absent, so this is a
+				// finding rather than something to poll past: a writer
+				// that removed and recreated the file would show up here
+				// and nowhere else.
+				select {
+				case bad <- "unreadable: " + err.Error():
+				default:
+				}
+				return
 			}
 			if !json.Valid(raw) {
 				select {

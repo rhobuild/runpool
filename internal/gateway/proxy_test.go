@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -269,7 +270,17 @@ func TestTunnelCarriesTheBytesTheServerAlreadyRead(t *testing.T) {
 		buffered: bufio.NewReadWriter(reader, bufio.NewWriter(serverSide)),
 	}
 
-	r := &Relay{Log: discardLogger()}
+	// A real policy store, not a nil one: establishTunnel now starts a
+	// tunnel that consults the policy on its own schedule, and a fixture
+	// that passes only because the poll interval outlasts the test is a
+	// fixture that stops passing the day someone shortens it.
+	policyDir := t.TempDir()
+	if err := os.WriteFile(PolicyPath(policyDir),
+		[]byte(`{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",`+
+			`"allow":["0.0.0.0/0"],"deny":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Relay{Policy: &PolicyStore{Path: PolicyPath(policyDir)}, Log: discardLogger()}
 	done := make(chan struct{})
 	go func() { defer close(done); r.establishTunnel(w, upstream) }()
 
@@ -527,23 +538,53 @@ func TestARevokedDestinationEndsALiveTunnel(t *testing.T) {
 		tunnelWith(clientSide, upstreamSide, idle, poll, allowed.Load)
 		close(done)
 	}()
-	go func() {
+
+	// Both ends write, and both ends are drained. One-way traffic would
+	// not do: the silent direction's read deadline fires every poll, so a
+	// check hung off that deadline runs there and the test would pass
+	// against exactly the shape it exists to rule out.
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	stream := func(w net.Conn) {
 		for {
-			if _, err := upstreamEnd.Write([]byte("x")); err != nil {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := w.Write([]byte("x")); err != nil {
 				return
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
-	}()
+	}
+	drain := func(rd net.Conn) {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := rd.Read(buf); err != nil {
+				return
+			}
+		}
+	}
+	go stream(upstreamEnd)
+	go stream(clientEnd)
 
-	// Do not revoke anything until the tunnel is demonstrably carrying
-	// traffic, or the test could pass against a tunnel that never ran.
-	if err := clientEnd.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
+	// Do not revoke anything until both directions are demonstrably
+	// carrying traffic, or the test could pass against a tunnel that
+	// never ran, or one running one-way.
+	for _, end := range []net.Conn{clientEnd, upstreamEnd} {
+		if err := end.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(end, make([]byte, 8)); err != nil {
+			t.Fatalf("the tunnel never carried anything towards %s: %v", end.LocalAddr(), err)
+		}
+		if err := end.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := io.ReadFull(clientEnd, make([]byte, 8)); err != nil {
-		t.Fatalf("the tunnel never carried anything: %v", err)
-	}
+	go drain(clientEnd)
+	go drain(upstreamEnd)
 
 	allowed.Store(false)
 	select {
