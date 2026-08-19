@@ -1629,3 +1629,135 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 		})
 	})
 }
+
+// TestEveryLeaseKeepsItsAttempt: two leases that served one attempt each
+// get their own row in the report.
+//
+// The index that forbids two live leases per attempt says nothing about
+// a released one, so an attempt returned to the queue and served again
+// is named by both. Indexing the lookup by attempt made them collapse
+// into one entry, and the snapshot appends released leases after live
+// ones — so the entry that survived belonged to the lease that had
+// finished, and the lease still running was the one reported as serving
+// nothing.
+func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-two-leases", "job-two-leases")
+
+	var first, second Lease
+	inTx(t, s, func(tx *Tx) error {
+		l, err := tx.LeaseAttempt(id, binding, "tier-a")
+		if err != nil {
+			return err
+		}
+		first = l
+		for _, edge := range [][2]LeaseState{
+			{LeaseReserved, LeaseFailed},
+			{LeaseFailed, LeaseCleaning},
+			{LeaseCleaning, LeaseReleased},
+		} {
+			if err := tx.TransitionLease(first.ID, edge[0], edge[1]); err != nil {
+				return err
+			}
+		}
+		// Back to the queue and served again, which is the whole of how
+		// one attempt comes to have two leases.
+		if err := tx.Advance(id, "leased", "ready"); err != nil {
+			return err
+		}
+		second, err = tx.LeaseAttempt(id, binding, "tier-a")
+		return err
+	})
+
+	// Live first, released after: the order Snapshot builds.
+	var got map[string]Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		got, err = tx.attemptsOfLeases([]Lease{second, first})
+		return err
+	})
+
+	for _, l := range []Lease{second, first} {
+		a, ok := got[string(l.ID)]
+		if !ok {
+			t.Errorf("lease %s has no attempt in the report; it serves %s", l.ID, l.AttemptID)
+			continue
+		}
+		if a.ID != id {
+			t.Errorf("lease %s reports attempt %s; want %s", l.ID, a.ID, id)
+		}
+	}
+}
+
+// TestTheSetReadAgreesWithTheGeneratedQuery: the hand-written column
+// list and the generated one return the same attempt.
+//
+// sqlc's sqlite engine has no slice parameter, so the report's set read
+// cannot be generated and repeats the projection by hand. Nothing makes
+// the two share a definition, and nothing about them fails to compile
+// when they disagree: a column added to one is a scan error at best and
+// a shifted value at worst, and two columns of the same type swapped in
+// one list is silent in both.
+//
+// Every column below holds a value unique among the columns it could be
+// confused with, so any swap changes the result. A row driven there by
+// the state machine instead would leave several columns equal, and the
+// swaps between those are exactly the ones no compiler can catch.
+func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-parity", "job-parity")
+
+	var lease Lease
+	inTx(t, s, func(tx *Tx) error {
+		l, err := tx.LeaseAttempt(id, binding, "tier-a")
+		lease = l
+		return err
+	})
+
+	// A distinct value in every column, written directly. Driving the
+	// row there through the state machine leaves columns that cannot be
+	// told apart: resolution and reviewed_by are both the empty string
+	// until an operator resolves a review, reviewed_at and settled_at
+	// are both null until one happens, and reviewed_at and received_at
+	// are both unixepoch() in the same second when one does. Any of
+	// those pairs could be swapped in one list and not the other, and
+	// nothing would notice — which is the whole of what this test is
+	// for.
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.tx.Exec(`UPDATE assignment_attempts SET
+			source_workload_key = 'workload-value',
+			tenant_key          = 'tenant-value',
+			project_key         = 'project-value',
+			state               = 'manual_review',
+			execution_evidence  = 'running_observed',
+			resolution          = 'resolution-value',
+			review_reason       = 'review-reason-value',
+			reviewed_by         = 'reviewed-by-value',
+			reviewed_at         = 111,
+			received_at         = 222,
+			settled_at          = 333
+			WHERE id = ?`, string(id))
+		return err
+	})
+
+	var generated, set Attempt
+	inTx(t, s, func(tx *Tx) error {
+		row, err := tx.q.GetAttempt(tx.ctx, string(id))
+		if err != nil {
+			return err
+		}
+		generated = fromRow(row)
+		byLease, err := tx.attemptsOfLeases([]Lease{lease})
+		if err != nil {
+			return err
+		}
+		set = byLease[string(lease.ID)]
+		return nil
+	})
+
+	if generated != set {
+		t.Errorf("the two projections disagree:\n generated: %+v\n set read:  %+v", generated, set)
+	}
+}

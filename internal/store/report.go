@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
@@ -169,8 +170,15 @@ func (t *Tx) CacheLanes() ([]CacheLaneInfo, error) {
 }
 
 // selectAttempt is the attempt column list this file's set read scans.
-// It matches the generated GetAttempt query's projection; the schema
-// parity test is what keeps the two in step.
+// It repeats the generated GetAttempt query's projection by hand,
+// because sqlc's sqlite engine has no slice parameter and a set read
+// cannot be generated.
+//
+// Two column lists that must agree and cannot be made to share one:
+// TestTheSetReadAgreesWithTheGeneratedQuery reads the same attempt both
+// ways and requires the results to be identical. That catches a column
+// added to one and not the other, and a reordering that swaps two
+// columns of the same type, which no compiler can.
 const selectAttempt = `SELECT id, delivery_id, binding_id, source_workload_key, tenant_key,
        project_key, state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at FROM assignment_attempts `
@@ -185,10 +193,17 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 	if len(leases) == 0 {
 		return out, nil
 	}
-	byAttempt := make(map[string]string, len(leases)) // attempt id -> lease id
+	// Distinct attempt ids. Several leases can name one attempt: the
+	// index that forbids two live leases per attempt says nothing about
+	// a released one, so an attempt returned to the queue and served
+	// again is named by both.
 	args := make([]any, 0, len(leases))
+	asked := make(map[assignment.AttemptID]struct{}, len(leases))
 	for _, l := range leases {
-		byAttempt[string(l.AttemptID)] = string(l.ID)
+		if _, dup := asked[l.AttemptID]; dup {
+			continue
+		}
+		asked[l.AttemptID] = struct{}{}
 		args = append(args, l.AttemptID)
 	}
 	rows, err := t.tx.Query(selectAttempt+
@@ -197,6 +212,7 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	byAttempt := make(map[string]Attempt, len(args))
 	for rows.Next() {
 		var r sqlitedb.AssignmentAttempt
 		if err := rows.Scan(&r.ID, &r.DeliveryID, &r.BindingID, &r.SourceWorkloadKey,
@@ -204,9 +220,24 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 			&r.ReviewReason, &r.ReviewedAt, &r.ReviewedBy, &r.ReceivedAt, &r.SettledAt); err != nil {
 			return nil, err
 		}
-		out[byAttempt[r.ID]] = fromRow(r)
+		byAttempt[r.ID] = fromRow(r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Keyed by lease, because "what is this lease serving" is the
+	// question the report asks. Keying by attempt made two leases of one
+	// attempt collapse into a single entry, and released leases are
+	// appended after live ones, so the row that lost its attempt was
+	// always the lease still running.
+	for _, l := range leases {
+		attempt, ok := byAttempt[string(l.AttemptID)]
+		if !ok {
+			return nil, fmt.Errorf("lease %s names attempt %s, which does not exist", l.ID, l.AttemptID)
+		}
+		out[string(l.ID)] = attempt
+	}
+	return out, nil
 }
 
 // resourcesOfLeases reads every lease's resource intents in one query,
