@@ -163,6 +163,27 @@ func (t *Tx) Advance(attemptID assignment.AttemptID, from, to string) error {
 	return nil
 }
 
+// AuthorizeStart is the compare-and-swap that decides whether a start may
+// be attempted at all. It accepts any state this serving passed through
+// on the way to a prepared capsule, and no state anybody else could have
+// put the attempt in.
+//
+// Advance is the wrong shape here. Its edges are observability, written
+// outside the transaction that matters, so an attempt can legitimately be
+// behind by one when the start is authorized. Requiring the exact
+// predecessor spends a prepared capsule and a serving on a write that
+// only ever existed to be read by an operator.
+func (t *Tx) AuthorizeStart(attemptID assignment.AttemptID) error {
+	affected, err := t.q.AuthorizeAttemptStart(t.ctx, string(attemptID))
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: attempt %s is not this serving's to start", ErrConflict, attemptID)
+	}
+	return nil
+}
+
 // ErrRetryBudgetExhausted reports a requeue refused because the attempt
 // has already had every serving it is allowed. It is not a safety
 // refusal — the work provably never began — so the caller holds the

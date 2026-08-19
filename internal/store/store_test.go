@@ -1487,3 +1487,88 @@ func TestTheRetryCountIsIndexed(t *testing.T) {
 		t.Errorf("the retry count plans as %q; want an index, not a scan of every lease ever recorded", joined)
 	}
 }
+
+// TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized: the one
+// authoritative edge in the walk accepts exactly the states a serving
+// passes through before its start.
+//
+// The edges before it are observability. They are written outside the
+// transaction that matters and a failure is logged rather than retried,
+// because their only reader is a person — so an attempt can legitimately
+// be a state or two behind when the start is authorized. Requiring the
+// exact predecessor made a lost observability write tear down a prepared
+// capsule and burn a serving.
+//
+// What it must still refuse is every state somebody else could have put
+// the attempt in, and every state that means a start already happened. A
+// second authorization is a second run of the same job.
+//
+// The table is the specification. It is checked against the schema's own
+// CHECK constraint, so a state added to the product without a decision
+// here fails rather than defaulting to one.
+func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
+	cases := []struct {
+		state     string
+		authorize bool
+		because   string
+	}{
+		{"ready", false, "an operator returned it to the queue; a new serving claims it"},
+		{"leased", true, "this serving's, with both walk edges lost"},
+		{"preparing", true, "this serving's, with the edge into prepared lost"},
+		{"prepared", true, "this serving's, with nothing lost"},
+		{"starting", false, "already authorized; a second start is a second run"},
+		{"running", false, "already started; a second start is a second run"},
+		{"superseded", false, "a redelivery replaced it and its successor is serving"},
+		{"canceled", false, "the source withdrew the workload"},
+		{"settled", false, "already resolved"},
+		{"manual_review", false, "held for a person who has not decided yet"},
+	}
+
+	// The universe comes from the schema, not from beside the table.
+	schema, err := migrationsFS.ReadFile("migrations/000001_initial.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		decided[c.state] = true
+	}
+	body := string(schema)
+	start := strings.Index(body, "CHECK (state IN ('ready'")
+	if start < 0 {
+		t.Fatal("the attempt state CHECK constraint moved; this test can no longer prove it is total")
+	}
+	constraint := body[start : start+strings.Index(body[start:], "))")]
+	for _, state := range strings.Split(constraint, "'") {
+		if len(state) == 0 || strings.ContainsAny(state, "(), \n\t") || state == "CHECK " {
+			continue
+		}
+		if !decided[state] {
+			t.Errorf("the schema allows attempt state %q and this test decides nothing about it", state)
+		}
+	}
+
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	for _, c := range cases {
+		t.Run(c.state, func(t *testing.T) {
+			workload := assignment.SourceWorkloadKey("job-" + c.state)
+			id := seedAttempt(t, s, binding, "msg-"+c.state, workload)
+			inTx(t, s, func(tx *Tx) error { return tx.Advance(id, "ready", c.state) })
+
+			var err error
+			inTx(t, s, func(tx *Tx) error {
+				err = tx.AuthorizeStart(id)
+				return nil
+			})
+			switch {
+			case c.authorize && err != nil:
+				t.Errorf("AuthorizeStart from %s refused (%v); it must be allowed — %s", c.state, err, c.because)
+			case !c.authorize && err == nil:
+				t.Errorf("AuthorizeStart from %s was allowed; it must be refused — %s", c.state, c.because)
+			case !c.authorize && !errors.Is(err, ErrConflict):
+				t.Errorf("AuthorizeStart from %s failed with %v; want ErrConflict", c.state, err)
+			}
+		})
+	}
+}

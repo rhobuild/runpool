@@ -49,6 +49,22 @@ func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.At
 // runCapsule drives one lease through the machine on its own context:
 // cancelling serve stops admission, not a running job — drain waits, and
 // whatever outlives the drain window is adopted on the next start.
+// inspectExecution bounds one observation of a runtime.
+//
+// The observation itself is a `docker exec` into the capsule, and an exec
+// runs until its context ends. Both callers hold something open while
+// they wait: the launch goroutine that the drain counts, and the
+// reconciliation pass that every later pass queues behind. Handing either
+// of them a context with no deadline makes a wedged daemon an unbounded
+// shutdown rather than a slow one.
+func (s *Controller) inspectExecution(ctx context.Context,
+	prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+
+	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	return s.caps.InspectExecution(ctx, prepared)
+}
+
 func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	defer s.wg.Done()
 	attemptID := lease.AttemptID
@@ -190,8 +206,14 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// compare-and-swap is not an effect, and an authorization recorded
 	// for a start that will not be attempted is a claim that never
 	// became true.
+	//
+	// It matches a set rather than the exact predecessor because the two
+	// edges before it are best-effort: advanceAttempt logs a failure and
+	// carries on, which is right for observability and wrong to depend
+	// on. Requiring `prepared` made a transient store error tear down a
+	// capsule that was ready to run.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.Advance(attemptID, "prepared", "starting")
+		return tx.AuthorizeStart(attemptID)
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
 			"attempt", attemptID, "error", err)
@@ -211,7 +233,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		// A failed Start call does not prove no start: the request may
 		// have taken effect before the error. Classify from the daemon
 		// now, before any cleanup can destroy the answer.
-		obs, ierr := s.caps.InspectExecution(ctx, prepared)
+		obs, ierr := s.inspectExecution(ctx, prepared)
 		if ierr != nil {
 			log.Error("start outcome cannot be observed", "start_error", startErr, "inspect_error", ierr)
 		}

@@ -170,7 +170,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	obs := assignment.ObservedAbsent
 	if evidence == store.EvidenceStartAuthorized && hasRunner {
 		var err error
-		obs, err = s.caps.InspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
+		obs, err = s.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
 		if err != nil {
 			log.Error("cannot observe the runtime of an ambiguous start", "error", err)
 		}
@@ -222,6 +222,22 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	}
 }
 
+// recoveryContext detaches unwinding from whatever bounded the step that
+// failed.
+//
+// A step's context expiring is the failure the step's bound exists to
+// produce, so it is the likeliest reason to be unwinding at all — and a
+// recovery handed the context that just expired releases nothing. The
+// capsule, its network and its volume stay behind, and the lease keeps
+// the admission credit they were admitted on, which is capacity the host
+// never gets back short of a restart.
+//
+// It keeps a bound of its own: an unwind that hangs holds the
+// reconciliation pass, and every later pass queues behind it.
+func recoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), recoveryBudget)
+}
+
 func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string) {
 	// Claimed here rather than inside the goroutine, so no pass can see the
 	// lease as ownerless in the gap before it is scheduled.
@@ -242,9 +258,11 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// an adopted capsule is a capsule, and one of the two paths
 		// reaching around it is how they come to behave differently.
 		exit, err := s.wait.WaitExit(ctx, runnerContainer)
+		done, endRecovery := recoveryContext(ctx)
+		defer endRecovery()
 		if err != nil {
 			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
-			if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
+			if err := s.recoverCapsuleFailure(done, b, lease.ID, ""); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -257,7 +275,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		if obs := capsule.ClassifyExit(int(exit)); obs != assignment.ObservedExited {
 			s.log.Warn("the adopted capsule reports the runner never started; the attempt is returned to the queue",
 				"lease", lease.ID, "exit", exit)
-			if err := s.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
+			if err := s.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -266,13 +284,13 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// The adopted capsule was awaited to its exit. Recording the
 		// observation is what lets the finalizing transaction settle the
 		// attempt from evidence, like any other completed run.
-		if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
+		if err := s.leases.RecordEvidence(done, lease.ID, store.EvidenceExitObserved); err != nil {
 			s.log.Error("cannot record the adopted capsule's exit", "lease", lease.ID, "error", err)
 		}
-		if err := s.leases.WalkToRunning(ctx, lease); err != nil {
+		if err := s.leases.WalkToRunning(done, lease); err != nil {
 			s.log.Error("adopted capsule state repair failed", "lease", lease.ID, "error", err)
 		}
-		if err := s.leases.Release(ctx, lease.ID, store.LeaseWorkloadRunning); err != nil {
+		if err := s.leases.Release(done, lease.ID, store.LeaseWorkloadRunning); err != nil {
 			s.log.Error("adopted capsule cleanup failed", "lease", lease.ID, "error", err)
 			return
 		}

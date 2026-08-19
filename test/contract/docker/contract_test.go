@@ -197,6 +197,50 @@ func TestExec(t *testing.T) {
 	}
 }
 
+// TestExecHonoursItsContext: an exec ends when its context ends.
+//
+// Nothing in the Docker API cancels a running exec. The command keeps
+// running inside the container, and the client's only lever is the
+// hijacked connection it is reading from — so the deadline is honoured
+// by closing that connection, not by the daemon. Compilation cannot say
+// whether that wiring survived, and the callers that depend on it are
+// the ones nothing else proceeds past: the launch goroutine the drain
+// counts, and the reconciliation pass every later pass queues behind. An
+// exec that outlives its context there is an unbounded shutdown.
+func TestExecHonoursItsContext(t *testing.T) {
+	c, instance := client(t)
+	ctx := t.Context()
+
+	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+		Name:   instance + "-exec-ctx",
+		Image:  busybox,
+		Cmd:    []string{"sleep", "300"},
+		Labels: labels(instance, "lease-exec-ctx", "task", "helper"),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { mustRemoveContainer(t, c, ctx, id) })
+	if err := c.StartContainer(ctx, id); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// The command outlasts the context thirtyfold, so a return inside
+	// the bound cannot be the command finishing.
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, _, err = c.Exec(bounded, id, []string{"sleep", "60"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Error("exec returned no error after its context expired; the caller cannot tell it was cut short")
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("exec returned after %v with a 2s context; it is bounded by the command, not the caller", elapsed)
+	}
+}
+
 // TestExecWithInput covers the credential channel: stdin into an exec
 // is the one path into a running container that Docker persists nowhere
 // — not in the container config, not in an image layer, not in the log

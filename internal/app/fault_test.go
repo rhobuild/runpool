@@ -33,6 +33,9 @@ type fakeCapsule struct {
 	// redelivery lands in: preparing a capsule takes minutes and the
 	// attempt is out of the launching goroutine's sight for all of it.
 	onPrepare func()
+	// onInspect sees the context an observation is made under, which is
+	// the only place its bound is observable.
+	onInspect func(context.Context)
 	// starts counts the one effect that can begin execution.
 	starts int
 }
@@ -66,7 +69,10 @@ func (f *fakeCapsule) Start(context.Context, capsule.PreparedRuntime) error {
 	return f.startErr
 }
 
-func (f *fakeCapsule) InspectExecution(context.Context, capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+func (f *fakeCapsule) InspectExecution(ctx context.Context, _ capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+	if f.onInspect != nil {
+		f.onInspect(ctx)
+	}
 	return f.obs, f.obsErr
 }
 
@@ -744,5 +750,126 @@ func TestTheReconcilerStopsRecoveringWhenTheShutdownBegins(t *testing.T) {
 		t.Errorf("the pass held the shutdown for %s against a %s budget; a recovery detached "+
 			"from the loop outlives the grace period the deployment is sized for",
 			elapsed.Round(time.Second), LoopStopBudget)
+	}
+}
+
+// TestALostWalkEdgeDoesNotAbortTheLaunch: an observability write that
+// did not land must not cost a prepared capsule and a serving.
+//
+// The walk into `preparing` and into `prepared` is best-effort by
+// design: it is written outside the transaction that matters, and a
+// failure is logged rather than retried, because its only reader is a
+// person. The edge into `starting` is the opposite — it is the last
+// point before an effect that can begin execution. Making that edge
+// require the exact predecessor tied an authoritative decision to a
+// best-effort one, so a transient store error during preparation tore
+// down a capsule that was ready to run and burnt one of the attempt's
+// servings.
+//
+// What the edge must still refuse is an attempt somebody else resolved;
+// TestASupersededAttemptIsNeverStarted is that half.
+func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
+	h := newHarness(t, 1)
+	caps := &fakeCapsule{}
+	h.srv.caps = caps
+	h.srv.wait = &fakeWaiter{}
+	h.bind.gh = &fakeRegistry{}
+	if err := h.deliver(demand("job-lost-edge", "app", 42)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-lost-edge")
+
+	// `preparing -> prepared` is written after Prepare returns, so
+	// putting the attempt back to where it was before `preparing` is
+	// exactly what that write failing leaves behind.
+	caps.onPrepare = func() {
+		h.inStore(func(tx *store.Tx) error {
+			return tx.Advance(attemptID, "preparing", "leased")
+		})
+	}
+
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, lease)
+
+	if caps.starts != 1 {
+		t.Errorf("the capsule was started %d time(s); want 1 — the attempt was still this serving's, "+
+			"only one state further back than the walk managed to record", caps.starts)
+	}
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReleased {
+		t.Errorf("lease = %s; want released", got)
+	}
+	if !h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the lease's admission credit was never returned")
+	}
+}
+
+// TestAnObservationIsAlwaysBounded: observing a runtime carries a
+// deadline of its own.
+//
+// The observation is a `docker exec` into the capsule, and an exec ends
+// when its context ends and not before — nothing in the Docker API
+// cancels one. Both callers hold something open while they wait: this
+// one is the launch goroutine the drain counts, and the other is the
+// reconciliation pass every later pass queues behind. Handed a context
+// with no deadline, a daemon that stopped answering turns a slow
+// shutdown into one that does not finish.
+func TestAnObservationIsAlwaysBounded(t *testing.T) {
+	h := newHarness(t, 1)
+	var (
+		deadline    time.Time
+		hasDeadline bool
+		observed    bool
+	)
+	caps := &fakeCapsule{
+		startErr: errors.New("the daemon refused the start"),
+		obs:      assignment.ObservedCreated,
+		onInspect: func(ctx context.Context) {
+			observed = true
+			deadline, hasDeadline = ctx.Deadline()
+		},
+	}
+	h.srv.caps = caps
+	h.srv.wait = &fakeWaiter{}
+	h.bind.gh = &fakeRegistry{}
+	if err := h.deliver(demand("job-observed", "app", 42)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-observed")
+
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, lease)
+
+	if !observed {
+		t.Fatal("the start failed and nothing observed the runtime; this test asserted nothing")
+	}
+	if !hasDeadline {
+		t.Fatal("the observation ran on a context with no deadline; a daemon that stops answering never returns it")
+	}
+	if left := time.Until(deadline); left <= 0 || left > inspectTimeout {
+		t.Errorf("the observation had %v left; want a positive bound no larger than %v", left, inspectTimeout)
+	}
+}
+
+// TestRecoveryOutlivesTheContextThatBoundedTheWait: unwinding a lease
+// does not inherit the deadline whose expiry is the reason to unwind.
+//
+// The tier's ceiling bounds the wait for a capsule that has stopped
+// reporting. That is the failure it exists to produce, so it is the
+// likeliest reason to be recovering at all — and a recovery handed the
+// context that just expired removes nothing. The capsule, its network
+// and its volume stay, and the lease keeps the admission credit they
+// were admitted on, which is capacity no later pass recovers.
+func TestRecoveryOutlivesTheContextThatBoundedTheWait(t *testing.T) {
+	ceiling, expire := context.WithCancel(context.Background())
+	unwind, done := recoveryContext(ceiling)
+	defer done()
+
+	expire()
+
+	if err := unwind.Err(); err != nil {
+		t.Fatalf("the recovery context ended with the wait's: %v; nothing it unwinds would be released", err)
+	}
+	if _, ok := unwind.Deadline(); !ok {
+		t.Error("the recovery context has no deadline; an unwind against a wedged daemon would hold the pass forever")
 	}
 }

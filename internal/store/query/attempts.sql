@@ -79,6 +79,25 @@ UPDATE assignment_attempts
 SET state = @next
 WHERE id = @attempt_id AND state = @current;
 
+-- name: AuthorizeAttemptStart :execrows
+-- The one authoritative edge in the walk, and the reason it names a set
+-- rather than a single state.
+--
+-- Every other edge is best-effort observability, written outside the
+-- transaction that matters and logged rather than retried when it fails.
+-- So a serving that reached a prepared capsule may still have its attempt
+-- sitting at any state it passed through, and requiring the last of them
+-- turns one lost observability write into a torn-down capsule and a
+-- burnt serving.
+--
+-- What must not match is an attempt somebody else resolved. superseded,
+-- canceled, settled and manual_review are all outside this set, so a
+-- redelivery that replaced this attempt during preparation still stops
+-- the start, which is the property the edge exists for.
+UPDATE assignment_attempts
+SET state = 'starting'
+WHERE id = @attempt_id AND state IN ('leased', 'preparing', 'prepared');
+
 -- name: RecordAttemptEvidence :execrows
 -- Evidence is monotonic and compare-and-swap on the value the caller
 -- read. If another writer moved it in between, nothing is written and

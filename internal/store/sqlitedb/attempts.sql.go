@@ -9,6 +9,34 @@ import (
 	"context"
 )
 
+const authorizeAttemptStart = `-- name: AuthorizeAttemptStart :execrows
+UPDATE assignment_attempts
+SET state = 'starting'
+WHERE id = ?1 AND state IN ('leased', 'preparing', 'prepared')
+`
+
+// The one authoritative edge in the walk, and the reason it names a set
+// rather than a single state.
+//
+// Every other edge is best-effort observability, written outside the
+// transaction that matters and logged rather than retried when it fails.
+// So a serving that reached a prepared capsule may still have its attempt
+// sitting at any state it passed through, and requiring the last of them
+// turns one lost observability write into a torn-down capsule and a
+// burnt serving.
+//
+// What must not match is an attempt somebody else resolved. superseded,
+// canceled, settled and manual_review are all outside this set, so a
+// redelivery that replaced this attempt during preparation still stops
+// the start, which is the property the edge exists for.
+func (q *Queries) AuthorizeAttemptStart(ctx context.Context, attemptID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, authorizeAttemptStart, attemptID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const cancelReadyAttempt = `-- name: CancelReadyAttempt :execrows
 UPDATE assignment_attempts
 SET state = 'canceled', resolution = ?1, settled_at = unixepoch()

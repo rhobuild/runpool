@@ -80,6 +80,15 @@ const (
 	// question about a different party.
 	capsulePrepTimeout = 15 * time.Minute
 
+	// inspectTimeout bounds one observation of a runtime. It reaches the
+	// capsule through a `docker exec`, and an exec ends when its context
+	// does and not before: a daemon that has stopped answering parks the
+	// caller for as long as it is given. Both callers are places nothing
+	// else can proceed past - the launch goroutine the drain waits on,
+	// and the reconciliation pass every later pass queues behind - so an
+	// unbounded one there is an unbounded shutdown.
+	inspectTimeout = 30 * time.Second
+
 	// receiveFailuresBeforeReopen is how many consecutive polls may fail
 	// before the binding stops trusting its session. The upstream client
 	// refreshes an expired session itself and leaves the handle dead when
