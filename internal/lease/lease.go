@@ -314,10 +314,12 @@ func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) 
 
 // applyDisposition writes one decision, inside the caller's transaction.
 //
-// It takes the observation only to report it: a review is the one
-// disposition a person has to act on, and what the runtime was seen
-// doing is the input their choice turns on — absent is not the same
-// answer as unobservable.
+// It takes the observation only to report it. Both warnings carry the
+// same four fields, because both answer the same question after the
+// fact: which attempt, under which lease, how far it had got, and what
+// the runtime was seen doing. On the review — the one disposition a
+// person has to act on — the observation is the input their choice turns
+// on, since absent is not the same answer as unobservable.
 func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 	leaseID assignment.LeaseID, obs assignment.ExecutionObservation, d disposition) error {
 
@@ -326,7 +328,8 @@ func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 		return nil
 	case dispositionRequeue:
 		m.log.Warn("the workload was not consumed; the attempt stays servable",
-			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State)
+			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State,
+			"observation", string(obs))
 		return m.requeueProven(tx, attempt, leaseID)
 	case dispositionSettleCompleted:
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionCompletedObserved)
@@ -334,7 +337,8 @@ func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionStartedObserved)
 	default:
 		m.log.Warn("start outcome is unproven; the attempt is held for review",
-			"attempt", attempt.ID, "lease", leaseID, "observation", string(obs))
+			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State,
+			"observation", string(obs))
 		return tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown)
 	}
 }
