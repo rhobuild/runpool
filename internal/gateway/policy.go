@@ -195,14 +195,20 @@ func installPolicyWith(controlDir string,
 
 	// The two callers reach this from separate `docker exec` processes
 	// into the same container, so the lock has to be one the kernel
-	// holds. Without it both read the same policy in force, build two
-	// successors from it and race the write: the stricter one is lost —
-	// a deny-all overwritten by a reload that was already in flight —
-	// or the file the relay reads is two documents spliced together,
-	// which ParsePolicy refuses and which then fails every dial.
+	// holds. What it buys is order: each installer reads the policy
+	// actually in force and builds its successor from that, instead of
+	// from a document another installer is midway through replacing.
 	//
-	// It blocks rather than trying: an emergency close must wait its
-	// turn and then win, not give up because a reload held the lock.
+	// It orders them; it does not rank them. Every installer builds from
+	// what it reads and the last to run is what stays, so a reload that
+	// starts after an emergency close is what the relay ends up with.
+	// Nothing here prevents that, and nothing needs to: the emergency
+	// close is only reached from closeGateway, which removes the
+	// container whatever the install returned, so the policy left behind
+	// outlives nothing.
+	//
+	// It blocks rather than trying, so an installer waits its turn
+	// instead of failing because another held the lock.
 	lock, err := os.OpenFile(filepath.Join(controlDir, policyLockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("policy lock: %w", err)

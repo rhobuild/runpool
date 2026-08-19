@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -268,7 +270,17 @@ func TestTunnelCarriesTheBytesTheServerAlreadyRead(t *testing.T) {
 		buffered: bufio.NewReadWriter(reader, bufio.NewWriter(serverSide)),
 	}
 
-	r := &Relay{Log: discardLogger()}
+	// A real policy store, not a nil one: establishTunnel now starts a
+	// tunnel that consults the policy on its own schedule, and a fixture
+	// that passes only because the poll interval outlasts the test is a
+	// fixture that stops passing the day someone shortens it.
+	policyDir := t.TempDir()
+	if err := os.WriteFile(PolicyPath(policyDir),
+		[]byte(`{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",`+
+			`"allow":["0.0.0.0/0"],"deny":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Relay{Policy: &PolicyStore{Path: PolicyPath(policyDir)}, Log: discardLogger()}
 	done := make(chan struct{})
 	go func() { defer close(done); r.establishTunnel(w, upstream) }()
 
@@ -293,6 +305,10 @@ func TestTunnelCarriesTheBytesTheServerAlreadyRead(t *testing.T) {
 	clientSide.Close()
 	<-done
 }
+
+// alwaysAllowed is the destination check for tunnels whose policy is not
+// what the test is about.
+func alwaysAllowed() bool { return true }
 
 // tcpPair dials a loopback listener and hands back both ends of one real
 // TCP connection. Real sockets, not net.Pipe: a half-close is a property
@@ -338,7 +354,7 @@ func TestAHalfClosingClientStillReceivesItsWholeResponse(t *testing.T) {
 	clientEnd, clientSide := tcpPair(t)
 	upstreamSide, upstreamEnd := tcpPair(t)
 
-	go tunnelWith(clientSide, upstreamSide, 5*time.Second, 500*time.Millisecond)
+	go tunnelWith(clientSide, upstreamSide, 5*time.Second, 500*time.Millisecond, alwaysAllowed)
 
 	// The request goes out, then the client is done sending.
 	if _, err := clientEnd.Write([]byte("request")); err != nil {
@@ -426,7 +442,7 @@ func TestAOneWayTransferOutlivesTheIdleBound(t *testing.T) {
 	clientEnd, clientSide := tcpPair(t)
 	upstreamSide, upstreamEnd := tcpPair(t)
 
-	go tunnelWith(clientSide, upstreamSide, idle, poll)
+	go tunnelWith(clientSide, upstreamSide, idle, poll, alwaysAllowed)
 
 	// One direction streams steadily for well past the idle bound; the
 	// other says nothing at all.
@@ -451,5 +467,154 @@ func TestAOneWayTransferOutlivesTheIdleBound(t *testing.T) {
 		t.Errorf("the client received %d of %d bytes over %s with a %s idle bound; "+
 			"the quiet direction expired while the other was streaming",
 			len(got), beats, time.Duration(beats)*30*time.Millisecond, idle)
+	}
+}
+
+// TestADeadTunnelReleasesItsSlotAtOnce: a tunnel that has ended gives up
+// its connection slot when it ends, not when the idle bound expires.
+//
+// Ending it by nudging the peer's read deadline does not end it. The
+// peer wakes, finds the shared clock recent, and re-arms its own
+// deadline on the next turn of its loop, and it repeats that until the
+// idle bound — ten minutes during which the relay's connection quota is
+// one smaller for a tunnel with nothing on either end.
+func TestADeadTunnelReleasesItsSlotAtOnce(t *testing.T) {
+	const (
+		idle = 3 * time.Second
+		poll = 100 * time.Millisecond
+	)
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+	_ = clientEnd
+
+	done := make(chan struct{})
+	go func() {
+		tunnelWith(clientSide, upstreamSide, idle, poll, alwaysAllowed)
+		close(done)
+	}()
+
+	// A reset, not a clean shutdown: the upstream is gone and says so
+	// with an error, which is the abnormal end this is about.
+	if err := upstreamEnd.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstreamEnd.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(idle - time.Second):
+		t.Fatalf("the tunnel outlived its upstream by more than %v; it is waiting out the idle bound", idle-time.Second)
+	}
+}
+
+// TestARevokedDestinationEndsALiveTunnel: a destination the policy stops
+// allowing stops flowing, within one poll interval, while it is still
+// carrying traffic.
+//
+// A tunnel is authorised once, at CONNECT, and then runs for as long as
+// both ends keep talking. A policy tightened underneath it — a lease
+// narrowing its allowances, a redelivery installing a smaller set — has
+// to reach the connections already open, or the tightening only applies
+// to destinations nobody had reached yet.
+//
+// The traffic is the point: this stays busy throughout, and a direction
+// carrying bytes returns from every read before its deadline fires, so a
+// check hung off that deadline would never run here.
+func TestARevokedDestinationEndsALiveTunnel(t *testing.T) {
+	const (
+		idle = 30 * time.Second
+		poll = 50 * time.Millisecond
+	)
+	clientEnd, clientSide := tcpPair(t)
+	upstreamSide, upstreamEnd := tcpPair(t)
+
+	var allowed atomic.Bool
+	allowed.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		tunnelWith(clientSide, upstreamSide, idle, poll, allowed.Load)
+		close(done)
+	}()
+
+	// Both ends write, and both ends are drained. One-way traffic would
+	// not do: the silent direction's read deadline fires every poll, so a
+	// check hung off that deadline runs there and the test would pass
+	// against exactly the shape it exists to rule out.
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	stream := func(w net.Conn) {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := w.Write([]byte("x")); err != nil {
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	drain := func(rd net.Conn) {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := rd.Read(buf); err != nil {
+				return
+			}
+		}
+	}
+	go stream(upstreamEnd)
+	go stream(clientEnd)
+
+	// Do not revoke anything until both directions are demonstrably
+	// carrying traffic, or the test could pass against a tunnel that
+	// never ran, or one running one-way.
+	for _, end := range []net.Conn{clientEnd, upstreamEnd} {
+		if err := end.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(end, make([]byte, 8)); err != nil {
+			t.Fatalf("the tunnel never carried anything towards %s: %v", end.LocalAddr(), err)
+		}
+		if err := end.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	go drain(clientEnd)
+	go drain(upstreamEnd)
+
+	allowed.Store(false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tunnel kept flowing to a destination the policy no longer allows")
+	}
+}
+
+// TestTheTunnelClockIsMonotonic: the clock two directions share measures
+// in a frame no clock correction can move.
+//
+// Every deadline around it is monotonic, because that is what net.Conn
+// deadlines and time.Since are. A wall-clock instant mixed in means an
+// NTP step or a VM resume either severs a tunnel mid-transfer or leaves
+// a finished one holding its slot long past the idle bound, and neither
+// shows up as anything but an unexplained connection.
+func TestTheTunnelClockIsMonotonic(t *testing.T) {
+	c := newTunnelClock()
+
+	// Round(0) is what strips a monotonic reading, so a time that still
+	// carries one is not equal to itself rounded.
+	if c.start == c.start.Round(0) {
+		t.Fatal("the tunnel clock's origin carries no monotonic reading; every bound derived from it moves with the wall clock")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	before := c.idleFor()
+	c.mark()
+	if after := c.idleFor(); after >= before {
+		t.Errorf("idleFor = %v after marking traffic and %v before; a mark must reset it", after, before)
 	}
 }
