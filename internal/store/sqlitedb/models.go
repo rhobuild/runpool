@@ -115,7 +115,6 @@ type ProviderBinding struct {
 	TargetID         string
 	ProviderKind     string
 	SourceBindingKey string
-	DesiredState     string
 	CreatedAt        int64
 }
 

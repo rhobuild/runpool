@@ -6,23 +6,7 @@
 INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
 VALUES (@target_id, @provider_kind, @source_binding_key)
 ON CONFLICT (provider_kind, source_binding_key) DO UPDATE SET target_id = excluded.target_id
-RETURNING id, target_id, provider_kind, source_binding_key, desired_state, created_at;
-
--- name: GetProviderBinding :one
-SELECT id, target_id, provider_kind, source_binding_key, desired_state, created_at
-FROM provider_bindings
-WHERE provider_kind = @provider_kind
-  AND source_binding_key = @source_binding_key;
-
--- name: ListProviderBindings :many
-SELECT id, target_id, provider_kind, source_binding_key, desired_state, created_at
-FROM provider_bindings
-ORDER BY target_id, source_binding_key;
-
--- name: SetBindingDesiredState :execrows
-UPDATE provider_bindings
-SET desired_state = @desired_state
-WHERE id = @binding_id;
+RETURNING id, target_id, provider_kind, source_binding_key, created_at;
 
 -- name: RecordProviderContact :exec
 -- A success clears the failure: what is reported is the current state of
@@ -46,7 +30,7 @@ SET last_error = excluded.last_error, last_error_at_ms = excluded.last_error_at_
 -- database's job. A binding that has never run reports zeroes, which is
 -- not the same as failing: the first has nothing to say, the second has
 -- a reason.
-SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.desired_state, b.created_at,
+SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.created_at,
        coalesce(c.last_contact_at_ms, 0) AS last_contact_at_ms,
        coalesce(c.last_error, '')        AS last_error,
        coalesce(c.last_error_at_ms, 0)   AS last_error_at_ms

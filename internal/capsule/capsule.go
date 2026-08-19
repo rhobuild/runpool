@@ -255,10 +255,7 @@ func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
 }
 
 func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
-	short := spec.LeaseID
-	if len(short) > 12 {
-		short = short[:12]
-	}
+	short := docker.ShortID(spec.LeaseID)
 	name := func(role string) string { return "runpool-" + role + "-" + short }
 	labels := func(kind, role string) map[string]string {
 		return map[string]string{
@@ -581,7 +578,7 @@ func (m *Launcher) awaitState(ctx context.Context, containerID, want string) err
 			return verdict
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("container %s did not reach %q within %s", containerID[:12], want, readyTimeout)
+			return fmt.Errorf("container %s did not reach %q within %s", docker.ShortID(containerID), want, readyTimeout)
 		}
 		select {
 		case <-time.After(readyPollInterval):

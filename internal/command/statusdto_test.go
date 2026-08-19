@@ -261,3 +261,53 @@ func TestStatusReportsWithoutAResolvableCapsuleImage(t *testing.T) {
 			"for what a launch would run")
 	}
 }
+
+// TestBothStatusAnswersShareOneEnvelope: the two forms of a v1 status
+// document are the same document.
+//
+// The pre-serve form used to be a hand-built map that re-spelled every
+// tag, so a rename on the struct could leave the two disagreeing with
+// nothing to notice — and a consumer branching on `served`, which the
+// document tells it to do, would then meet fields it had no name for.
+func TestBothStatusAnswersShareOneEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+
+	decode := func(t *testing.T, raw []byte) statusDoc {
+		t.Helper()
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var doc statusDoc
+		if err := dec.Decode(&doc); err != nil {
+			t.Fatalf("the document carries a field statusDoc does not name: %v\n%s", err, raw)
+		}
+		return doc
+	}
+
+	// Pre-serve: no state directory has been written yet.
+	var out bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	pre := decode(t, out.Bytes())
+	if pre.Served {
+		t.Error("the pre-serve form claims to be served")
+	}
+	if pre.StateDir != dir || pre.Detail == "" {
+		t.Errorf("the pre-serve form lost its payload: state_dir %q, detail %q", pre.StateDir, pre.Detail)
+	}
+
+	// Served: the same envelope, the other branch.
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	out.Reset()
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if served := decode(t, out.Bytes()); !served.Served {
+		t.Error("the served form does not say so")
+	}
+}

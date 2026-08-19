@@ -73,46 +73,6 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 	return i, err
 }
 
-const listUnconfirmedDeliveries = `-- name: ListUnconfirmedDeliveries :many
-SELECT id, binding_id, source_delivery_key, payload_sha256, ack_state,
-       received_at, ack_updated_at, acknowledged_at
-FROM broker_deliveries
-WHERE binding_id = ?1 AND ack_state <> 'confirmed'
-ORDER BY received_at, id
-`
-
-func (q *Queries) ListUnconfirmedDeliveries(ctx context.Context, bindingID int64) ([]BrokerDelivery, error) {
-	rows, err := q.db.QueryContext(ctx, listUnconfirmedDeliveries, bindingID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []BrokerDelivery{}
-	for rows.Next() {
-		var i BrokerDelivery
-		if err := rows.Scan(
-			&i.ID,
-			&i.BindingID,
-			&i.SourceDeliveryKey,
-			&i.PayloadSha256,
-			&i.AckState,
-			&i.ReceivedAt,
-			&i.AckUpdatedAt,
-			&i.AcknowledgedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const markAckConfirmed = `-- name: MarkAckConfirmed :execrows
 UPDATE broker_deliveries
 SET ack_state = 'confirmed', ack_updated_at = unixepoch(), acknowledged_at = unixepoch()

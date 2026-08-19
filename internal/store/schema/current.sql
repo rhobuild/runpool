@@ -145,8 +145,6 @@ CREATE TABLE provider_bindings (
 	target_id           TEXT NOT NULL,
 	provider_kind       TEXT NOT NULL CHECK (length(provider_kind) > 0),
 	source_binding_key  TEXT NOT NULL CHECK (length(source_binding_key) > 0),
-	desired_state       TEXT NOT NULL DEFAULT 'present'
-		CHECK (desired_state IN ('present', 'absent')),
 	created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	UNIQUE (provider_kind, source_binding_key)
 );
@@ -177,6 +175,8 @@ ON assignment_attempts (binding_id, received_at, id)
 WHERE state = 'ready';
 
 CREATE INDEX cache_lanes_pool ON cache_lanes (project_id, generation, leased_by);
+
+CREATE INDEX capsule_leases_by_attempt ON capsule_leases (attempt_id);
 
 CREATE INDEX capsule_leases_by_runtime_name ON capsule_leases (runtime_name);
 

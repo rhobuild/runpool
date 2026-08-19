@@ -9,12 +9,6 @@ INSERT INTO attempt_events (attempt_id, idempotency_key, kind, detail_json)
 VALUES (@attempt_id, @idempotency_key, @kind, @detail_json)
 ON CONFLICT (attempt_id, idempotency_key) DO NOTHING;
 
--- name: GetAttemptEventByKey :one
-SELECT id, attempt_id, idempotency_key, kind, detail_json, created_at
-FROM attempt_events
-WHERE attempt_id = @attempt_id
-  AND idempotency_key = @idempotency_key;
-
 -- name: ListAttemptEvents :many
 SELECT id, attempt_id, idempotency_key, kind, detail_json, created_at
 FROM attempt_events

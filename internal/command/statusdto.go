@@ -22,7 +22,13 @@ type statusDoc struct {
 	// Served discriminates v1's two forms: true carries the document
 	// below, false is the pre-serve form with only state_dir and detail.
 	// A consumer branches on this, not on which fields happen to exist.
-	Served        bool           `json:"served"`
+	Served bool `json:"served"`
+	// StateDir and Detail are the pre-serve form's whole payload, and
+	// they are fields rather than a map the other branch builds by hand:
+	// a map re-spells every tag, so the two forms of one document could
+	// drift under a rename with nothing to notice.
+	StateDir      string         `json:"state_dir,omitempty"`
+	Detail        string         `json:"detail,omitempty"`
 	Instance      string         `json:"instance"`
 	HostTopology  string         `json:"host_topology"`
 	SchemaVersion int            `json:"schema_version"`
@@ -97,7 +103,6 @@ type bindingDTO struct {
 	TargetID         string `json:"target_id"`
 	ProviderKind     string `json:"provider_kind"`
 	SourceBindingKey string `json:"source_binding_key"`
-	DesiredState     string `json:"desired_state"`
 	// LastContactAt is when a provider call for this binding last
 	// succeeded, and LastError what it cannot do now. Both are reported
 	// because neither answers alone: an instance holding no leases is
@@ -184,10 +189,10 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	for _, b := range snap.Bindings {
 		doc.Bindings = append(doc.Bindings, bindingDTO{
 			TargetID: b.TargetID, ProviderKind: b.ProviderKind,
-			SourceBindingKey: b.SourceBindingKey, DesiredState: b.DesiredState,
-			LastContactAt: rfc3339(b.Contact.LastContact),
-			LastError:     b.Contact.LastError,
-			LastErrorAt:   rfc3339(b.Contact.LastErrorAt),
+			SourceBindingKey: b.SourceBindingKey,
+			LastContactAt:    rfc3339(b.Contact.LastContact),
+			LastError:        b.Contact.LastError,
+			LastErrorAt:      rfc3339(b.Contact.LastErrorAt),
 		})
 	}
 	for _, l := range snap.Leases {

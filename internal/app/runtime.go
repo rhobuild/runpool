@@ -8,6 +8,7 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -91,7 +92,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 
-	runnerName := "runpool-" + shortID(lease.ID)
+	runnerName := "runpool-" + docker.ShortID(lease.ID)
 	jit, err := b.gh.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
 	if err != nil {
 		log.Error("jit generation failed", "error", err)
@@ -249,7 +250,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	runnerContainer := prepared.RuntimeID
-	log.Info("capsule running", "runner", jit.RunnerName, "container", shortID(runnerContainer))
+	log.Info("capsule running", "runner", jit.RunnerName, "container", docker.ShortID(runnerContainer))
 
 	// From here the tier's ceiling governs, and only here: this is the
 	// wait for work the provider owns, and the ceiling is the backstop
@@ -301,15 +302,6 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	log.Info("lease released")
-}
-
-// shortID trims an id for log lines, tolerating ids shorter than the
-// display width — test fixtures and future id formats included.
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
 }
 
 // releaseCreditIfDone returns the binding's admission credit only when the lease has

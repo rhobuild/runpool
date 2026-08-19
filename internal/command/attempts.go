@@ -94,7 +94,7 @@ func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
 		for _, v := range views {
 			fmt.Fprintf(streams.Out, "%-22s %-28s %-24s %-24s %s\n",
 				v.ID, v.Workload, v.Project, v.ReviewReason,
-				(time.Duration(v.AgeSeconds) * time.Second).String())
+				age(time.Duration(v.AgeSeconds)*time.Second))
 		}
 		return nil
 	})

@@ -30,3 +30,22 @@ func TestInstanceInfrastructureIsDecidedByTheLeaseID(t *testing.T) {
 		}
 	}
 }
+
+// TestShortIDToleratesAShortID: the trim is used inside error paths, and
+// an unguarded slice there replaces the message that would have said
+// what went wrong with a crash.
+func TestShortIDToleratesAShortID(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want string }{
+		"a full docker id": {
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789ab"},
+		"exactly the display width": {"0123456789ab", "0123456789ab"},
+		"a test fixture":            {"fake-runner", "fake-runner"},
+		"empty":                     {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ShortID(tc.in); got != tc.want {
+				t.Errorf("ShortID(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

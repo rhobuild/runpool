@@ -9,38 +9,12 @@ import (
 	"context"
 )
 
-const getProviderBinding = `-- name: GetProviderBinding :one
-SELECT id, target_id, provider_kind, source_binding_key, desired_state, created_at
-FROM provider_bindings
-WHERE provider_kind = ?1
-  AND source_binding_key = ?2
-`
-
-type GetProviderBindingParams struct {
-	ProviderKind     string
-	SourceBindingKey string
-}
-
-func (q *Queries) GetProviderBinding(ctx context.Context, arg GetProviderBindingParams) (ProviderBinding, error) {
-	row := q.db.QueryRowContext(ctx, getProviderBinding, arg.ProviderKind, arg.SourceBindingKey)
-	var i ProviderBinding
-	err := row.Scan(
-		&i.ID,
-		&i.TargetID,
-		&i.ProviderKind,
-		&i.SourceBindingKey,
-		&i.DesiredState,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const insertProviderBinding = `-- name: InsertProviderBinding :one
 
 INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
 VALUES (?1, ?2, ?3)
 ON CONFLICT (provider_kind, source_binding_key) DO UPDATE SET target_id = excluded.target_id
-RETURNING id, target_id, provider_kind, source_binding_key, desired_state, created_at
+RETURNING id, target_id, provider_kind, source_binding_key, created_at
 `
 
 type InsertProviderBindingParams struct {
@@ -60,50 +34,13 @@ func (q *Queries) InsertProviderBinding(ctx context.Context, arg InsertProviderB
 		&i.TargetID,
 		&i.ProviderKind,
 		&i.SourceBindingKey,
-		&i.DesiredState,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const listProviderBindings = `-- name: ListProviderBindings :many
-SELECT id, target_id, provider_kind, source_binding_key, desired_state, created_at
-FROM provider_bindings
-ORDER BY target_id, source_binding_key
-`
-
-func (q *Queries) ListProviderBindings(ctx context.Context) ([]ProviderBinding, error) {
-	rows, err := q.db.QueryContext(ctx, listProviderBindings)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ProviderBinding{}
-	for rows.Next() {
-		var i ProviderBinding
-		if err := rows.Scan(
-			&i.ID,
-			&i.TargetID,
-			&i.ProviderKind,
-			&i.SourceBindingKey,
-			&i.DesiredState,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProviderBindingsWithContact = `-- name: ListProviderBindingsWithContact :many
-SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.desired_state, b.created_at,
+SELECT b.id, b.target_id, b.provider_kind, b.source_binding_key, b.created_at,
        coalesce(c.last_contact_at_ms, 0) AS last_contact_at_ms,
        coalesce(c.last_error, '')        AS last_error,
        coalesce(c.last_error_at_ms, 0)   AS last_error_at_ms
@@ -117,7 +54,6 @@ type ListProviderBindingsWithContactRow struct {
 	TargetID         string
 	ProviderKind     string
 	SourceBindingKey string
-	DesiredState     string
 	CreatedAt        int64
 	LastContactAtMs  int64
 	LastError        string
@@ -143,7 +79,6 @@ func (q *Queries) ListProviderBindingsWithContact(ctx context.Context) ([]ListPr
 			&i.TargetID,
 			&i.ProviderKind,
 			&i.SourceBindingKey,
-			&i.DesiredState,
 			&i.CreatedAt,
 			&i.LastContactAtMs,
 			&i.LastError,
@@ -199,23 +134,4 @@ type RecordProviderFailureParams struct {
 func (q *Queries) RecordProviderFailure(ctx context.Context, arg RecordProviderFailureParams) error {
 	_, err := q.db.ExecContext(ctx, recordProviderFailure, arg.BindingID, arg.LastError, arg.At)
 	return err
-}
-
-const setBindingDesiredState = `-- name: SetBindingDesiredState :execrows
-UPDATE provider_bindings
-SET desired_state = ?1
-WHERE id = ?2
-`
-
-type SetBindingDesiredStateParams struct {
-	DesiredState string
-	BindingID    int64
-}
-
-func (q *Queries) SetBindingDesiredState(ctx context.Context, arg SetBindingDesiredStateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setBindingDesiredState, arg.DesiredState, arg.BindingID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
