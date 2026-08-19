@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -237,88 +236,59 @@ func TestTheReadinessProbeIsBounded(t *testing.T) {
 	}
 }
 
-// TestAControlFileIsNeverReadHalfWritten: a reader racing a writer of the
-// control surface sees the previous contents or the next, never nothing.
+// TestAStateThatCannotBeReplacedIsStillWritten: when the atomic
+// replacement fails, the state is written in place rather than not at
+// all.
 //
-// The launcher reads these files from outside the container while the
-// supervisor writes them from inside, with no lock and no handshake
-// between them — it `cat`s the protocol declaration during boot and
-// execs `supervisor state` on every poll of a running capsule. A write
-// that truncates first gives that reader an empty file that reads as a
-// successful answer, and an empty answer is not "not yet": an empty
-// protocol declaration is a version this controller does not speak, and
-// an empty state is a state nothing recognizes. Both park a healthy
-// capsule.
+// The two failures are not equal, and this is which one to take. A
+// reader catching the file mid-write reports the capsule as
+// unobservable, and the attempt is held for a person to look at. A state
+// left stale reports a running job as one that never started —
+// terminalFailure reads anything but `running` as aborted — and the
+// controller requeues it, so the customer's job runs twice.
 //
-// It is fixed in the writer rather than by retrying in the reader. The
-// reader cannot tell a file caught mid-write from one with the wrong
-// contents, and a retry would leave the same window for every other
-// reader of the control surface.
-func TestAControlFileIsNeverReadHalfWritten(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "protocol")
-	// Two payloads of very different lengths: a torn read between two
-	// equal ones can look intact, and it is the tail of the longer that
-	// makes a partial write visible.
-	payloads := [][]byte{[]byte("2"), []byte(strings.Repeat("9", 4096))}
-	if err := writeControlFile(path, payloads[0], 0o644, -1, -1); err != nil {
+// The failure is reachable: the atomic replacement needs a new inode
+// where an in-place write reuses the block already there, and the
+// control directory is a one-megabyte tmpfs shared with a credential
+// that may be a megabyte itself.
+func TestAStateThatCannotBeReplacedIsStillWritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(path, []byte("waiting"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	stop := make(chan struct{})
-	bad := make(chan string, 1)
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				// A rename never leaves the target absent, so a missing
-				// file is a finding rather than something to poll past.
-				select {
-				case bad <- "unreadable: " + err.Error():
-				default:
-				}
-				return
-			}
-			whole := false
-			for _, want := range payloads {
-				if string(raw) == string(want) {
-					whole = true
-				}
-			}
-			if !whole {
-				select {
-				case bad <- fmt.Sprintf("%d bytes: %.32q", len(raw), raw):
-				default:
-				}
-				return
-			}
-		}
-	}()
+	replaceState(path, "running", func(string, []byte, os.FileMode, int, int) error {
+		return errors.New("no space left on device")
+	})
 
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 40 {
-				if err := writeControlFile(path, payloads[i%len(payloads)], 0o644, -1, -1); err != nil {
-					t.Errorf("write: %v", err)
-					return
-				}
-			}
-		}()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wg.Wait()
-	close(stop)
+	if string(raw) != "running" {
+		t.Errorf("state = %q after a replacement that could not be made; want running. "+
+			"A stale state is read as a job that never ran, and the controller runs it again", raw)
+	}
+}
 
-	select {
-	case raw := <-bad:
-		t.Fatalf("a reader observed a control file that is neither payload — %s", raw)
-	default:
+// TestEveryControlFileIsWrittenThroughTheAtomicHelper: the helper only
+// helps the writes that use it.
+//
+// A test of the helper passes with none of the call sites converted, so
+// it cannot say whether one was missed — and a control file left on
+// os.WriteFile is exactly the defect, still present, in a change whose
+// evidence says it is gone. The only exception is replaceState's
+// fallback, which writes in place on purpose and by way of a parameter,
+// never by naming the file.
+func TestEveryControlFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"protocolFile", "stateFile", "startFile", "jitFile"} {
+		if strings.Contains(string(src), "os.WriteFile("+name) {
+			t.Errorf("%s is written with os.WriteFile, which truncates before it writes; "+
+				"a reader landing in that window gets an empty file from a call that succeeded", name)
+		}
 	}
 }

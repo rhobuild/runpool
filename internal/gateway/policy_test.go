@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,9 +149,10 @@ func TestAWideningAllowIsRefusedOnTheReloadChannel(t *testing.T) {
 // the kernel lock that orders the installers and the unique temporary
 // name that makes each write atomic — and this test passes as long as
 // one of them does, which is exactly why it cannot stand for either.
-// TestConcurrentInstallsAreSerialized covers the lock and
-// TestAConcurrentWriteIsNeverReadHalfWritten covers the write; each
-// fails on its own mechanism alone.
+// TestConcurrentInstallsAreSerialized covers the lock, and the write is
+// covered where it lives, by atomicfile's own
+// TestAReplacedFileIsNeverReadHalfWritten; each fails on its own
+// mechanism alone.
 func TestAConcurrentInstallLeavesAPolicyInForce(t *testing.T) {
 	dir := t.TempDir()
 	path := PolicyPath(dir)
@@ -339,82 +339,5 @@ func TestConcurrentInstallsAreSerialized(t *testing.T) {
 		t.Errorf("%d installers held the critical section at once; want 1 — "+
 			"each one past the read is building its successor from a policy "+
 			"another is about to replace", got)
-	}
-}
-
-// TestAConcurrentWriteIsNeverReadHalfWritten: a reader of a file
-// replaced by writeFileAtomic never sees a partial document.
-//
-// The rename is atomic; the write into the temporary file behind it is
-// not. Writers sharing one temporary name truncate and fill it in turn,
-// and the rename publishes whatever interleaving won. Every caller gets
-// this, including the ones with no lock around them, so it is tested
-// where it lives rather than through an installer that is serialized
-// anyway.
-func TestAConcurrentWriteIsNeverReadHalfWritten(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "doc.json")
-	// Documents of very different lengths: a splice between two equal
-	// ones can go unnoticed, and the tail of the longer is what makes a
-	// half-written file visibly unparseable.
-	docs := [][]byte{
-		[]byte(`{"a":1}`),
-		[]byte(`{"a":1,"b":"` + strings.Repeat("x", 4096) + `"}`),
-	}
-	if err := writeFileAtomic(path, docs[0]); err != nil {
-		t.Fatal(err)
-	}
-
-	stop := make(chan struct{})
-	bad := make(chan string, 1)
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				// A rename never leaves the target absent, so this is a
-				// finding rather than something to poll past: a writer
-				// that removed and recreated the file would show up here
-				// and nowhere else.
-				select {
-				case bad <- "unreadable: " + err.Error():
-				default:
-				}
-				return
-			}
-			if !json.Valid(raw) {
-				select {
-				case bad <- string(raw):
-				default:
-				}
-				return
-			}
-		}
-	}()
-
-	var wg sync.WaitGroup
-	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 20 {
-				if err := writeFileAtomic(path, docs[i%len(docs)]); err != nil {
-					t.Errorf("write: %v", err)
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	close(stop)
-
-	select {
-	case raw := <-bad:
-		t.Fatalf("a reader observed a document that is not whole (%d bytes):\n%.200s", len(raw), raw)
-	default:
 	}
 }
