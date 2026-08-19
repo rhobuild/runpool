@@ -68,6 +68,13 @@ by its public and operational effects.
   spliced document the relay would refuse to read.
 - The relay's CONNECT port set, header handling, parser strictness and
   every concurrency and size bound are explicit, tested and fuzzed.
+- **A tunnel ends when both of its directions do.** A client that shuts
+  down its write side once its request is out has half-closed, not hung
+  up: the relay forwards that half-close and keeps carrying the reply,
+  so the response arrives whole. And the idle bound belongs to the
+  tunnel rather than to each direction, so a large upload or a slow
+  download — silent one way for its whole duration — is not cut off
+  while it is streaming.
 - **Containers a job starts take the same relay.** A daemon does not pass
   its own environment to what it runs, so the capsule's proxy did not
   reach a `docker build` or a `docker run` the job issued — and under the
