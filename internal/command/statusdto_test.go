@@ -311,3 +311,84 @@ func TestBothStatusAnswersShareOneEnvelope(t *testing.T) {
 		t.Error("the served form does not say so")
 	}
 }
+
+// TestThePreServeAnswerCarriesOnlyItsOwnFields: before the controller
+// has ever run, the document is four keys.
+//
+// The published shape says so — "it carries exactly api_version, served,
+// state_dir and detail" — and encoding the served form's struct there
+// emitted every one of its other fields as a zero value. Two of those
+// are actively misleading rather than merely noisy: `discrepancies:
+// null` is defined by this API as "the daemon could not be asked", and
+// `docker_error` being absent then says it could. A reader diagnosing a
+// fresh install would be told the daemon is unreachable and given no
+// reason why.
+func TestThePreServeAnswerCarriesOnlyItsOwnFields(t *testing.T) {
+	var out bytes.Buffer
+	if err := reportNoState(IO{Out: &out}, true); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("--json produced %q, which is not a document: %v", out.String(), err)
+	}
+	want := map[string]bool{"api_version": true, "served": true, "state_dir": true, "detail": true}
+	for key := range doc {
+		if !want[key] {
+			t.Errorf("the pre-serve document carries %q, which belongs to the served form", key)
+		}
+	}
+	for key := range want {
+		if _, ok := doc[key]; !ok {
+			t.Errorf("the pre-serve document is missing %q", key)
+		}
+	}
+}
+
+// TestAnUnresolvableImageStillReportsWhatTheBuildShips: a capsule image
+// this command cannot resolve is labelled, not blanked.
+//
+// CapsuleImage returns the empty string beside its error, and
+// capsule_image_error's own documentation promises the tier entries
+// carry what the build ships. Reporting an empty image instead says "no
+// image is configured", which is a different finding with a different
+// fix, and it is the one a reader would act on because the tier entry is
+// where they look.
+func TestAnUnresolvableImageStillReportsWhatTheBuildShips(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// A quick-start configuration, so the document carries a tier to
+	// report an image for.
+	t.Setenv(config.EnvHostTopology, "single")
+
+	const release = "ghcr.io/rhobuild/runpool/capsule@sha256:" +
+		"2222222222222222222222222222222222222222222222222222222222222222"
+	t.Setenv("RUNPOOL_CAPSULE_IMAGE", "ghcr.io/example/other:latest")
+
+	var out bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, true, release); err != nil {
+		t.Fatalf("status refused to answer: %v", err)
+	}
+	var doc statusDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("the document does not decode: %v\n%s", err, out.String())
+	}
+	if doc.CapsuleImageError == "" {
+		t.Fatal("the image resolved; this test asserted nothing")
+	}
+	if doc.Scheduling == nil || len(doc.Scheduling.Tiers) == 0 {
+		t.Fatal("no tier entries to check")
+	}
+	for _, tier := range doc.Scheduling.Tiers {
+		if tier.CapsuleImage == "" {
+			t.Errorf("tier %s reports an empty capsule image; want what the build ships, "+
+				"which is what capsule_image_error says the entries carry", tier.ID)
+		}
+	}
+}

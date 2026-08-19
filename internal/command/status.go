@@ -1,6 +1,7 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,6 +96,14 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	// answer is labelled with the failure rather than presented as the
 	// controller's view.
 	shippedCapsule, imageErr := app.CapsuleImage(os.Getenv, buildCapsule)
+	if imageErr != nil {
+		// CapsuleImage returns the empty string beside its error, and
+		// CapsuleImageError promises the tier entries carry what the
+		// build ships. Without this every tier reported an empty image,
+		// which reads as "none configured" rather than "this one could
+		// not be resolved" — and those call for different actions.
+		shippedCapsule = cmp.Or(buildCapsule, app.DefaultCapsuleImage)
+	}
 	doc := statusDocument(snap, cfg, review, obs, shippedCapsule)
 	if imageErr != nil {
 		doc.CapsuleImageError = imageErr.Error()
@@ -293,7 +302,11 @@ func age(d time.Duration) string {
 // controller has ever run, in whichever form the caller asked for.
 func reportNoState(streams IO, asJSON bool) error {
 	if asJSON {
-		return json.NewEncoder(streams.Out).Encode(statusDoc{
+		// The head alone. Encoding the whole document here emitted the
+		// served form's thirteen other fields as their zero values, and
+		// a reader following the published shape would have taken
+		// `discrepancies: null` to mean the daemon could not be asked.
+		return json.NewEncoder(streams.Out).Encode(statusHead{
 			APIVersion: statusAPIVersion,
 			Served:     false,
 			StateDir:   stateDir(),

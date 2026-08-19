@@ -17,18 +17,30 @@ import (
 // because consumers branch on length, not on presence.
 const statusAPIVersion = "v1"
 
-type statusDoc struct {
+// statusHead is what both forms of the document carry, and the whole of
+// the pre-serve one.
+//
+// It is a type rather than four fields repeated in two places, because a
+// map that re-spells the tags lets the two forms drift under a rename
+// with nothing to notice. It is separate from the served form's fields
+// rather than mixed in with them, because the pre-serve answer has to be
+// encodable on its own: encoding the whole document there emitted every
+// field of the served form as its zero value — thirteen of them,
+// including `discrepancies: null`, which this API defines as "the daemon
+// could not be asked".
+type statusHead struct {
 	APIVersion string `json:"api_version"`
 	// Served discriminates v1's two forms: true carries the document
 	// below, false is the pre-serve form with only state_dir and detail.
 	// A consumer branches on this, not on which fields happen to exist.
 	Served bool `json:"served"`
-	// StateDir and Detail are the pre-serve form's whole payload, and
-	// they are fields rather than a map the other branch builds by hand:
-	// a map re-spells every tag, so the two forms of one document could
-	// drift under a rename with nothing to notice.
-	StateDir      string         `json:"state_dir,omitempty"`
-	Detail        string         `json:"detail,omitempty"`
+	// StateDir and Detail are the pre-serve form's whole payload.
+	StateDir string `json:"state_dir,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+type statusDoc struct {
+	statusHead
 	Instance      string         `json:"instance"`
 	HostTopology  string         `json:"host_topology"`
 	SchemaVersion int            `json:"schema_version"`
@@ -160,8 +172,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		topology = cfg.Host.Topology
 	}
 	doc := statusDoc{
-		Served:        true,
-		APIVersion:    statusAPIVersion,
+		statusHead:    statusHead{APIVersion: statusAPIVersion, Served: true},
 		Instance:      snap.InstanceID,
 		HostTopology:  topology,
 		SchemaVersion: snap.SchemaVersion,
