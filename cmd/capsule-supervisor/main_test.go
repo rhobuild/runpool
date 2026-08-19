@@ -235,3 +235,60 @@ func TestTheReadinessProbeIsBounded(t *testing.T) {
 			elapsed.Round(time.Second), dockerdProbeTimeout)
 	}
 }
+
+// TestAStateThatCannotBeReplacedIsStillWritten: when the atomic
+// replacement fails, the state is written in place rather than not at
+// all.
+//
+// The two failures are not equal, and this is which one to take. A
+// reader catching the file mid-write reports the capsule as
+// unobservable, and the attempt is held for a person to look at. A state
+// left stale reports a running job as one that never started —
+// terminalFailure reads anything but `running` as aborted — and the
+// controller requeues it, so the customer's job runs twice.
+//
+// The failure is reachable: the atomic replacement needs a new inode
+// where an in-place write reuses the block already there, and the
+// control directory is a one-megabyte tmpfs shared with a credential
+// that may be a megabyte itself.
+func TestAStateThatCannotBeReplacedIsStillWritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(path, []byte("waiting"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	replaceState(path, "running", func(string, []byte, os.FileMode, int, int) error {
+		return errors.New("no space left on device")
+	})
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "running" {
+		t.Errorf("state = %q after a replacement that could not be made; want running. "+
+			"A stale state is read as a job that never ran, and the controller runs it again", raw)
+	}
+}
+
+// TestEveryControlFileIsWrittenThroughTheAtomicHelper: the helper only
+// helps the writes that use it.
+//
+// A test of the helper passes with none of the call sites converted, so
+// it cannot say whether one was missed — and a control file left on
+// os.WriteFile is exactly the defect, still present, in a change whose
+// evidence says it is gone. The only exception is replaceState's
+// fallback, which writes in place on purpose and by way of a parameter,
+// never by naming the file.
+func TestEveryControlFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"protocolFile", "stateFile", "startFile", "jitFile"} {
+		if strings.Contains(string(src), "os.WriteFile("+name) {
+			t.Errorf("%s is written with os.WriteFile, which truncates before it writes; "+
+				"a reader landing in that window gets an empty file from a call that succeeded", name)
+		}
+	}
+}

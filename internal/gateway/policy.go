@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/rhobuild/runpool/internal/egress"
+	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // MaxPolicyBytes bounds a policy document. The real one is a few
@@ -239,5 +240,5 @@ func installPolicyWith(controlDir string,
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, encoded)
+	return atomicfile.Replace(path, encoded, 0o600, -1, -1)
 }

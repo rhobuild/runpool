@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
+	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 const (
@@ -107,17 +108,13 @@ func runSubcommand(args []string) int {
 			fmt.Fprintln(os.Stderr, "deliver: no credential on stdin")
 			return 1
 		}
-		if err := os.WriteFile(jitFile, payload, 0o600); err != nil {
-			fmt.Fprintln(os.Stderr, "deliver:", err)
-			return 1
-		}
-		if err := os.Chown(jitFile, runnerUID, runnerGID); err != nil {
+		if err := atomicfile.Replace(jitFile, payload, 0o600, runnerUID, runnerGID); err != nil {
 			fmt.Fprintln(os.Stderr, "deliver:", err)
 			return 1
 		}
 		return 0
 	case "start":
-		if err := os.WriteFile(startFile, []byte(protocolVersion), 0o600); err != nil {
+		if err := atomicfile.Replace(startFile, []byte(protocolVersion), 0o600, -1, -1); err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)
 			return 1
 		}
@@ -196,7 +193,7 @@ func boot(log *slog.Logger) error {
 			return err
 		}
 	}
-	if err := os.WriteFile(protocolFile, []byte(protocolVersion), 0o644); err != nil {
+	if err := atomicfile.Replace(protocolFile, []byte(protocolVersion), 0o644, -1, -1); err != nil {
 		return err
 	}
 	// Booting, not waiting: the control surface answers from here, but
@@ -597,9 +594,32 @@ func prepareRunnerConfig(encoded, runnerRoot, volatileRoot string, uid, gid int)
 	return cleanup, nil
 }
 
-func setState(s string) {
-	_ = os.WriteFile(stateFile, []byte(s), 0o644)
+// replaceState records the supervisor's own account of itself, and
+// prefers a state that is written to one that is written atomically.
+//
+// The two failures are not equal. A reader that catches the file
+// mid-write reports the capsule as unobservable, and its attempt is held
+// for a person: recoverable, and visible. A state left stale reports a
+// running job as one that never started — terminalFailure reads anything
+// but `running` as aborted — and the controller requeues it, so the same
+// job runs twice. That is the outcome this whole machine is built to
+// prevent.
+//
+// The atomic replacement needs a new inode where an in-place write
+// reuses the block already there, and the control directory is a
+// one-megabyte tmpfs it shares with a credential that may be a megabyte
+// itself. So the in-place write is what happens when the replacement
+// cannot be made, rather than nothing happening at all.
+//
+// replace is a parameter so the fallback can be exercised without
+// filling a filesystem.
+func replaceState(path, state string, replace func(string, []byte, os.FileMode, int, int) error) {
+	if err := replace(path, []byte(state), 0o644, -1, -1); err != nil {
+		_ = os.WriteFile(path, []byte(state), 0o644)
+	}
 }
+
+func setState(s string) { replaceState(stateFile, s, atomicfile.Replace) }
 
 // terminalFailure names a failure by whether the runner ever started, which
 // is the one thing the controller cannot infer from the outside. `running` is
