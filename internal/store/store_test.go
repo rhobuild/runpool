@@ -1550,15 +1550,34 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 
 	s := newStore(t)
 	binding := seedBinding(t, s)
+
+	// Each case gets a real lease, because the authorization is scoped to
+	// one: an attempt in a servable state is not enough on its own.
+	leased := func(t *testing.T, name, state string) (assignment.LeaseID, assignment.AttemptID) {
+		t.Helper()
+		id := seedAttempt(t, s, binding, "msg-"+name, assignment.SourceWorkloadKey("job-"+name))
+		var leaseID assignment.LeaseID
+		inTx(t, s, func(tx *Tx) error {
+			lease, err := tx.LeaseAttempt(id, binding, "tier-a")
+			if err != nil {
+				return err
+			}
+			leaseID = lease.ID
+			if state == "leased" {
+				return nil
+			}
+			return tx.Advance(id, "leased", state)
+		})
+		return leaseID, id
+	}
+
 	for _, c := range cases {
 		t.Run(c.state, func(t *testing.T) {
-			workload := assignment.SourceWorkloadKey("job-" + c.state)
-			id := seedAttempt(t, s, binding, "msg-"+c.state, workload)
-			inTx(t, s, func(tx *Tx) error { return tx.Advance(id, "ready", c.state) })
+			leaseID, id := leased(t, c.state, c.state)
 
 			var err error
 			inTx(t, s, func(tx *Tx) error {
-				err = tx.AuthorizeStart(id)
+				err = tx.AuthorizeStart(leaseID, id)
 				return nil
 			})
 			switch {
@@ -1571,4 +1590,42 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 			}
 		})
 	}
+
+	// The state set says nobody has resolved the attempt. It does not say
+	// the attempt is still this lease's, and that is the half that keeps
+	// a job from being run twice.
+	t.Run("a lease that has been released", func(t *testing.T) {
+		leaseID, id := leased(t, "released-lease", "prepared")
+		// reserved -> failed -> cleaning -> released is the shortest real
+		// path to a released lease; the state machine refuses shortcuts.
+		inTx(t, s, func(tx *Tx) error {
+			for _, edge := range [][2]LeaseState{
+				{LeaseReserved, LeaseFailed},
+				{LeaseFailed, LeaseCleaning},
+				{LeaseCleaning, LeaseReleased},
+			} {
+				if err := tx.TransitionLease(leaseID, edge[0], edge[1]); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		inTx(t, s, func(tx *Tx) error {
+			if err := tx.AuthorizeStart(leaseID, id); !errors.Is(err, ErrConflict) {
+				t.Errorf("AuthorizeStart on a released lease = %v; want ErrConflict", err)
+			}
+			return nil
+		})
+	})
+
+	t.Run("a lease that never held this attempt", func(t *testing.T) {
+		_, id := leased(t, "wrong-lease-a", "prepared")
+		other, _ := leased(t, "wrong-lease-b", "prepared")
+		inTx(t, s, func(tx *Tx) error {
+			if err := tx.AuthorizeStart(other, id); !errors.Is(err, ErrConflict) {
+				t.Errorf("AuthorizeStart with another lease's id = %v; want ErrConflict", err)
+			}
+			return nil
+		})
+	})
 }

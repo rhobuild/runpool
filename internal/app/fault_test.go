@@ -779,9 +779,11 @@ func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 	}
 	lease, attemptID := leaseFor(t, h, "job-lost-edge")
 
-	// `preparing -> prepared` is written after Prepare returns, so
-	// putting the attempt back to where it was before `preparing` is
-	// exactly what that write failing leaves behind.
+	// `leased -> preparing` is written just before Prepare is called, so
+	// putting the attempt back to `leased` from inside it is what that
+	// write failing leaves behind. The other lost edge, `preparing ->
+	// prepared`, leaves the attempt at `preparing`; the store's own table
+	// test decides both, and this one takes the further of the two.
 	caps.onPrepare = func() {
 		h.inStore(func(tx *store.Tx) error {
 			return tx.Advance(attemptID, "preparing", "leased")
@@ -871,5 +873,85 @@ func TestRecoveryOutlivesTheContextThatBoundedTheWait(t *testing.T) {
 	}
 	if _, ok := unwind.Deadline(); !ok {
 		t.Error("the recovery context has no deadline; an unwind against a wedged daemon would hold the pass forever")
+	}
+}
+
+// ctxRemover records the context its removals run under. That context is
+// the only place the bound on unwinding is observable from outside.
+type ctxRemover struct {
+	seen        bool
+	hasDeadline bool
+	deadline    time.Time
+}
+
+func (r *ctxRemover) note(ctx context.Context) error {
+	r.seen = true
+	r.deadline, r.hasDeadline = ctx.Deadline()
+	return nil
+}
+func (r *ctxRemover) RemoveOwnedContainer(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
+	return r.note(ctx)
+}
+func (r *ctxRemover) RemoveOwnedNetwork(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
+	return r.note(ctx)
+}
+func (r *ctxRemover) RemoveOwnedVolume(ctx context.Context, _ string, _ assignment.InstanceID, _ assignment.LeaseID) error {
+	return r.note(ctx)
+}
+
+// TestAnAdoptedLeaseUnwindsOnItsOwnBudget: a wait that fails on an
+// adopted capsule unwinds it, and does so under a bound.
+//
+// What this does not prove, said plainly because the obvious reading is
+// wrong: it does not show that the unwind is detached from the context
+// that bounded the wait. recoverCapsuleFailure derives its own
+// recoveryBudget from whatever it is given, so the deadline seen here is
+// two minutes either way. The detachment only shows once the ceiling has
+// actually expired, and remainingCeiling floors at a minute of grace, so
+// no unit test can produce that without changing a production timing.
+// recoveryContext carries its own test for that half.
+//
+// What it does hold: the adopted path still unwinds, it removes the
+// objects the capsule owned, and it runs under a deadline rather than
+// none.
+func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
+	h := newHarness(t, 1)
+	rec := &ctxRemover{}
+	h.useRemover(rec)
+	h.srv.caps = &fakeCapsule{}
+	h.srv.wait = &fakeWaiter{waitErr: errors.New("the capsule stopped reporting")}
+	h.bind.gh = &fakeRegistry{}
+	if err := h.deliver(demand("job-adopted", "app", 42)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-adopted")
+
+	// A capsule left behind by a previous process owns objects, which is
+	// what makes the unwind have anything to do.
+	recorder := h.srv.leases.Recorder(t.Context(), lease.ID)
+	intent, err := recorder.Plan("container", "runner", "adopted-runner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Creating(intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Confirm(intent, "adopted-runner"); err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.adopt(h.bind, lease, "adopted-runner")
+	h.srv.wg.Wait()
+
+	if !rec.seen {
+		t.Fatal("the adopted lease was unwound without removing anything; this test asserted nothing")
+	}
+	if !rec.hasDeadline {
+		t.Fatal("the unwind ran on a context with no deadline")
+	}
+	if left := time.Until(rec.deadline); left <= 0 || left > recoveryBudget {
+		t.Errorf("the unwind had %v left; want its own budget of at most %v. "+
+			"Anything longer is the tier's ceiling, which is the deadline that just failed",
+			left, recoveryBudget)
 	}
 }

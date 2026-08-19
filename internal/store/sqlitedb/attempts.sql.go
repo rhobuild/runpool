@@ -12,8 +12,18 @@ import (
 const authorizeAttemptStart = `-- name: AuthorizeAttemptStart :execrows
 UPDATE assignment_attempts
 SET state = 'starting'
-WHERE id = ?1 AND state IN ('leased', 'preparing', 'prepared')
+WHERE assignment_attempts.id = ?1
+  AND assignment_attempts.state IN ('leased', 'preparing', 'prepared')
+  AND EXISTS (SELECT 1 FROM capsule_leases
+              WHERE capsule_leases.id = ?2
+                AND capsule_leases.attempt_id = ?1
+                AND capsule_leases.state <> 'released')
 `
+
+type AuthorizeAttemptStartParams struct {
+	AttemptID string
+	LeaseID   string
+}
 
 // The one authoritative edge in the walk, and the reason it names a set
 // rather than a single state.
@@ -29,8 +39,15 @@ WHERE id = ?1 AND state IN ('leased', 'preparing', 'prepared')
 // canceled, settled and manual_review are all outside this set, so a
 // redelivery that replaced this attempt during preparation still stops
 // the start, which is the property the edge exists for.
-func (q *Queries) AuthorizeAttemptStart(ctx context.Context, attemptID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, authorizeAttemptStart, attemptID)
+//
+// The set alone does not say the attempt is still this serving's, only
+// that nobody has resolved it. `prepared` used to carry that by
+// accident, being a marker the starting goroutine had just written
+// itself; `leased` is written by whoever claimed the attempt. So the
+// lease is named here too, and at-most-once is proved by the row rather
+// than by an in-memory claim and two partial indexes agreeing.
+func (q *Queries) AuthorizeAttemptStart(ctx context.Context, arg AuthorizeAttemptStartParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, authorizeAttemptStart, arg.AttemptID, arg.LeaseID)
 	if err != nil {
 		return 0, err
 	}

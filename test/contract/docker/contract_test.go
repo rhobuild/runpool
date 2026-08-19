@@ -236,7 +236,10 @@ func TestExecHonoursItsContext(t *testing.T) {
 	if err == nil {
 		t.Error("exec returned no error after its context expired; the caller cannot tell it was cut short")
 	}
-	if elapsed > 30*time.Second {
+	// Ten seconds is five times the bound and a sixth of the command. A
+	// looser window would let a return that owes nothing to the context
+	// pass for one that does.
+	if elapsed > 10*time.Second {
 		t.Fatalf("exec returned after %v with a 2s context; it is bounded by the command, not the caller", elapsed)
 	}
 }

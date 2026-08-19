@@ -49,22 +49,6 @@ func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.At
 // runCapsule drives one lease through the machine on its own context:
 // cancelling serve stops admission, not a running job — drain waits, and
 // whatever outlives the drain window is adopted on the next start.
-// inspectExecution bounds one observation of a runtime.
-//
-// The observation itself is a `docker exec` into the capsule, and an exec
-// runs until its context ends. Both callers hold something open while
-// they wait: the launch goroutine that the drain counts, and the
-// reconciliation pass that every later pass queues behind. Handing either
-// of them a context with no deadline makes a wedged daemon an unbounded
-// shutdown rather than a slow one.
-func (s *Controller) inspectExecution(ctx context.Context,
-	prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
-
-	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
-	defer cancel()
-	return s.caps.InspectExecution(ctx, prepared)
-}
-
 func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	defer s.wg.Done()
 	attemptID := lease.AttemptID
@@ -213,7 +197,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// on. Requiring `prepared` made a transient store error tear down a
 	// capsule that was ready to run.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.AuthorizeStart(attemptID)
+		return tx.AuthorizeStart(lease.ID, attemptID)
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
 			"attempt", attemptID, "error", err)
@@ -466,4 +450,21 @@ func remainingCeiling(tier config.Tier, createdAt time.Time) time.Duration {
 		return left
 	}
 	return grace
+}
+
+// inspectExecution bounds one observation of a runtime.
+//
+// The observation is a `docker exec` into the capsule, and an exec runs
+// until its context ends: nothing in the Docker API cancels one. Both
+// callers hold something open while they wait — this one is a launch
+// goroutine the drain counts, and the other is startup, before any loop
+// has begun. Handed a context with no deadline, a daemon that accepted
+// the call and stopped answering makes a wedged shutdown out of a slow
+// one.
+func (s *Controller) inspectExecution(ctx context.Context,
+	prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
+
+	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	return s.caps.InspectExecution(ctx, prepared)
 }

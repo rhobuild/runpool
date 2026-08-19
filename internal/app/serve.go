@@ -80,14 +80,25 @@ const (
 	// question about a different party.
 	capsulePrepTimeout = 15 * time.Minute
 
+	// interruptedLeaseBudget bounds resolving one lease left behind by a
+	// previous process: reading its evidence, observing its runtime if
+	// the start was authorized, and unwinding it.
+	interruptedLeaseBudget = 30 * time.Second
+
 	// inspectTimeout bounds one observation of a runtime. It reaches the
 	// capsule through a `docker exec`, and an exec ends when its context
 	// does and not before: a daemon that has stopped answering parks the
-	// caller for as long as it is given. Both callers are places nothing
-	// else can proceed past - the launch goroutine the drain waits on,
-	// and the reconciliation pass every later pass queues behind - so an
-	// unbounded one there is an unbounded shutdown.
-	inspectTimeout = 30 * time.Second
+	// caller for as long as it is given, and neither caller can proceed
+	// past it — one is a launch goroutine the drain counts, the other is
+	// startup.
+	//
+	// It is deliberately a fraction of interruptedLeaseBudget rather than
+	// equal to it. A bound equal to the budget it sits inside can never
+	// take effect, and worse, an observation that spends the whole budget
+	// leaves the unwinding that follows it a context with nothing left. A
+	// container inspect and one supervisor exec do not need ten seconds;
+	// a daemon that does is one the observation should give up on.
+	inspectTimeout = 10 * time.Second
 
 	// receiveFailuresBeforeReopen is how many consecutive polls may fail
 	// before the binding stops trusting its session. The upstream client

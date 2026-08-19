@@ -94,9 +94,21 @@ WHERE id = @attempt_id AND state = @current;
 -- canceled, settled and manual_review are all outside this set, so a
 -- redelivery that replaced this attempt during preparation still stops
 -- the start, which is the property the edge exists for.
+--
+-- The set alone does not say the attempt is still this serving's, only
+-- that nobody has resolved it. `prepared` used to carry that by
+-- accident, being a marker the starting goroutine had just written
+-- itself; `leased` is written by whoever claimed the attempt. So the
+-- lease is named here too, and at-most-once is proved by the row rather
+-- than by an in-memory claim and two partial indexes agreeing.
 UPDATE assignment_attempts
 SET state = 'starting'
-WHERE id = @attempt_id AND state IN ('leased', 'preparing', 'prepared');
+WHERE assignment_attempts.id = @attempt_id
+  AND assignment_attempts.state IN ('leased', 'preparing', 'prepared')
+  AND EXISTS (SELECT 1 FROM capsule_leases
+              WHERE capsule_leases.id = @lease_id
+                AND capsule_leases.attempt_id = @attempt_id
+                AND capsule_leases.state <> 'released');
 
 -- name: RecordAttemptEvidence :execrows
 -- Evidence is monotonic and compare-and-swap on the value the caller

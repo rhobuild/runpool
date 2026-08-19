@@ -152,7 +152,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	// exists — invisible to every query, retried by nothing. The release
 	// already survived cancellation; the requeue must too, or the pair
 	// is not a recovery at all.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptedLeaseBudget)
 	defer cancel()
 
 	evidence, err := s.leases.EvidenceOf(ctx, lease)
@@ -232,8 +232,8 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 // the admission credit they were admitted on, which is capacity the host
 // never gets back short of a restart.
 //
-// It keeps a bound of its own: an unwind that hangs holds the
-// reconciliation pass, and every later pass queues behind it.
+// It keeps a bound of its own, because an unwind that hangs is a
+// goroutine the drain waits out at shutdown.
 func recoveryContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), recoveryBudget)
 }

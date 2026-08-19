@@ -164,22 +164,29 @@ func (t *Tx) Advance(attemptID assignment.AttemptID, from, to string) error {
 }
 
 // AuthorizeStart is the compare-and-swap that decides whether a start may
-// be attempted at all. It accepts any state this serving passed through
-// on the way to a prepared capsule, and no state anybody else could have
-// put the attempt in.
+// be attempted at all. It matches an attempt in a state this serving
+// passed through, still held by this lease.
 //
 // Advance is the wrong shape here. Its edges are observability, written
 // outside the transaction that matters, so an attempt can legitimately be
 // behind by one when the start is authorized. Requiring the exact
 // predecessor spends a prepared capsule and a serving on a write that
 // only ever existed to be read by an operator.
-func (t *Tx) AuthorizeStart(attemptID assignment.AttemptID) error {
-	affected, err := t.q.AuthorizeAttemptStart(t.ctx, string(attemptID))
+//
+// It takes the lease because the state set alone does not prove
+// ownership. `prepared` proved it by accident — the starting goroutine
+// wrote it itself moments earlier — while `leased` is written by whoever
+// claimed the attempt. Naming the lease keeps at-most-once a property of
+// the row rather than of three separate invariants agreeing.
+func (t *Tx) AuthorizeStart(leaseID assignment.LeaseID, attemptID assignment.AttemptID) error {
+	affected, err := t.q.AuthorizeAttemptStart(t.ctx, sqlitedb.AuthorizeAttemptStartParams{
+		AttemptID: string(attemptID), LeaseID: string(leaseID),
+	})
 	if err != nil {
 		return err
 	}
 	if affected == 0 {
-		return fmt.Errorf("%w: attempt %s is not this serving's to start", ErrConflict, attemptID)
+		return fmt.Errorf("%w: attempt %s is not lease %s's to start", ErrConflict, attemptID, leaseID)
 	}
 	return nil
 }
