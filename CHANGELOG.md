@@ -30,9 +30,17 @@ by its public and operational effects.
   The controller reads the protocol version the capsule declares before
   handing it anything and refuses one it does not speak; that attempt is
   held for review as `capsule_incompatible` rather than retried, because
-  the next attempt would launch the same image. `runpool status` reports the image each tier runs, because a
-  replaced capsule is outside the configuration the release gates
-  observed.
+  the next attempt would launch the same image. That version is read
+  before readiness is waited on, so an image that is not this build's
+  half of the protocol is refused in about a second rather than after a
+  readiness deadline that was never going to be met. `runpool status`
+  reports the image each tier runs, because a replaced capsule is outside
+  the configuration the release gates observed.
+- **A prepared capsule has a daemon that answers.** The state the
+  controller delivers a credential on is written by the supervisor only
+  once the job's own Docker daemon is up, so readiness is something the
+  capsule proves rather than something it announces on the way to
+  proving it.
 - Under the restricted network profile a capsule has **no route out**.
   Its only egress is a per-capsule gateway that resolves and connects
   on its behalf under a default-deny policy, which is also the DNS
@@ -153,6 +161,15 @@ by its public and operational effects.
   evidence rung and the provider's own identifiers for the run, so the
   external check the command's help prescribes can be carried out from
   the tool that prescribes it.
+- **A capsule that never handed the job over returns it to the queue.**
+  The supervisor exits with a status it reserves for stopping before the
+  start was authorized — the ordinary end of an idle capsule when a
+  controller shuts down — and both the path that awaited a capsule and
+  the one that adopted it read that status the same way. It outranks what
+  was recorded when the start was authorized: that record is written when
+  a capsule reports itself up, while this one is the capsule stating that
+  nothing ever came after it. A job read the other way around is settled
+  as one that ran and is never served again.
 - **A retry that repeats is bounded.** An attempt whose work provably
   never began is served up to three times in all; past that it goes to
   manual review as `retry_budget_exhausted` rather than burning a capsule

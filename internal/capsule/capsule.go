@@ -50,7 +50,12 @@ const (
 	// container's own overlayfs.
 	dindDataDir = "/var/lib/docker"
 
-	readyTimeout      = 90 * time.Second
+	readyTimeout = 90 * time.Second
+	// protocolTimeout bounds the wait for a capsule to declare what it
+	// speaks. The supervisor writes that file before any state, so a
+	// first-party capsule answers within moments of starting; this is
+	// the bound on "this is not a Runpool capsule", not on readiness.
+	protocolTimeout   = 30 * time.Second
 	readyPollInterval = 500 * time.Millisecond
 )
 
@@ -366,10 +371,14 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	if err := m.dock.StartContainer(ctx, outerID); err != nil {
 		return "", err
 	}
-	if err := m.awaitReady(ctx, outerID); err != nil {
+	// The version first, then readiness. A capsule that does not speak
+	// this protocol is refused in about a second rather than after the
+	// readiness deadline, and its operator is told the image is the
+	// problem instead of watching every job on the tier time out.
+	if err := m.awaitProtocol(ctx, outerID); err != nil {
 		return "", err
 	}
-	if err := m.checkProtocol(ctx, outerID); err != nil {
+	if err := m.awaitReady(ctx, outerID); err != nil {
 		return "", err
 	}
 	// The JIT bundle travels over exec stdin onto the capsule's tmpfs, where
@@ -387,28 +396,48 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	return outerID, nil
 }
 
-// checkProtocol refuses a capsule that does not speak this build's
-// control protocol, before anything is handed to it.
+// awaitProtocol refuses a capsule that does not speak this build's
+// control protocol, before anything is handed to it and before readiness
+// is waited on.
 //
-// It runs after readiness rather than before it. The supervisor writes the
-// file at boot, ahead of the daemon, so an earlier read would be racing a
-// capsule that has not written it yet and would need a poll of its own.
-// Readiness is the first moment a capsule is known to answer anything,
-// and it is still before the credential.
+// The supervisor writes its version at boot, ahead of every state, so
+// this reads a fact the capsule states about itself rather than inferring
+// one from a verb that happened to work. Without it a capsule whose
+// supervisor is older answers some verbs and not others, and the
+// mismatch arrives as a job that failed rather than as an image that
+// cannot be used — the difference between one operator reading one error
+// and every job on that tier failing until someone correlates them.
 //
-// The supervisor writes its version at boot, so this reads a fact the
-// capsule states about itself rather than inferring one from a verb that
-// happened to work. Without it a capsule whose supervisor is older
-// answers some verbs and not others, and the mismatch arrives as a job
-// that failed rather than as an image that cannot be used — which is the
-// difference between one operator reading one error and every job on that
-// tier failing until someone correlates them.
-func (m *Launcher) checkProtocol(ctx context.Context, outerID string) error {
-	code, out, err := m.dock.Exec(ctx, outerID, []string{"cat", protocolFile})
-	if err != nil {
-		return fmt.Errorf("read the capsule control protocol: %w", err)
+// It polls because "before every state" is still after the container
+// starts, and it does so under a bound of its own: this is the wait for
+// a capsule to say what it is, not the wait for it to be ready, and
+// conflating the two is what made a stated incompatibility cost a
+// readiness deadline.
+func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
+	deadline := time.Now().Add(protocolTimeout)
+	for {
+		code, out, err := m.dock.Exec(ctx, outerID, []string{"cat", protocolFile})
+		// Only a read that succeeded is a declaration to judge: a
+		// capsule that has not written the file yet is not a capsule
+		// that cannot.
+		if err == nil && code == 0 {
+			return protocolVerdict(code, out)
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("read the capsule control protocol: %w", err)
+			}
+			// The last observation, judged: a capsule that never wrote
+			// the file declares no protocol, which is what the verdict
+			// says and what an operator has to act on.
+			return protocolVerdict(code, out)
+		}
+		select {
+		case <-time.After(readyPollInterval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return protocolVerdict(code, out)
 }
 
 // ErrIncompatibleImage reports a capsule that does not speak this
@@ -499,7 +528,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 	if err := m.dock.StartContainer(ctx, gwID); err != nil {
 		return netip.Addr{}, "", err
 	}
-	if err := m.awaitState(ctx, gwID, "ready"); err != nil {
+	if err := m.awaitState(ctx, gwID, protocol.StateReady); err != nil {
 		return netip.Addr{}, "", fmt.Errorf("gateway: %w", err)
 	}
 	ip, _, err := m.dock.ContainerIPOn(ctx, gwID, netID)
@@ -515,25 +544,41 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 
 // awaitReady polls the supervisor's state until the capsule reports
 // waiting: daemon booted, readiness proven, runner deliberately not
-// started.
+// started. The supervisor writes that state only once its daemon
+// answers, so reaching it is the proof — not the intention — that a job
+// delivered here has something to run on.
 func (m *Launcher) awaitReady(ctx context.Context, outerID string) error {
-	return m.awaitState(ctx, outerID, "waiting")
+	return m.awaitState(ctx, outerID, protocol.StateWaiting)
+}
+
+// stateVerdict is what one observation of a supervisor-family container
+// decides: the wanted state reached, a terminal state it can never leave,
+// or keep polling. It is separated from the poll because the decision is
+// where the cost is — a terminal state carries the reason the container
+// failed, that reason dies with the container, and treating it as "not
+// yet" spends the whole deadline and then reports a timeout instead.
+func stateVerdict(want string, code int, out string, execErr error) (done bool, err error) {
+	if execErr != nil || code != 0 {
+		return false, nil
+	}
+	switch s := strings.TrimSpace(out); {
+	case s == want:
+		return true, nil
+	case protocol.Terminal(s):
+		return true, fmt.Errorf("the container reported %s", s)
+	default:
+		return false, nil
+	}
 }
 
 // awaitState polls a supervisor-family container until it reports the
-// wanted state. The supervisor writing `failed:` is a boot failure
-// worth its reason.
+// wanted state or one it can no longer leave.
 func (m *Launcher) awaitState(ctx context.Context, containerID, want string) error {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		code, out, err := m.dock.Exec(ctx, containerID, []string{supervisorPath, "state"})
-		if err == nil && code == 0 {
-			switch s := strings.TrimSpace(out); {
-			case s == want:
-				return nil
-			case strings.HasPrefix(s, "failed:"):
-				return fmt.Errorf("boot failed: %s", strings.TrimPrefix(s, "failed:"))
-			}
+		if done, verdict := stateVerdict(want, code, out, err); done {
+			return verdict
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("container %s did not reach %q within %s", containerID[:12], want, readyTimeout)

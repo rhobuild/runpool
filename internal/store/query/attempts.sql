@@ -122,9 +122,17 @@ WHERE id = @attempt_id AND state IN ('leased', 'preparing', 'prepared');
 -- runtime being prepared - a write that moves backwards, and every retry
 -- of this shape ends in review after burning a lease. What each serving
 -- observed is kept in attempt_events either way.
+--
+-- `running` is in the guard beside `starting` because the walk that
+-- advances an attempt is optimistic: it writes `running` when the start
+-- is authorized and the capsule reports itself up, which is before the
+-- wait that can prove the runner never took the job. The proof arrives
+-- with the attempt already past `starting`, and a guard naming only that
+-- state matches no row: the finalizing transaction then rolls back and
+-- the lease pins in cleaning holding its credit.
 UPDATE assignment_attempts
 SET state = 'ready', execution_evidence = 'not_started'
-WHERE id = @attempt_id AND state = 'starting';
+WHERE id = @attempt_id AND state IN ('starting', 'running');
 
 -- name: CancelReadyAttempt :execrows
 -- A remote cancellation may close an attempt that is not yet executing;

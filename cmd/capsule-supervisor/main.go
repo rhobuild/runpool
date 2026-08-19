@@ -8,9 +8,13 @@
 //
 // The control surface is the filesystem under /run/runpool, all tmpfs:
 //
-//	protocol   written at boot: the protocol version, "1"
-//	state      waiting | running | exited:<code> | failed:<reason>
-//	           | aborted:<reason>
+//	protocol   written at boot, before any state: the protocol version
+//	state      booting | waiting | running | exited:<code>
+//	           | failed:<reason> | aborted:<reason>
+//	           `booting` is the control surface answering before the
+//	           daemon is proven; `waiting` is written only once dockerd
+//	           answers, because it is the state on which the launcher
+//	           delivers a credential and authorizes a start.
 //	           `aborted` is a failure before the runner started, so the job
 //	           was never handed over and must be retried; `failed` is a
 //	           failure after it started, which is an execution outcome.
@@ -133,7 +137,7 @@ func supervise(log *slog.Logger) int {
 	if err := boot(log); err != nil {
 		log.Error("capsule boot failed", "error", err)
 		// Boot is entirely before the runner: nothing was ever handed over.
-		setState("aborted:" + err.Error())
+		setState(protocol.AbortedPrefix + err.Error())
 		return exitAborted
 	}
 
@@ -142,7 +146,7 @@ func supervise(log *slog.Logger) int {
 		log.Error("capsule run failed", "error", err)
 		state := terminalFailure(currentState(), err)
 		setState(state)
-		if strings.HasPrefix(state, "aborted:") {
+		if strings.HasPrefix(state, protocol.AbortedPrefix) {
 			return exitAborted
 		}
 		return 1
@@ -152,7 +156,7 @@ func supervise(log *slog.Logger) int {
 		log.Warn("the runner exited with the reserved abort code; reporting it as a plain failure",
 			"runner_exit", code, "reported", reported)
 	}
-	setState("exited:" + strconv.Itoa(reported))
+	setState(protocol.ExitedPrefix + strconv.Itoa(reported))
 	log.Info("capsule finished", "exit", reported)
 	return reported
 }
@@ -192,7 +196,11 @@ func boot(log *slog.Logger) error {
 	if err := os.WriteFile(protocolFile, []byte(protocolVersion), 0o644); err != nil {
 		return err
 	}
-	setState("waiting")
+	// Booting, not waiting: the control surface answers from here, but
+	// the daemon the job needs has not been started, let alone proven.
+	// Waiting is what the launcher delivers a credential on, and it is
+	// written in run() once dockerd answers.
+	setState(protocol.StateBooting)
 	// The cache lane, when mounted, must be writable by the runner uid.
 	if info, err := os.Stat("/cache"); err == nil && info.IsDir() {
 		if err := os.Chown("/cache", runnerUID, runnerGID); err != nil {
@@ -329,12 +337,18 @@ func run(log *slog.Logger) (int, error) {
 		return -1, err
 	}
 	log.Info("dockerd ready", "socket", dockerSocket)
+	// Only now: waiting is the state the launcher reads as "this capsule
+	// can be given a job", and the daemon that runs it has just answered.
+	setState(protocol.StateWaiting)
 
 	if err := awaitStart(ctx); err != nil {
-		// Cancellation while waiting: the start was never authorized, so
-		// nothing ran — the state says so and the exit is clean shutdown.
-		log.Info("shutdown before any start authorization; nothing ran")
-		return 0, nil
+		// Cancellation while waiting is an abort, not a clean exit: the
+		// start was never authorized, so the job was never handed over
+		// and must run somewhere else. Reported as an error so the one
+		// function that decides started-or-not decides this too — a
+		// clean exit here left the controller reading a stop during
+		// shutdown as a job that ran and finished.
+		return -1, fmt.Errorf("shutdown before the start was authorized: %w", err)
 	}
 
 	return runRunner(ctx, log, reap)
@@ -460,7 +474,7 @@ func runRunner(ctx context.Context, log *slog.Logger, reap *reaper) (int, error)
 		// precisely so this case stays an abort.
 		return -1, fmt.Errorf("start runner: %w", err)
 	}
-	setState("running")
+	setState(protocol.StateRunning)
 
 	select {
 	case code := <-exit:
@@ -577,10 +591,10 @@ func setState(s string) {
 // dockerd never ready — the job never ran, and reporting an exit would settle
 // it as complete and never retry it.
 func terminalFailure(state string, err error) string {
-	if state == "running" {
-		return "failed:" + err.Error()
+	if state == protocol.StateRunning {
+		return protocol.FailedPrefix + err.Error()
 	}
-	return "aborted:" + err.Error()
+	return protocol.AbortedPrefix + err.Error()
 }
 
 func currentState() string {

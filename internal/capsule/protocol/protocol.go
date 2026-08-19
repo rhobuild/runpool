@@ -8,18 +8,71 @@
 // instead of detectable: there is one declaration, so there is nothing
 // to compare.
 //
-// Only the values live here. The files they travel through, the verbs
-// spoken over exec and the machinery around them belong to their sides;
-// this package must stay dependency-free so the supervisor's static
-// binary carries nothing it does not run.
+// Only the values live here, and the one predicate that decides what a
+// value means. The files they travel through, the verbs spoken over exec
+// and the machinery around them belong to their sides; this package
+// depends on nothing outside the standard library so the supervisor's
+// static binary carries nothing it does not run.
 package protocol
+
+import "strings"
 
 // Version is the control protocol this build speaks. The supervisor
 // writes it to the control directory at boot, before it is asked
 // anything, and the launcher reads it before handing the capsule
 // anything: a capsule that declares a version this build does not speak
 // is refused, not retried.
-const Version = "1"
+//
+// Version 2 moved when StateWaiting is written. A version 1 supervisor
+// wrote it at boot, ahead of its daemon, so a launcher that treats the
+// state as readiness would deliver a credential and authorize a start
+// against a capsule whose daemon may never come up. The two builds are
+// not interchangeable in either direction, which is what the equality
+// check enforces.
+const Version = "2"
+
+// The states a supervisor-family container writes to its control
+// directory. The capsule's supervisor and the gateway are the same
+// binary in two containers and share this vocabulary; the launcher waits
+// on these names from the outside, so both sides read one declaration.
+const (
+	// StateBooting is the control surface answering before anything it
+	// supervises is proven. Nothing may be handed to a capsule here.
+	StateBooting = "booting"
+	// StateWaiting is the daemon proven ready and the runner deliberately
+	// not started: the state in which a credential is delivered and a
+	// start is authorized.
+	StateWaiting = "waiting"
+	// StateRunning is written immediately before the runner is executed,
+	// so its presence is the proof that the job was handed over.
+	StateRunning = "running"
+	// StateReady is the gateway's: ruleset installed and relay listening.
+	StateReady = "ready"
+)
+
+// The prefixes a terminal state carries, each with its reason appended.
+// Which one it is decides whether the job may run again, so they are
+// declared once rather than spelled at each side.
+const (
+	// ExitedPrefix carries the runner's own status.
+	ExitedPrefix = "exited:"
+	// FailedPrefix is a failure after the runner started: an execution
+	// outcome.
+	FailedPrefix = "failed:"
+	// AbortedPrefix is a failure before it started: the job was never
+	// handed over and must be retried.
+	AbortedPrefix = "aborted:"
+)
+
+// Terminal reports whether a state says the supervisor will never reach
+// another one. A caller waiting for a state it can no longer reach must
+// give up with the reason rather than poll out its deadline: the reason
+// is written here and lost when the container goes.
+func Terminal(state string) bool {
+	return strings.HasPrefix(state, ExitedPrefix) ||
+		strings.HasPrefix(state, FailedPrefix) ||
+		strings.HasPrefix(state, AbortedPrefix)
+}
 
 // AbortedExitCode is the status the supervisor exits with when it stops
 // before handing the job to the runner: the job was never handed over

@@ -192,6 +192,24 @@ func TestCapsuleLifecycle(t *testing.T) {
 		t.Fatalf("post-start observation never reached running; last = %s", last)
 	}
 
+	// Running says the runner was forked, not that it has read anything:
+	// the supervisor writes that state immediately after fork/exec,
+	// which is the earliest moment at which the job can be said to be
+	// the runner's. The drain below has to reach a listener that is
+	// actually up, so wait for the listener's own first output rather
+	// than for the state that precedes it.
+	deadline = time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		tail, err := dock.TailLogs(ctx, prepared.RuntimeID, 200)
+		if err != nil {
+			t.Fatalf("logs: %v", err)
+		}
+		if strings.Contains(tail, "[RUNNER") {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	// End the serving the way the platform ends one. PID 1 is the
 	// supervisor, and its TERM path drains the runner and the inner
 	// daemon before reporting the exit.

@@ -453,7 +453,7 @@ func (q *Queries) RequeueAttempt(ctx context.Context, attemptID string) (int64, 
 const requeueProvenInertAttempt = `-- name: RequeueProvenInertAttempt :execrows
 UPDATE assignment_attempts
 SET state = 'ready', execution_evidence = 'not_started'
-WHERE id = ?1 AND state = 'starting'
+WHERE id = ?1 AND state IN ('starting', 'running')
 `
 
 // The one legal requeue past the start authorization: the daemon proved
@@ -467,6 +467,14 @@ WHERE id = ?1 AND state = 'starting'
 // runtime being prepared - a write that moves backwards, and every retry
 // of this shape ends in review after burning a lease. What each serving
 // observed is kept in attempt_events either way.
+//
+// `running` is in the guard beside `starting` because the walk that
+// advances an attempt is optimistic: it writes `running` when the start
+// is authorized and the capsule reports itself up, which is before the
+// wait that can prove the runner never took the job. The proof arrives
+// with the attempt already past `starting`, and a guard naming only that
+// state matches no row: the finalizing transaction then rolls back and
+// the lease pins in cleaning holding its credit.
 func (q *Queries) RequeueProvenInertAttempt(ctx context.Context, attemptID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, requeueProvenInertAttempt, attemptID)
 	if err != nil {

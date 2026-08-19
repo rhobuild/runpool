@@ -40,10 +40,15 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 // supervisor too, so the two sides cannot disagree.
 const SupervisorAbortedExitCode = protocol.AbortedExitCode
 
-// classifySupervisorExit reads a stopped capsule's exit code. Any code but
-// the reserved one means the runner owned the job, which includes a job
-// that failed: that is an execution outcome, not an unstarted runtime.
-func classifySupervisorExit(code int) assignment.ExecutionObservation {
+// ClassifyExit reads a stopped capsule's exit code. Any code but the
+// reserved one means the runner owned the job, which includes a job that
+// failed: that is an execution outcome, not an unstarted runtime.
+//
+// It is exported because a capsule's exit reaches the controller by two
+// paths — the launch that awaited it and the reconciliation that adopted
+// one — and a classification that only one of them applies is how the
+// same capsule settles two different ways.
+func ClassifyExit(code int) assignment.ExecutionObservation {
 	if code == SupervisorAbortedExitCode {
 		return assignment.ObservedCreated
 	}
@@ -57,13 +62,13 @@ func classifySupervisorExit(code int) assignment.ExecutionObservation {
 // an attempt that never ran as complete, and nothing requeues it.
 func classifySupervisorState(state string) (assignment.ExecutionObservation, error) {
 	switch {
-	case state == "waiting":
+	case state == protocol.StateBooting, state == protocol.StateWaiting:
 		return assignment.ObservedCreated, nil
-	case state == "running":
+	case state == protocol.StateRunning:
 		return assignment.ObservedRunning, nil
-	case strings.HasPrefix(state, "aborted:"):
+	case strings.HasPrefix(state, protocol.AbortedPrefix):
 		return assignment.ObservedCreated, nil
-	case strings.HasPrefix(state, "exited:"), strings.HasPrefix(state, "failed:"):
+	case strings.HasPrefix(state, protocol.ExitedPrefix), strings.HasPrefix(state, protocol.FailedPrefix):
 		return assignment.ObservedExited, nil
 	default:
 		return assignment.ObservedUnavailable, fmt.Errorf("capsule reports unrecognized state %q", state)
@@ -87,7 +92,7 @@ func classifyContainerState(runtimeID string, state docker.ContainerState) (obs 
 		// container and the control surface is tmpfs. The exit code is the
 		// only account it left, which is why the supervisor reserves one
 		// for "the runner never started".
-		return classifySupervisorExit(state.ExitCode), false, nil
+		return ClassifyExit(state.ExitCode), false, nil
 	case "running", "paused", "restarting":
 		return assignment.ObservedUnavailable, true, nil
 	default:
