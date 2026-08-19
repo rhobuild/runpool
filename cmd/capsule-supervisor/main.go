@@ -69,6 +69,9 @@ const (
 	runnerHome = "/home/runner"
 
 	dockerdReadyTimeout = 60 * time.Second
+	// dockerdProbeTimeout bounds one readiness probe, so the budget above
+	// is spent on repeated asking rather than inside one call that hangs.
+	dockerdProbeTimeout = 5 * time.Second
 	startPollInterval   = 200 * time.Millisecond
 	drainTimeout        = 5 * time.Minute
 )
@@ -391,9 +394,7 @@ func stopDockerd(log *slog.Logger, dockerd *exec.Cmd, exit chan int) {
 func awaitDockerdReady(ctx context.Context) error {
 	deadline := time.Now().Add(dockerdReadyTimeout)
 	for {
-		probe := exec.Command("docker", "--host=unix://"+dockerSocket, "info")
-		probe.Stdout, probe.Stderr = io.Discard, io.Discard
-		if probe.Run() == nil {
+		if probeDockerd(ctx) == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -405,6 +406,23 @@ func awaitDockerdReady(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// probeDockerd asks the inner daemon once, under a bound of its own. A
+// daemon that accepts the socket and then never answers would otherwise
+// spend the whole readiness budget inside a single call, and PID 1 has
+// nobody outside it to cut that short.
+func probeDockerd(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, dockerdProbeTimeout)
+	defer cancel()
+	probe := exec.CommandContext(ctx, "docker", "--host=unix://"+dockerSocket, "info")
+	// The null device, not a discarding writer. A writer that is not an
+	// *os.File makes Cmd build a pipe and copy from it, and Wait then
+	// waits for that copy to finish — which a process the kill orphaned
+	// keeps open. The probe would return only when the orphan did,
+	// leaving the bound above describing nothing.
+	probe.Stdout, probe.Stderr = nil, nil
+	return probe.Run()
 }
 
 // awaitStart blocks until the controller authorizes the start. The

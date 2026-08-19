@@ -46,7 +46,29 @@ const (
 	// hold drain plus this, and a bound that grew with the binding count
 	// would outgrow any grace period an operator chose.
 	SessionCloseBudget = 15 * time.Second
-	pollBackoff        = 5 * time.Second
+	// LoopStopBudget is how long waiting for the serve loops may take
+	// once their context is cancelled. Each loop stops on that context;
+	// what can outlive one is a write deliberately detached so it would
+	// survive cancellation, and the longest of those is the interrupted
+	// lease recovery at thirty seconds.
+	//
+	// Unlike its two neighbours this is a claim rather than a timer.
+	// Racing the wait against one would abandon a loop that is still
+	// running, which falsifies what closing the sessions afterwards
+	// assumes — that each binding's session field is quiescent — and
+	// puts a data race on it. So the wait stays unbounded and this
+	// number states what the loops must cost; the reconciler test is
+	// what keeps that true.
+	LoopStopBudget = 45 * time.Second
+	// ShutdownBudget is the whole of it, and the number the deployment's
+	// stop grace period is sized against — not a subset of its terms. A
+	// grace period shorter than this ends in SIGKILL partway through,
+	// which leaves every message session open for the next start to wait
+	// out as a conflict.
+	ShutdownBudget = LoopStopBudget + DrainTimeout + SessionCloseBudget
+	// recoveryBudget bounds unwinding one lease after a failure.
+	recoveryBudget = 2 * time.Minute
+	pollBackoff    = 5 * time.Second
 
 	// capsulePrepTimeout bounds getting a capsule to the point of running:
 	// minting a credential, acquiring a lane, building the sandbox,

@@ -192,6 +192,15 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 			}
 			continue
 		}
+		// Durable before the acknowledgement, for the same reason the
+		// delivery is: an acknowledged message is never sent again, and
+		// nothing re-derives a cancellation from the provider. One lost
+		// here is a whole capsule spent on work the provider already
+		// closed. It also has to land before anything schedules, or a
+		// cancellation arrives after the attempt it was meant to close
+		// has already been leased.
+		s.recordLifecycleEvents(ctx, b, msg)
+
 		advanced := s.acknowledgeDelivery(ctx, b, delivery, msg.ID)
 
 		if msg.Statistics != nil {
@@ -201,7 +210,6 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 			// them would overstate what this binding owes.
 			s.alloc.SetAssignedDemand(b.key, msg.Statistics.Assigned)
 		}
-		s.recordLifecycleEvents(ctx, b, msg)
 
 		s.scheduleReadyAttempts(ctx, b)
 

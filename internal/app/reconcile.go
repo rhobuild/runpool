@@ -213,7 +213,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// recoverCapsuleFailure finishes with the same finalizing
 		// transaction, so release and disposition cannot come apart.
 		log.Info("releasing an interrupted lease")
-		if err := s.recoverCapsuleFailure(b, lease.ID, obs); err != nil {
+		if err := s.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
 			log.Error("recovery could not resolve the lease; reconciliation will retry", "error", err)
 		}
 
@@ -244,7 +244,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		exit, err := s.wait.WaitExit(ctx, runnerContainer)
 		if err != nil {
 			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
-			if err := s.recoverCapsuleFailure(b, lease.ID, ""); err != nil {
+			if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -257,7 +257,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		if obs := capsule.ClassifyExit(int(exit)); obs != assignment.ObservedExited {
 			s.log.Warn("the adopted capsule reports the runner never started; the attempt is returned to the queue",
 				"lease", lease.ID, "exit", exit)
-			if err := s.recoverCapsuleFailure(b, lease.ID, obs); err != nil {
+			if err := s.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -544,7 +544,7 @@ func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, ret
 	}
 	*retried++
 	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
-	if err := s.recoverCapsuleFailure(b, lease.ID, ""); err != nil {
+	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
 		s.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)
 		return

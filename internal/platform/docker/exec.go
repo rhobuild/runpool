@@ -8,6 +8,42 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// closeOnDone closes a hijacked connection when ctx ends, and returns
+// the function that stops watching.
+//
+// The client's context governs the dial and the protocol upgrade and
+// stops there: once the connection is hijacked nothing consults ctx
+// again, so a read blocks for as long as the container takes to answer,
+// and the deferred close cannot help — it is deferred inside the call
+// that is blocked. An exec into a wedged container is otherwise
+// unbounded, and one of those is held across the sandbox's refresh
+// lock, which every launch waits on with a mutex that takes no context.
+func closeOnDone(ctx context.Context, attach client.ExecAttachResult) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			attach.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+// demux drains the multiplexed stream, reporting the context's error
+// when the context is what ended the read. Without that the caller sees
+// "use of closed network connection" and cannot tell a timeout it set
+// from a daemon that broke.
+func demux(ctx context.Context, attach client.ExecAttachResult, buf *bytes.Buffer) error {
+	if _, err := stdcopy.StdCopy(buf, buf, attach.Reader); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	return nil
+}
+
 // Exec runs a command inside a running container and returns its exit
 // code and combined output. The capsule uses it to read the dind socket
 // gid and to probe daemon readiness.
@@ -25,9 +61,12 @@ func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) (in
 		return -1, "", err
 	}
 	defer attach.Close()
+	// Deferred after the close so it unwinds first: stop watching, then
+	// close.
+	defer closeOnDone(ctx, attach)()
 
 	var buf bytes.Buffer
-	if _, err := stdcopy.StdCopy(&buf, &buf, attach.Reader); err != nil {
+	if err := demux(ctx, attach, &buf); err != nil {
 		return -1, buf.String(), err
 	}
 	inspect, err := c.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
@@ -64,6 +103,7 @@ func (c *Client) ExecWithInput(ctx context.Context, containerID string, cmd []st
 		return -1, "", err
 	}
 	defer attach.Close()
+	defer closeOnDone(ctx, attach)()
 
 	// Write, then half-close so the process sees EOF; the demux drains
 	// until the process exits.
@@ -74,7 +114,7 @@ func (c *Client) ExecWithInput(ctx context.Context, containerID string, cmd []st
 		return -1, "", err
 	}
 	var buf bytes.Buffer
-	if _, err := stdcopy.StdCopy(&buf, &buf, attach.Reader); err != nil {
+	if err := demux(ctx, attach, &buf); err != nil {
 		return -1, buf.String(), err
 	}
 	inspect, err := c.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})

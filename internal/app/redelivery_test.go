@@ -438,3 +438,107 @@ func (s *replaySession) Acknowledge(context.Context, int) error { return nil }
 func (s *replaySession) SetCapacity(int)                        {}
 func (s *replaySession) Initial() *githubactions.Statistics     { return nil }
 func (s *replaySession) Close(context.Context) error            { return nil }
+
+// cancellingSession hands over one message and cancels the loop from
+// inside the acknowledgement — the shape of a shutdown that lands
+// exactly there. It is the worst honest moment: the message is gone from
+// the broker's queue and this process is stopping.
+type cancellingSession struct {
+	msg    *githubactions.Message
+	cancel context.CancelFunc
+
+	mu     sync.Mutex
+	served bool
+}
+
+func (s *cancellingSession) Receive(ctx context.Context) (*githubactions.Message, error) {
+	s.mu.Lock()
+	first := !s.served
+	s.served = true
+	s.mu.Unlock()
+	if first {
+		return s.msg, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (s *cancellingSession) Acknowledge(context.Context, int) error {
+	s.cancel()
+	return nil
+}
+func (s *cancellingSession) SetCapacity(int)                    {}
+func (s *cancellingSession) Initial() *githubactions.Statistics { return nil }
+func (s *cancellingSession) Close(context.Context) error        { return nil }
+
+// TestACancellationIsDurableBeforeTheMessageIsAcknowledged: everything a
+// message carries is written down before the message is given up.
+//
+// An acknowledged message is never sent again, and nothing re-derives a
+// cancellation from the provider — so one lost between the
+// acknowledgement and the write is lost for good, and the workload it
+// closed goes on to spend a whole capsule on work the provider already
+// finished with. Recorded first, a shutdown in that window leaves the
+// message unacknowledged and the broker redelivers it.
+func TestACancellationIsDurableBeforeTheMessageIsAcknowledged(t *testing.T) {
+	h := newHarness(t, 1)
+
+	// One message carrying the assignment and the cancellation that
+	// closes it — the shape the provider actually sends when a run is
+	// cancelled while its jobs are being handed out. Delivering the two
+	// separately would not reach this: the loop drains ready work at the
+	// top of every turn, so the attempt is leased before any later
+	// message can close it, and a cancellation correctly refuses to
+	// touch a serving attempt.
+	ctx, cancel := context.WithCancel(t.Context())
+	msg := &githubactions.Message{
+		ID:       901,
+		Assigned: []assignment.WorkloadAssignment{demand("job-closed", "app", 44)},
+		Completed: []assignment.WorkloadLifecycleEvent{{
+			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-closed",
+			Result: "canceled",
+		}},
+	}
+	h.bind.session = &cancellingSession{msg: msg, cancel: cancel}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(ctx, h.bind)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("the loop never returned after its context was cancelled")
+	}
+
+	// The state, not the queue: an attempt also leaves the ready list by
+	// being leased, which is the very outcome the cancellation exists to
+	// prevent.
+	var got store.Attempt
+	h.inStore(func(tx *store.Tx) error {
+		open, err := tx.OpenAttemptByWorkload(h.bind.bindingID, "job-closed")
+		if err == nil {
+			got = open
+			return nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		attempts, err := tx.AttemptsOfDelivery(1)
+		if err != nil {
+			return err
+		}
+		for _, a := range attempts {
+			if a.SourceWorkloadKey == "job-closed" {
+				got = a
+			}
+		}
+		return nil
+	})
+	if got.State != "canceled" {
+		t.Errorf("the cancelled workload is %q; want canceled — the cancellation was lost "+
+			"with the message that carried it", got.State)
+	}
+}

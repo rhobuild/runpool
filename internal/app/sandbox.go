@@ -389,8 +389,10 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 		if c.Role != capsule.RoleGateway || !c.Running {
 			continue
 		}
-		code, out, err := n.daemon.ExecWithInput(ctx, c.ID,
-			[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
+		code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
+			return n.daemon.ExecWithInput(ctx, c.ID,
+				[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
+		})
 		if err != nil || code != 0 {
 			failed = append(failed, c.ID)
 			n.log.Error("gateway policy reload failed", "container", c.Name, "exit", code, "error", err, "output", out)
@@ -401,6 +403,21 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 	return failed, nil
 }
 
+// gatewayExecTimeout bounds one gateway control exec, so a refresh pass
+// costs at most one of these per gateway rather than an unknown amount.
+// The pass holds the refresh lock and every launch waits on that lock
+// with a plain mutex, which takes no context of its own.
+const gatewayExecTimeout = 30 * time.Second
+
+// execGateway runs one gateway control command under its own bound.
+func (n *networkSandbox) execGateway(ctx context.Context,
+	call func(context.Context) (int, string, error)) (int, string, error) {
+
+	ctx, cancel := context.WithTimeout(ctx, gatewayExecTimeout)
+	defer cancel()
+	return call(ctx)
+}
+
 // closeGateway revokes a live gateway's egress: every destination
 // denied, in the kernel ruleset and in the relay's own check.
 //
@@ -409,8 +426,10 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 // which takes its connections with it. A capsule whose gateway is gone
 // has no egress at all, which is the state this is trying to reach.
 func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) error {
-	code, out, err := n.daemon.Exec(ctx, containerID,
-		[]string{capsule.SupervisorPath, "gateway-deny-all"})
+	code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
+		return n.daemon.Exec(ctx, containerID,
+			[]string{capsule.SupervisorPath, "gateway-deny-all"})
+	})
 	if err != nil || code != 0 {
 		// The policy could not be closed from inside; removing the
 		// container is the remaining way to stop it relaying.

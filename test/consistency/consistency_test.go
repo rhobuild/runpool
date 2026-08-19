@@ -29,10 +29,12 @@ func repoPath(parts ...string) string {
 	return filepath.Join(append([]string{"..", ".."}, parts...)...)
 }
 
-// TestStopGracePeriodHoldsTheWholeShutdown: shutdown spends the drain
-// window in full whenever work is in flight and then closes every
-// message session under one shared budget, so the deployment's stop
-// grace period must exceed the sum. When it does not, the platform's
+// TestStopGracePeriodHoldsTheWholeShutdown: shutdown waits out the serve
+// loops, spends the drain window in full whenever work is in flight, and
+// then closes every message session under one shared budget — so the
+// deployment's stop grace period must exceed all three. Comparing
+// against a subset of the terms is how a bound comes to describe less
+// than the process actually does. When it does not, the platform's
 // SIGKILL lands first, the deferred closes never run, and every restart
 // with a live job leaves the broker holding a session the next start
 // waits out as a conflict.
@@ -59,11 +61,11 @@ func TestStopGracePeriodHoldsTheWholeShutdown(t *testing.T) {
 		// must not pass with a grace period of no seconds.
 		t.Fatalf("stop_grace_period %q is not a duration: %v", controller.StopGracePeriod, err)
 	}
-	shutdown := app.DrainTimeout + app.SessionCloseBudget
-	if grace <= shutdown {
-		t.Fatalf("stop_grace_period %s does not hold the %s shutdown (%s drain + %s session close); "+
+	if grace <= app.ShutdownBudget {
+		t.Fatalf("stop_grace_period %s does not hold the %s shutdown "+
+			"(%s waiting for the loops + %s drain + %s session close); "+
 			"the platform kills the controller before it closes its sessions",
-			grace, shutdown, app.DrainTimeout, app.SessionCloseBudget)
+			grace, app.ShutdownBudget, app.LoopStopBudget, app.DrainTimeout, app.SessionCloseBudget)
 	}
 }
 
