@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -146,6 +147,28 @@ func (f *fixture) attemptState() store.Attempt {
 		return err
 	})
 	return a
+}
+
+// advanceAttemptTo walks the attempt through the real transitions the
+// serving path uses, so a test never writes a state the product cannot
+// reach.
+func (f *fixture) advanceAttemptTo(target string) {
+	f.t.Helper()
+	ladder := []string{"leased", "preparing", "prepared", "starting", "running"}
+	f.tx(func(tx *store.Tx) error {
+		for i := 1; i < len(ladder); i++ {
+			if err := tx.Advance(f.attempt, ladder[i-1], ladder[i]); err != nil {
+				return err
+			}
+			if ladder[i] == target {
+				return nil
+			}
+		}
+		return fmt.Errorf("no path defined to attempt state %q", target)
+	})
+	if got := f.attemptState().State; got != target {
+		f.t.Fatalf("wanted an attempt in %q but it is %q; the test would assert nothing", target, got)
+	}
 }
 
 func (f *fixture) recordEvidence(e store.Evidence) {
@@ -413,5 +436,34 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 			f.lease, err = tx.LeaseAttempt(f.attempt, attempt.BindingID, "standard")
 			return err
 		})
+	}
+}
+
+// TestAReservedExitRequeuesAnAttemptTheWalkAlreadyCalledRunning: the
+// walk to `running` is optimistic. It records that a start was
+// authorized and the capsule reported itself up — never that a runner
+// took the job — so a runtime that afterwards proves the start never
+// took effect must still return the workload to the queue.
+//
+// Judged in evidence order instead, this attempt settles as one that
+// started, and the workload is never served again. That is the shape of
+// a capsule whose inner daemon never came up: everything the controller
+// wrote is intention, and the only fact is the reserved exit code.
+func TestAReservedExitRequeuesAnAttemptTheWalkAlreadyCalledRunning(t *testing.T) {
+	f := newFixture(t, nopRemover{})
+	f.driveTo(store.LeaseCleaning)
+	f.advanceAttemptTo("running")
+	f.recordEvidence(store.EvidenceRunningObserved)
+
+	if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.ObservedCreated); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if got := f.attemptState(); got.State != "ready" {
+		t.Errorf("attempt state = %s (resolution %q); want it back in the queue as ready",
+			got.State, got.Resolution)
+	}
+	if got := f.reload().State; got != store.LeaseReleased {
+		t.Errorf("lease = %s; want released in the same commit", got)
 	}
 }

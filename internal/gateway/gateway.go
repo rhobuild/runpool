@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/egress"
 )
 
@@ -90,14 +91,14 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("egress relay: %w", err)
 	}
 
-	cfg.SetState("ready")
+	cfg.SetState(protocol.StateReady)
 	cfg.Log.Info("gateway ready",
 		"internal", legs.InternalIf, "uplink", legs.UplinkIf,
 		"proxy", net.JoinHostPort(legs.InternalIP, fmt.Sprint(egress.ProxyPort)),
 		"deny", len(policy.Deny), "allow", len(policy.Allow),
 		"max_connections", MaxProxyConnections, "max_dns_inflight", MaxDNSInFlight)
 	<-ctx.Done()
-	cfg.SetState("exited:0")
+	cfg.SetState(protocol.ExitedPrefix + "0")
 	return nil
 }
 

@@ -239,6 +239,17 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	defer cancelWait()
 	exit, err := s.wait.WaitExit(waitCtx, runnerContainer)
 	if err == nil {
+		// What the status proves, not that the wait returned. The
+		// supervisor reserves one code for "the runner never owned the
+		// job", and a clean wait carrying it is not an execution:
+		// recording an observed exit settles an attempt that never ran
+		// as complete, and nothing requeues it afterwards.
+		if startObs = capsule.ClassifyExit(int(exit)); startObs != assignment.ObservedExited {
+			log.Warn("the capsule reports the runner never started; the attempt is returned to the queue",
+				"exit", exit)
+			s.recoverCapsuleFailure(b, lease.ID, startObs)
+			return
+		}
 		if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
 			log.Error("cannot record that the runner completed", "error", err)
 		}

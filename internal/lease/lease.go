@@ -212,6 +212,24 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 		return err
 	}
 	switch {
+	case startObs == assignment.ObservedCreated:
+		// Authorized, and the runtime proved the start never took
+		// effect: the work was not consumed, and this is the one path
+		// allowed back to ready past the authorization.
+		//
+		// It is decided before the evidence cases, not after them,
+		// because the evidence is the weaker statement. `running` and
+		// `running_observed` are written when the authorization is
+		// accepted and the capsule reports itself up — not when a runner
+		// is seen owning a job — while this observation only ever comes
+		// from a proof: a runtime still in its created state, a
+		// supervisor reporting it never started, or the exit code the
+		// capsule reserves for exactly that. Judged in evidence order,
+		// an aborted capsule settles as a job that started and the
+		// workload is never served again.
+		m.log.Warn("the authorized start never took effect; the attempt stays servable",
+			"attempt", attempt.ID, "lease", lease.ID)
+		return m.requeueProven(tx, attempt, lease.ID)
 	case attempt.Evidence == store.EvidenceExitObserved:
 		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionCompletedObserved)
 	case attempt.Evidence == store.EvidenceRunningObserved:
@@ -219,16 +237,6 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	case attempt.Evidence.Retriable():
 		m.log.Warn("delivery failed before any start was authorized; the attempt stays servable",
 			"attempt", attempt.ID, "lease", lease.ID)
-		return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), lease.ID)
-	case startObs == assignment.ObservedCreated:
-		// Authorized, and the daemon proved the start never took effect:
-		// the work was not consumed, and this is the one path allowed
-		// back to ready past the authorization.
-		m.log.Warn("the authorized start never took effect; the attempt stays servable",
-			"attempt", attempt.ID, "lease", lease.ID)
-		if attempt.State == "starting" {
-			return m.requeueOrReview(tx, attempt.ID, tx.RequeueProvenInert(attempt.ID), lease.ID)
-		}
 		return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), lease.ID)
 	default:
 		m.log.Warn("start outcome is unproven; the attempt is held for review",
@@ -249,6 +257,24 @@ func (m *Manager) HoldAttempt(ctx context.Context, leaseID, reason string) {
 			"lease", leaseID, "reason", reason)
 		return tx.HoldForReview(attempt.ID, reason)
 	})
+}
+
+// requeueProven returns an attempt whose start provably never took
+// effect to the queue, choosing the requeue its state allows.
+//
+// The two exist because the plain requeue refuses everything past the
+// start authorization — that refusal is the at-most-once rule — while
+// this disposition arrives holding the one proof that outranks it. Which
+// state the attempt is in by then is not a property of the failure: the
+// walk advances it to `starting` and on to `running` optimistically, so
+// the proof can land at either. Naming only one leaves the other
+// matching no row, and a requeue that matches nothing rolls the whole
+// finalizing transaction back and pins the lease in cleaning.
+func (m *Manager) requeueProven(tx *store.Tx, attempt store.Attempt, leaseID string) error {
+	if attempt.State == "starting" || attempt.State == "running" {
+		return m.requeueOrReview(tx, attempt.ID, tx.RequeueProvenInert(attempt.ID), leaseID)
+	}
+	return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), leaseID)
 }
 
 // requeueOrReview turns a refused retry into a review rather than an
@@ -276,14 +302,7 @@ func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, eviden
 		m.settleAttemptOfLease(ctx, lease.ID, assignment.ResolutionStartedObserved)
 	case evidence.Retriable(), obs == assignment.ObservedCreated:
 		m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-			// The same split disposeAttempt makes: a stranded attempt in
-			// starting is past the plain requeue's guard, and only the
-			// proven-inert path may bring it back. Without this the
-			// requeue matches zero rows and the attempt never converges.
-			if attempt.State == "starting" {
-				return m.requeueOrReview(tx, attempt.ID, tx.RequeueProvenInert(attempt.ID), lease.ID)
-			}
-			return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), lease.ID)
+			return m.requeueProven(tx, attempt, lease.ID)
 		})
 	case obs == assignment.ObservedRunning:
 		// Running reaches here only when the binding is gone and

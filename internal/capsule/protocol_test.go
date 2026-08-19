@@ -1,6 +1,7 @@
 package capsule
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,16 @@ import (
 // credential. Without this the mismatch arrives as a job that failed
 // instead of an image that cannot be used.
 func TestProtocolVerdict(t *testing.T) {
+	// The neighbouring versions are derived from the one this build
+	// speaks, never written down: a table naming them by hand starts
+	// passing for the wrong reason on the day one of them ships, which
+	// is the same day the refusal matters most.
+	n, err := strconv.Atoi(ProtocolVersion)
+	if err != nil {
+		t.Fatalf("control protocol version %q is not a number", ProtocolVersion)
+	}
+	older, newer := strconv.Itoa(n-1), strconv.Itoa(n+1)
+
 	for name, tc := range map[string]struct {
 		code int
 		out  string
@@ -18,8 +29,8 @@ func TestProtocolVerdict(t *testing.T) {
 		"the version this build speaks":   {0, ProtocolVersion, ""},
 		"trailing newline from the file":  {0, ProtocolVersion + "\n", ""},
 		"surrounding whitespace":          {0, "  " + ProtocolVersion + "  \n", ""},
-		"an older supervisor":             {0, "0\n", "not a pair"},
-		"a newer supervisor":              {0, "2\n", "not a pair"},
+		"an older supervisor":             {0, older + "\n", "not a pair"},
+		"a newer supervisor":              {0, newer + "\n", "not a pair"},
 		"no protocol file at all":         {1, "cat: /run/runpool/protocol: No such file or directory", "declares no control protocol"},
 		"an empty file":                   {0, "\n", "not a pair"},
 		"a file the read could not parse": {0, "one", "not a pair"},

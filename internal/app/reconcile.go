@@ -229,9 +229,23 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// Through the same seam the ordinary launch awaits its runner:
 		// an adopted capsule is a capsule, and one of the two paths
 		// reaching around it is how they come to behave differently.
-		if _, err := s.wait.WaitExit(ctx, runnerContainer); err != nil {
+		exit, err := s.wait.WaitExit(ctx, runnerContainer)
+		if err != nil {
 			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
 			if err := s.recoverCapsuleFailure(b, lease.ID, ""); err != nil {
+				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
+					"lease", lease.ID, "error", err)
+			}
+			return
+		}
+		// The same reading the launch path gives its own capsule: an
+		// adopted capsule that stopped on the reserved code never handed
+		// the job over, and discarding the status here settled it as a
+		// run that finished.
+		if obs := capsule.ClassifyExit(int(exit)); obs != assignment.ObservedExited {
+			s.log.Warn("the adopted capsule reports the runner never started; the attempt is returned to the queue",
+				"lease", lease.ID, "exit", exit)
+			if err := s.recoverCapsuleFailure(b, lease.ID, obs); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}

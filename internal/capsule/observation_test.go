@@ -1,9 +1,12 @@
 package capsule
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 
@@ -53,13 +56,13 @@ func TestClassifySupervisorStateRefusesToGuess(t *testing.T) {
 // is tmpfs — so the state file that distinguishes an abort is already gone
 // when the controller looks. The reserved exit code is what survives.
 func TestClassifySupervisorExitSeparatesAbortFromExit(t *testing.T) {
-	if got := classifySupervisorExit(SupervisorAbortedExitCode); got != assignment.ObservedCreated {
+	if got := ClassifyExit(SupervisorAbortedExitCode); got != assignment.ObservedCreated {
 		t.Errorf("the reserved abort code classified %q; want an unstarted runtime", got)
 	}
 	// Every other code means the runner owned the job, a failed job
 	// included: that is an execution outcome, not an unstarted runtime.
 	for _, code := range []int{0, 1, 2, 78, 80, 125, 137, 255, -1} {
-		if got := classifySupervisorExit(code); got != assignment.ObservedExited {
+		if got := ClassifyExit(code); got != assignment.ObservedExited {
 			t.Errorf("exit code %d classified %q; want an execution outcome", code, got)
 		}
 	}
@@ -103,5 +106,51 @@ func TestClassifyContainerStateNeverAsksAStoppedCapsule(t *testing.T) {
 	// An unknown status refuses to guess rather than settling an attempt.
 	if _, ask, err := classifyContainerState("c1", docker.ContainerState{Status: "removing"}); err == nil || ask {
 		t.Error("an unrecognised status must be an error, not a supervisor query")
+	}
+}
+
+// TestAwaitStateGivesUpOnEveryTerminalState: a container that has
+// reached a state it can never leave is done being polled.
+//
+// The reason a supervisor writes beside a terminal state is the only
+// account of what went wrong, and it dies with the container. Treating
+// one as "not the state I wanted, keep asking" spends the whole
+// readiness deadline and then reports a timeout — the operator gets
+// "did not reach waiting in 90s" instead of "dockerd did not become
+// ready in time", and the wait is burned as well as the reason.
+func TestAwaitStateGivesUpOnEveryTerminalState(t *testing.T) {
+	const want = protocol.StateWaiting
+	for name, tc := range map[string]struct {
+		code     int
+		out      string
+		execErr  error
+		wantDone bool
+		wantErr  string // substring; empty means done with no error, or not done
+	}{
+		"the wanted state":          {0, want, nil, true, ""},
+		"trailing newline":          {0, want + "\n", nil, true, ""},
+		"still booting":             {0, protocol.StateBooting, nil, false, ""},
+		"aborted before the runner": {0, protocol.AbortedPrefix + " dockerd did not become ready in time", nil, true, "dockerd did not become ready"},
+		"failed after the runner":   {0, protocol.FailedPrefix + " runner exploded", nil, true, "runner exploded"},
+		"already exited":            {0, protocol.ExitedPrefix + "0", nil, true, "exited:0"},
+		"the exec could not run":    {0, "", errors.New("daemon unreachable"), false, ""},
+		"the exec reported failure": {1, "no such file", nil, false, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			done, err := stateVerdict(want, tc.code, tc.out, tc.execErr)
+			if done != tc.wantDone {
+				t.Fatalf("done = %v, want %v (err %v)", done, tc.wantDone, err)
+			}
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.wantErr == "":
+				return
+			case err == nil:
+				t.Fatalf("no error; want one containing %q", tc.wantErr)
+			case !strings.Contains(err.Error(), tc.wantErr):
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
 	}
 }

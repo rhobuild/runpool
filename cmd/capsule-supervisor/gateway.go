@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/gateway"
 )
 
@@ -31,7 +32,7 @@ func runGateway(log *slog.Logger) int {
 	})
 	if err != nil {
 		log.Error("gateway failed", "error", err)
-		setState("failed:" + err.Error())
+		setState(protocol.FailedPrefix + err.Error())
 		return 1
 	}
 	return 0
