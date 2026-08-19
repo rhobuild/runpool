@@ -1,6 +1,11 @@
 package store
 
-import "context"
+import (
+	"context"
+	"strings"
+
+	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+)
 
 // Snapshot is everything an operator needs to answer "what does this
 // instance own and why is it in this shape" without opening SQLite.
@@ -42,7 +47,6 @@ type BindingInfo struct {
 	TargetID         string
 	ProviderKind     string
 	SourceBindingKey string
-	DesiredState     string
 	// Contact is what this binding's loop last managed with its provider.
 	// A binding that has never run carries the zero value, which is not
 	// the same as one that is failing: the first has nothing to report,
@@ -62,8 +66,8 @@ func (t *Tx) Bindings() ([]BindingInfo, error) {
 	for i, r := range rows {
 		out[i] = BindingInfo{
 			ID: r.ID, TargetID: r.TargetID, ProviderKind: r.ProviderKind,
-			SourceBindingKey: r.SourceBindingKey, DesiredState: r.DesiredState,
-			Contact: providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
+			SourceBindingKey: r.SourceBindingKey,
+			Contact:          providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
 		}
 	}
 	return out, nil
@@ -114,20 +118,13 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		}
 		snap.Leases = append(snap.Leases, recent...)
 		snap.ReleasedTotal = total
-		for _, lease := range snap.Leases {
-			attempt, err := tx.Get(lease.AttemptID)
-			if err != nil {
-				return err
-			}
-			snap.Attempts[lease.ID] = attempt
-
-			resources, err := tx.Resources(lease.ID)
-			if err != nil {
-				return err
-			}
-			if len(resources) > 0 {
-				snap.Resources[lease.ID] = resources
-			}
+		// Two set reads rather than two per lease: this runs on the one
+		// connection every lease transition also needs.
+		if snap.Attempts, err = tx.attemptsOfLeases(snap.Leases); err != nil {
+			return err
+		}
+		if snap.Resources, err = tx.resourcesOfLeases(snap.Leases); err != nil {
+			return err
 		}
 		for _, b := range snap.Bindings {
 			queued, err := tx.CountReadyAttempts(b.ID)
@@ -167,4 +164,79 @@ func (t *Tx) CacheLanes() ([]CacheLaneInfo, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// selectAttempt is the attempt column list this file's set read scans.
+// It matches the generated GetAttempt query's projection; the schema
+// parity test is what keeps the two in step.
+const selectAttempt = `SELECT id, delivery_id, binding_id, source_workload_key, tenant_key,
+       project_key, state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at FROM assignment_attempts `
+
+// attemptsOfLeases reads the attempt each lease serves in one query.
+//
+// One read per lease made `runpool status` cost two round trips per row
+// on the single connection every lease transition also waits for, and a
+// snapshot carries up to a hundred leases.
+func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
+	out := make(map[string]Attempt, len(leases))
+	if len(leases) == 0 {
+		return out, nil
+	}
+	byAttempt := make(map[string]string, len(leases)) // attempt id -> lease id
+	args := make([]any, 0, len(leases))
+	for _, l := range leases {
+		byAttempt[l.AttemptID] = l.ID
+		args = append(args, l.AttemptID)
+	}
+	rows, err := t.tx.Query(selectAttempt+
+		`WHERE id IN (`+placeholders(len(args))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r sqlitedb.AssignmentAttempt
+		if err := rows.Scan(&r.ID, &r.DeliveryID, &r.BindingID, &r.SourceWorkloadKey,
+			&r.TenantKey, &r.ProjectKey, &r.State, &r.ExecutionEvidence, &r.Resolution,
+			&r.ReviewReason, &r.ReviewedAt, &r.ReviewedBy, &r.ReceivedAt, &r.SettledAt); err != nil {
+			return nil, err
+		}
+		out[byAttempt[r.ID]] = fromRow(r)
+	}
+	return out, rows.Err()
+}
+
+// resourcesOfLeases reads every lease's resource intents in one query,
+// for the same reason attemptsOfLeases exists.
+func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, error) {
+	out := make(map[string][]ResourceIntent, len(leases))
+	if len(leases) == 0 {
+		return out, nil
+	}
+	args := make([]any, 0, len(leases))
+	for _, l := range leases {
+		args = append(args, l.ID)
+	}
+	rows, err := t.tx.Query(selectIntent+
+		`WHERE lease_id IN (`+placeholders(len(args))+`) ORDER BY lease_id, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		in, err := t.scanIntent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[in.LeaseID] = append(out[in.LeaseID], in)
+	}
+	return out, rows.Err()
+}
+
+// placeholders builds the `?,?,?` list a set read needs. sqlc's sqlite
+// engine has no slice parameter, and the values are always ids the
+// caller already holds, never input.
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }

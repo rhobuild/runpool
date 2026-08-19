@@ -1449,3 +1449,38 @@ func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 		return nil
 	})
 }
+
+// TestTheRetryCountIsIndexed: the count that decides whether a workload
+// is served again is answered from an index, not a scan.
+//
+// It runs inside the write transaction that decides a requeue, on the
+// one connection every other writer waits for, and it counts released
+// leases too — so the partial unique index cannot serve it, since that
+// one excludes exactly the rows the count is about. Without an index of
+// its own the check scans every lease the host has ever recorded, and
+// that cost grows with history rather than with live work.
+func TestTheRetryCountIsIndexed(t *testing.T) {
+	s := newStore(t)
+	var plan []string
+	inTx(t, s, func(tx *Tx) error {
+		rows, err := tx.tx.Query(
+			`EXPLAIN QUERY PLAN SELECT count(*) FROM capsule_leases WHERE attempt_id = ?`, "att-x")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+				return err
+			}
+			plan = append(plan, detail)
+		}
+		return rows.Err()
+	})
+	joined := strings.Join(plan, "; ")
+	if !strings.Contains(joined, "USING INDEX") && !strings.Contains(joined, "USING COVERING INDEX") {
+		t.Errorf("the retry count plans as %q; want an index, not a scan of every lease ever recorded", joined)
+	}
+}

@@ -9,32 +9,6 @@ import (
 	"context"
 )
 
-const getAttemptEventByKey = `-- name: GetAttemptEventByKey :one
-SELECT id, attempt_id, idempotency_key, kind, detail_json, created_at
-FROM attempt_events
-WHERE attempt_id = ?1
-  AND idempotency_key = ?2
-`
-
-type GetAttemptEventByKeyParams struct {
-	AttemptID      string
-	IdempotencyKey string
-}
-
-func (q *Queries) GetAttemptEventByKey(ctx context.Context, arg GetAttemptEventByKeyParams) (AttemptEvent, error) {
-	row := q.db.QueryRowContext(ctx, getAttemptEventByKey, arg.AttemptID, arg.IdempotencyKey)
-	var i AttemptEvent
-	err := row.Scan(
-		&i.ID,
-		&i.AttemptID,
-		&i.IdempotencyKey,
-		&i.Kind,
-		&i.DetailJson,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const insertAttemptEvent = `-- name: InsertAttemptEvent :execrows
 
 INSERT INTO attempt_events (attempt_id, idempotency_key, kind, detail_json)

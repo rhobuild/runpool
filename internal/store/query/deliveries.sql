@@ -36,9 +36,3 @@ UPDATE broker_deliveries
 SET ack_state = 'uncertain', ack_updated_at = unixepoch()
 WHERE id = @delivery_id AND ack_state IN ('pending', 'requested');
 
--- name: ListUnconfirmedDeliveries :many
-SELECT id, binding_id, source_delivery_key, payload_sha256, ack_state,
-       received_at, ack_updated_at, acknowledged_at
-FROM broker_deliveries
-WHERE binding_id = @binding_id AND ack_state <> 'confirmed'
-ORDER BY received_at, id;

@@ -116,6 +116,12 @@ by its public and operational effects.
 - **There are no down migrations.** Restoring the pre-migration backup
   is the rollback, because a down script claims every schema change is
   losslessly reversible and a dropped column is not.
+- **The status document drops `desired_state`.** The column admitted
+  `present` and `absent`, nothing ever wrote `absent`, and the only
+  query that could had no caller — so it described a capability the
+  product does not have. `bindings[].desired_state` is gone from the v1
+  document; `api_version` is unchanged, because a field nothing could
+  vary is not a contract a consumer can have depended on.
 - **A schema is identified by its contents.** The applied migrations'
   fingerprint is recorded with the schema, in the same transaction, and
   checked on every open. A version counter cannot tell two schemas apart

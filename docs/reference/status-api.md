@@ -53,7 +53,7 @@ absent state, because the attempt it was asked about cannot exist.
 | `schema_version` | number | The state schema in use |
 | `scheduling` | object, optional | Present when status can read configuration: `mode`, `instance_parallelism`, `effective_parallelism`, `active`, `available`, `queued`, and `tiers[]` |
 | `disk_pressure` | object or null | `level`, `free_bytes`, `free_inodes`, `managed_bytes`, `measured_at` |
-| `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, `desired_state`, and the provider reach fields below |
+| `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, and the provider reach fields below |
 | `leases` | array | `id`, `state`, `terminal`, `attempt_id`, `project`, `runtime_name`, `evidence`, `created_at`, `resources[]`. Every live lease, plus recent finished ones — see below |
 | `released_total` | number | How many finished leases the store holds, which is more than the `leases` array carries |
 | `cache_lanes` | array | `id`, `source_project_key`, `generation`, `leased_by`, `last_used` |

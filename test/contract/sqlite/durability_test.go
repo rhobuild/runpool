@@ -1,6 +1,7 @@
 package sqlitecontract
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
 	"math/rand"
@@ -190,20 +191,47 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("seed writer: %v: %s", err, out)
 	}
 
+	// Started explicitly rather than through CombinedOutput, so the
+	// process exists before the cleanup can reference it: every
+	// t.Fatalf below this point returns without receiving from `done`,
+	// and an unreaped writer goes on writing into a directory the
+	// harness is already removing.
+	writer := writerCmd(dbPath, "", 100)
+	var writerOut bytes.Buffer
+	writer.Stdout, writer.Stderr = &writerOut, &writerOut
+	if err := writer.Start(); err != nil {
+		t.Fatalf("start the concurrent writer: %v", err)
+	}
 	done := make(chan error, 1)
 	go func() {
-		out, err := writerCmd(dbPath, "", 100).CombinedOutput()
+		err := writer.Wait()
 		if err != nil {
-			err = fmt.Errorf("concurrent writer: %v: %s", err, out)
+			err = fmt.Errorf("concurrent writer: %v: %s", err, writerOut.String())
 		}
 		done <- err
 	}()
+	// Reaped exactly once, whether the body gets there or a t.Fatalf
+	// jumps past it. The channel carries one value, so a cleanup that
+	// read it unconditionally would block forever on the path where the
+	// body already did.
+	var (
+		reapOnce  sync.Once
+		writerErr error
+	)
+	reap := func() error {
+		reapOnce.Do(func() { writerErr = <-done })
+		return writerErr
+	}
+	t.Cleanup(func() {
+		_ = writer.Process.Kill()
+		_ = reap()
+	})
 
 	db := open(t, dbPath)
 	if _, err := db.Exec(`VACUUM INTO '` + backupPath + `'`); err != nil {
 		t.Fatalf("VACUUM INTO: %v", err)
 	}
-	if err := <-done; err != nil {
+	if err := reap(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,11 +256,26 @@ func TestDiskFull(t *testing.T) {
 	if small == "" {
 		t.Skipf("%s not set; disk-full runs inside the qualification container", envSmallDir)
 	}
+	// The capped filesystem is somebody else's directory: this test is
+	// pointed at it and fills it deliberately. The shipped harness gives
+	// a fresh tmpfs per run, so nothing accumulates there — but the gate
+	// invites pointing it at a real directory, and leftovers make the
+	// next run unable to fill anything. Cleared before, removed after.
+	dbPath := filepath.Join(small, "full.db")
 	ballast := filepath.Join(small, "ballast")
+	leftovers := []string{dbPath, dbPath + "-wal", dbPath + "-shm", ballast}
+	for _, f := range leftovers {
+		_ = os.Remove(f)
+	}
+	t.Cleanup(func() {
+		for _, f := range leftovers {
+			_ = os.Remove(f)
+		}
+	})
 	if err := os.WriteFile(ballast, make([]byte, 1<<20), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	db := open(t, filepath.Join(small, "full.db"))
+	db := open(t, dbPath)
 	mustExec(t, db, `CREATE TABLE IF NOT EXISTS big (id INTEGER PRIMARY KEY, blob TEXT NOT NULL)`)
 
 	blob := strings.Repeat("x", 64<<10)

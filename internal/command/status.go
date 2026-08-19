@@ -132,8 +132,8 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	fmt.Fprintf(streams.Out, "\nbindings (%d)\n", len(snap.Bindings))
 	now := time.Now()
 	for _, b := range snap.Bindings {
-		fmt.Fprintf(streams.Out, "  %-14s %-16s %-8s %s\n",
-			b.TargetID, b.ProviderKind, b.DesiredState, b.SourceBindingKey)
+		fmt.Fprintf(streams.Out, "  %-14s %-16s %s\n",
+			b.TargetID, b.ProviderKind, b.SourceBindingKey)
 		fmt.Fprintf(streams.Out, "  %-14s %s\n", "", providerReach(b.Contact, now))
 	}
 
@@ -270,23 +270,32 @@ func providerReach(c store.ProviderContact, now time.Time) string {
 
 // ago renders a gap the way an operator reads one: the size of the wait,
 // not a timestamp to subtract from the current time by hand.
-func ago(now, then time.Time) string {
-	d := now.Sub(then).Round(time.Second)
+func ago(now, then time.Time) string { return age(now.Sub(then)) + " ago" }
+
+// age renders a span the way an operator reads one: the size of the
+// wait, not a timestamp to subtract by hand.
+//
+// A negative span reads as zero. Two clocks disagree, and a record
+// written a moment ahead of the reader is ordinary rather than
+// remarkable — but "-1m0s ago" reads as a bug in the thing being
+// diagnosed, which is the last place to send someone looking.
+func age(d time.Duration) string {
+	d = d.Round(time.Second)
 	if d < 0 {
 		d = 0
 	}
-	return d.String() + " ago"
+	return d.String()
 }
 
 // reportNoState answers the one state every command can meet before the
 // controller has ever run, in whichever form the caller asked for.
 func reportNoState(streams IO, asJSON bool) error {
 	if asJSON {
-		return json.NewEncoder(streams.Out).Encode(map[string]any{
-			"api_version": statusAPIVersion,
-			"state_dir":   stateDir(),
-			"served":      false,
-			"detail":      "this instance has not run yet",
+		return json.NewEncoder(streams.Out).Encode(statusDoc{
+			APIVersion: statusAPIVersion,
+			Served:     false,
+			StateDir:   stateDir(),
+			Detail:     "this instance has not run yet",
 		})
 	}
 	fmt.Fprintf(streams.Out, "no state in %s: this instance has not run yet\n", stateDir())

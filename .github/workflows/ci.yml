@@ -83,20 +83,24 @@ jobs:
             echo "staticcheck analyzed no packages:"; echo "$err"; exit 1
           fi
           go tool staticcheck ./...
-      - name: Test with the race detector
-        # Shuffled, so a test that depends on another's leftovers fails
-        # here rather than on the day the order happens to change. The
-        # contract suites are gated by environment and skip in this job:
-        # they need a Docker host and real targets, and release qualification
-        # runs them without skips before any release.
-        run: go test -race -shuffle=on -count=1 ./...
-      - name: Verify coverage meets the floor
+      - name: Test with the race detector and measure coverage
+        # One run, carrying every property both steps had. Shuffled, so a
+        # test that depends on another's leftovers fails here rather than
+        # on the day the order happens to change; raced, so a data race
+        # is a failure rather than a flake; and profiled, because running
+        # the whole suite twice to learn the same thing costs the slowest
+        # job in this workflow twice over.
+        #
         # The global floor protects the hermetic surface from regression;
-        # live contracts cover the Docker and provider adapters separately.
-        # Requiring covdata also rejects an incomplete Go distribution.
+        # live contracts cover the Docker and provider adapters
+        # separately. The contract suites are gated by environment and
+        # skip here: they need a Docker host and real targets, and
+        # release qualification runs them without skips before any
+        # release. Requiring covdata also rejects an incomplete Go
+        # distribution.
         run: |
           go tool -n covdata >/dev/null 2>&1 || { echo "toolchain has no covdata; it is not a complete distribution"; exit 1; }
-          go test -covermode=atomic -coverprofile=coverage.out -count=1 ./...
+          go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out -count=1 ./...
           scripts/verify/coverage.sh coverage.out
       - name: Keep the coverage baseline
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

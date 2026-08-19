@@ -61,7 +61,7 @@ func (c *Client) ContainerIPOn(ctx context.Context, containerID, networkID strin
 			continue
 		}
 		if !es.IPAddress.IsValid() {
-			return "", "", fmt.Errorf("container %s has no IPv4 address on network %s", containerID[:12], networkID[:12])
+			return "", "", fmt.Errorf("container %s has no IPv4 address on network %s", ShortID(containerID), ShortID(networkID))
 		}
 		prefix, err := es.IPAddress.Prefix(es.IPPrefixLen)
 		if err != nil {
@@ -69,7 +69,7 @@ func (c *Client) ContainerIPOn(ctx context.Context, containerID, networkID strin
 		}
 		return es.IPAddress.String(), prefix.Masked().String(), nil
 	}
-	return "", "", fmt.Errorf("container %s is not attached to network %s", containerID[:12], networkID[:12])
+	return "", "", fmt.Errorf("container %s is not attached to network %s", ShortID(containerID), ShortID(networkID))
 }
 
 // RemoveNetwork removes a network; one that is already gone is success.
@@ -110,7 +110,7 @@ func (c *Client) NetworkSubnet(ctx context.Context, id string) (string, error) {
 			return cfg.Subnet.String(), nil
 		}
 	}
-	return "", fmt.Errorf("network %s has no IPv4 subnet", id[:12])
+	return "", fmt.Errorf("network %s has no IPv4 subnet", ShortID(id))
 }
 
 // AllNetworkSubnets lists every subnet the daemon knows, whoever owns
@@ -174,3 +174,17 @@ func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID string) ([]Ow
 // role added later would be swept away as garbage by everything that
 // spelled the rule that way.
 func (r OwnedResource) InstanceInfrastructure() bool { return r.LeaseID == "" }
+
+// ShortID trims an object id to the width daemon tooling displays,
+// tolerating an id shorter than that width. Test fixtures use short
+// ids, and so would any future id format — and an unguarded slice
+// panics inside an error path, which is the least welcome place for
+// one: the message that would have said what went wrong is replaced by
+// a crash.
+func ShortID(id string) string {
+	const width = 12
+	if len(id) > width {
+		return id[:width]
+	}
+	return id
+}

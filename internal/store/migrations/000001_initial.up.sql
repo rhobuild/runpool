@@ -25,8 +25,6 @@ CREATE TABLE provider_bindings (
 	target_id           TEXT NOT NULL,
 	provider_kind       TEXT NOT NULL CHECK (length(provider_kind) > 0),
 	source_binding_key  TEXT NOT NULL CHECK (length(source_binding_key) > 0),
-	desired_state       TEXT NOT NULL DEFAULT 'present'
-		CHECK (desired_state IN ('present', 'absent')),
 	created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	UNIQUE (provider_kind, source_binding_key)
 );
@@ -268,6 +266,14 @@ ON capsule_leases (attempt_id)
 WHERE state <> 'released';
 
 CREATE INDEX capsule_leases_by_state ON capsule_leases (state);
+
+-- Every lease an attempt ever had, released ones included: that count is
+-- the retry budget, and it is read inside the write transaction that
+-- decides whether a workload is served again. The partial index above
+-- cannot answer it - it excludes exactly the released rows the count is
+-- about - so without this the check is a full scan of every lease the
+-- host has ever recorded, taken while the single writer is held.
+CREATE INDEX capsule_leases_by_attempt ON capsule_leases (attempt_id);
 
 -- Not partial: attribution asks which attempt a runtime ran for, and a
 -- late report's lease is released by the time it arrives. An index that

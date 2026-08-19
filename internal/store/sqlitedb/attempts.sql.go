@@ -93,42 +93,6 @@ func (q *Queries) GetAttempt(ctx context.Context, id string) (AssignmentAttempt,
 	return i, err
 }
 
-const getAttemptByDeliveryAndWorkload = `-- name: GetAttemptByDeliveryAndWorkload :one
-SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
-       state, execution_evidence, resolution, review_reason, reviewed_at,
-       reviewed_by, received_at, settled_at
-FROM assignment_attempts
-WHERE delivery_id = ?1
-  AND source_workload_key = ?2
-`
-
-type GetAttemptByDeliveryAndWorkloadParams struct {
-	DeliveryID        int64
-	SourceWorkloadKey string
-}
-
-func (q *Queries) GetAttemptByDeliveryAndWorkload(ctx context.Context, arg GetAttemptByDeliveryAndWorkloadParams) (AssignmentAttempt, error) {
-	row := q.db.QueryRowContext(ctx, getAttemptByDeliveryAndWorkload, arg.DeliveryID, arg.SourceWorkloadKey)
-	var i AssignmentAttempt
-	err := row.Scan(
-		&i.ID,
-		&i.DeliveryID,
-		&i.BindingID,
-		&i.SourceWorkloadKey,
-		&i.TenantKey,
-		&i.ProjectKey,
-		&i.State,
-		&i.ExecutionEvidence,
-		&i.Resolution,
-		&i.ReviewReason,
-		&i.ReviewedAt,
-		&i.ReviewedBy,
-		&i.ReceivedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
 const getAttemptByLease = `-- name: GetAttemptByLease :one
 SELECT a.id, a.delivery_id, a.binding_id, a.source_workload_key, a.tenant_key,
        a.project_key, a.state, a.execution_evidence, a.resolution,

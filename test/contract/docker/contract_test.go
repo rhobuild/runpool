@@ -113,6 +113,13 @@ func TestRemoveIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	// Registered here rather than left to the removals below: this suite
+	// runs against a daemon it does not own, and any t.Fatalf between
+	// the create and the last remove leaves a container behind that
+	// nothing else will ever collect. It cannot mask what is being
+	// tested — that removing what is already gone is success is the
+	// assertion two lines down.
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id) })
 	if err := c.RemoveContainer(ctx, id); err != nil {
 		t.Fatalf("first remove: %v", err)
 	}
@@ -840,6 +847,7 @@ func TestContainerRemovalSparesNamedVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create container: %v", err)
 	}
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id) })
 	if err := c.RemoveContainer(ctx, id); err != nil {
 		t.Fatalf("remove container: %v", err)
 	}

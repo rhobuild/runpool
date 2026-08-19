@@ -24,14 +24,6 @@ SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key
 FROM assignment_attempts
 WHERE id = @id;
 
--- name: GetAttemptByDeliveryAndWorkload :one
-SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
-       state, execution_evidence, resolution, review_reason, reviewed_at,
-       reviewed_by, received_at, settled_at
-FROM assignment_attempts
-WHERE delivery_id = @delivery_id
-  AND source_workload_key = @source_workload_key;
-
 -- name: GetOpenAttemptByWorkload :one
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
