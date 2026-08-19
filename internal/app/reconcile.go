@@ -205,7 +205,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// should be unreachable; reaching it means something violated
 		// that, and the disposition is the only thing left to run.
 		log.Warn("disposing of an attempt left open by a released lease")
-		s.leases.DisposeStranded(ctx, lease, evidence, obs)
+		s.leases.DisposeStranded(ctx, lease, obs)
 
 	case store.LeaseReserved, store.LeaseProvisioning,
 		store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning,

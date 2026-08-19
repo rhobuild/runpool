@@ -214,50 +214,104 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
 		return err
 	}
-	// A redelivery of the same workload supersedes the attempt this
-	// lease was serving. The serving still ends — the capsule is
-	// destroyed and the lease released — but the attempt is already
-	// resolved, and forcing a disposition onto it would match no row,
-	// fail, and roll the release back with it: the lease would pin in
-	// cleaning holding its credit, for a workload that is being served
-	// by its successor.
-	//
-	// Only superseded. A settled attempt arriving here would be a second
-	// finalize, which the lease transition already refuses, and papering
-	// over that would hide it.
-	if attempt.State == "superseded" {
-		return nil
+	return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, startObs))
+}
+
+// disposition is what the books must record about an attempt whose
+// serving has ended.
+//
+// It is a value rather than a branch because two paths end a serving —
+// the finalizing transaction and the sweep that finds a lease nobody is
+// driving — and they must not be able to disagree. Expressed as two
+// switches, the precedence between the rules lived in the order of the
+// cases, which nothing checks: the same attempt could settle as a job
+// that ran on one path and return to the queue on the other.
+type disposition int
+
+const (
+	// dispositionNone is an attempt that is already resolved. The
+	// serving still ends — the capsule is destroyed and the lease
+	// released — but nothing is written against the attempt. Forcing a
+	// disposition onto a resolved row matches no row, fails, and rolls
+	// the release back with it, which pins the lease in cleaning holding
+	// its admission credit for work somebody else already owns.
+	dispositionNone disposition = iota
+	// dispositionRequeue returns the workload to the queue: it provably
+	// consumed nothing.
+	dispositionRequeue
+	// dispositionSettleCompleted and dispositionSettleStarted close the
+	// attempt with what was observed of its execution.
+	dispositionSettleCompleted
+	dispositionSettleStarted
+	// dispositionReview holds the attempt for a person: settling it
+	// could drop a job that never ran, requeueing it could run one
+	// twice.
+	dispositionReview
+)
+
+// attemptIsOpen reports whether an attempt is still this lease's to
+// resolve. Anything else — superseded by a redelivery, settled, canceled
+// by the provider, or held for a person — belongs to whoever put it
+// there, and a serving that ends afterwards leaves it alone.
+func attemptIsOpen(state string) bool {
+	switch state {
+	case "ready", "leased", "preparing", "prepared", "starting", "running":
+		return true
 	}
+	return false
+}
+
+// dispositionFor decides what one ended serving means for its attempt.
+// The precedence is stated here, once, in the order these cases are
+// written — but the cases are exhaustive over a value, so adding one
+// cannot silently reorder the others the way inserting a switch case
+// above its siblings did.
+//
+// The proof outranks the evidence. `running` and `running_observed` are
+// written when the start authorization is accepted and the capsule
+// reports itself up, never when a runner is seen owning a job, while
+// ObservedCreated only ever comes from a proof: a runtime still in its
+// created state, a supervisor reporting it never started, or the exit
+// code the capsule reserves for exactly that.
+func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
 	switch {
-	case startObs == assignment.ObservedCreated:
-		// Authorized, and the runtime proved the start never took
-		// effect: the work was not consumed, and this is the one path
-		// allowed back to ready past the authorization.
-		//
-		// It is decided before the evidence cases, not after them,
-		// because the evidence is the weaker statement. `running` and
-		// `running_observed` are written when the authorization is
-		// accepted and the capsule reports itself up — not when a runner
-		// is seen owning a job — while this observation only ever comes
-		// from a proof: a runtime still in its created state, a
-		// supervisor reporting it never started, or the exit code the
-		// capsule reserves for exactly that. Judged in evidence order,
-		// an aborted capsule settles as a job that started and the
-		// workload is never served again.
-		m.log.Warn("the authorized start never took effect; the attempt stays servable",
-			"attempt", attempt.ID, "lease", lease.ID)
-		return m.requeueProven(tx, attempt, lease.ID)
+	case !attemptIsOpen(attempt.State):
+		return dispositionNone
+	case obs == assignment.ObservedCreated:
+		return dispositionRequeue
 	case attempt.Evidence == store.EvidenceExitObserved:
-		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionCompletedObserved)
+		return dispositionSettleCompleted
 	case attempt.Evidence == store.EvidenceRunningObserved:
-		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionStartedObserved)
+		return dispositionSettleStarted
 	case attempt.Evidence.Retriable():
-		m.log.Warn("delivery failed before any start was authorized; the attempt stays servable",
-			"attempt", attempt.ID, "lease", lease.ID)
-		return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), lease.ID)
+		return dispositionRequeue
+	case obs == assignment.ObservedRunning:
+		// The runtime demonstrably began. This reaches the sweep when a
+		// binding is gone and adoption was impossible.
+		return dispositionSettleStarted
+	default:
+		return dispositionReview
+	}
+}
+
+// applyDisposition writes one decision, inside the caller's transaction.
+func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
+	leaseID assignment.LeaseID, d disposition) error {
+
+	switch d {
+	case dispositionNone:
+		return nil
+	case dispositionRequeue:
+		m.log.Warn("the workload was not consumed; the attempt stays servable",
+			"attempt", attempt.ID, "lease", leaseID, "state", attempt.State)
+		return m.requeueProven(tx, attempt, leaseID)
+	case dispositionSettleCompleted:
+		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionCompletedObserved)
+	case dispositionSettleStarted:
+		return tx.Settle(attempt.ID, attempt.State, assignment.ResolutionStartedObserved)
 	default:
 		m.log.Warn("start outcome is unproven; the attempt is held for review",
-			"attempt", attempt.ID, "lease", lease.ID, "observation", string(startObs))
+			"attempt", attempt.ID, "lease", leaseID)
 		return tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown)
 	}
 }
@@ -307,30 +361,17 @@ func (m *Manager) requeueOrReview(tx *store.Tx, attemptID assignment.AttemptID, 
 	return tx.HoldForReview(attemptID, store.ReviewReasonRetryBudgetExhausted)
 }
 
-// DisposeStranded applies the evidence's ruling to an attempt whose
-// lease already finished its own lifecycle. Release and disposition
-// commit together, so this should be unreachable; it exists because an
-// invariant nothing checks is an assumption.
-func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, evidence store.Evidence, obs assignment.ExecutionObservation) {
-	switch {
-	case evidence == store.EvidenceExitObserved:
-		m.settleAttemptOfLease(ctx, lease.ID, assignment.ResolutionCompletedObserved)
-	case evidence == store.EvidenceRunningObserved:
-		m.settleAttemptOfLease(ctx, lease.ID, assignment.ResolutionStartedObserved)
-	case evidence.Retriable(), obs == assignment.ObservedCreated:
-		m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-			return m.requeueProven(tx, attempt, lease.ID)
-		})
-	case obs == assignment.ObservedRunning:
-		// Running reaches here only when the binding is gone and
-		// adoption was impossible; the runtime demonstrably began.
-		m.settleAttemptOfLease(ctx, lease.ID, assignment.ResolutionStartedObserved)
-	default:
-		m.log.Warn("start outcome cannot be proven; holding the attempt for review", "lease", lease.ID)
-		m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-			return tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown)
-		})
-	}
+// DisposeStranded applies the same ruling as the finalizing transaction
+// to an attempt whose lease already finished its own lifecycle. Release
+// and disposition commit together, so this should be unreachable; it
+// exists because an invariant nothing checks is an assumption.
+//
+// It decides through dispositionFor, which is the point: this path and
+// disposeAttempt once carried their own switches and drifted apart.
+func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
+	m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
+		return m.applyDisposition(tx, attempt, lease.ID, dispositionFor(attempt, obs))
+	})
 }
 
 // withAttemptOfLease resolves the attempt a lease serves and runs one
@@ -350,12 +391,6 @@ func (m *Manager) withAttemptOfLease(ctx context.Context, leaseID assignment.Lea
 		m.log.Error("cannot dispose of the attempt of a released lease",
 			"lease", leaseID, "error", err)
 	}
-}
-
-func (m *Manager) settleAttemptOfLease(ctx context.Context, leaseID assignment.LeaseID, resolution string) {
-	m.withAttemptOfLease(ctx, leaseID, func(tx *store.Tx, attempt store.Attempt) error {
-		return tx.Settle(attempt.ID, attempt.State, resolution)
-	})
 }
 
 // Quarantine parks a lease whose cleanup failed. It keeps consuming

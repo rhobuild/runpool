@@ -473,3 +473,103 @@ func TestAReservedExitRequeuesAnAttemptTheWalkAlreadyCalledRunning(t *testing.T)
 		t.Errorf("lease = %s; want released in the same commit", got)
 	}
 }
+
+// TestAHeldAttemptDoesNotPinItsLease: a serving that ends against an
+// attempt somebody else already resolved still releases its lease.
+//
+// An attempt held for review is not this lease's to dispose of — a
+// person owns it now. Writing a disposition onto it anyway matches no
+// row, fails, and rolls the release back with it: the lease stays in
+// cleaning holding its admission credit, and because a lease already in
+// cleaning cannot move there again, every later reconciliation pass
+// repeats the identical rollback and the capacity is gone for good.
+func TestAHeldAttemptDoesNotPinItsLease(t *testing.T) {
+	f := newFixture(t, nopRemover{})
+	f.driveTo(store.LeaseCleaning)
+	id := assignment.AttemptID(f.attempt)
+	f.tx(func(tx *store.Tx) error {
+		return tx.HoldForReview(id, store.ReviewReasonIncompatibleCapsule)
+	})
+
+	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if got := f.reload().State; got != store.LeaseReleased {
+		t.Errorf("lease = %s; want released — a held attempt must not pin the lease serving it", got)
+	}
+	if got := f.attemptState(); got.State != "manual_review" {
+		t.Errorf("attempt = %s; want it left in manual_review for the person who holds it", got.State)
+	}
+}
+
+// TestBothDispositionPathsAgree: the finalizing transaction and the
+// stranded-lease sweep decide the same thing about the same attempt.
+//
+// They once carried a switch each and the cases drifted into different
+// orders, so an attempt with a proven-inert start returned to the queue
+// through one and settled as a job that ran through the other. The
+// decision is one function now; this is what says so.
+func TestBothDispositionPathsAgree(t *testing.T) {
+	for name, tc := range map[string]struct {
+		state    string
+		evidence store.Evidence
+		obs      assignment.ExecutionObservation
+		want     disposition
+	}{
+		"proven inert outranks a running observation": {
+			"running", store.EvidenceRunningObserved, assignment.ObservedCreated, dispositionRequeue},
+		"an observed exit settles as completed": {
+			"running", store.EvidenceExitObserved, "", dispositionSettleCompleted},
+		"a running observation settles as started": {
+			"running", store.EvidenceRunningObserved, "", dispositionSettleStarted},
+		"nothing prepared returns to the queue": {
+			"leased", store.EvidenceNotStarted, "", dispositionRequeue},
+		"a running runtime settles as started": {
+			"starting", store.EvidenceStartAuthorized, assignment.ObservedRunning, dispositionSettleStarted},
+		"an unprovable start is held": {
+			"starting", store.EvidenceStartAuthorized, assignment.ObservedAbsent, dispositionReview},
+		"a superseded attempt is left alone": {
+			"superseded", store.EvidenceNotStarted, "", dispositionNone},
+		"a held attempt is left alone": {
+			"manual_review", store.EvidenceNotStarted, "", dispositionNone},
+		"a settled attempt is left alone": {
+			"settled", store.EvidenceExitObserved, "", dispositionNone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			attempt := store.Attempt{State: tc.state, Evidence: tc.evidence}
+			if got := dispositionFor(attempt, tc.obs); got != tc.want {
+				t.Errorf("dispositionFor(%s, %s, %s) = %d; want %d",
+					tc.state, tc.evidence, tc.obs, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAProvenInertStartIsRequeuedFromEitherPath drives the same lease
+// state through both endings and requires the same outcome.
+func TestAProvenInertStartIsRequeuedFromEitherPath(t *testing.T) {
+	for name, end := range map[string]func(*fixture){
+		"the finalizing transaction": func(f *fixture) {
+			if err := f.m.Finalize(f.t.Context(), f.lease.ID, assignment.ObservedCreated); err != nil {
+				f.t.Fatalf("Finalize: %v", err)
+			}
+		},
+		"the stranded sweep": func(f *fixture) {
+			f.m.DisposeStranded(f.t.Context(), f.reload(), assignment.ObservedCreated)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, nopRemover{})
+			f.driveTo(store.LeaseCleaning)
+			f.advanceAttemptTo("running")
+			f.recordEvidence(store.EvidenceRunningObserved)
+
+			end(f)
+
+			if got := f.attemptState(); got.State != "ready" {
+				t.Errorf("attempt = %s (resolution %q); want it back in the queue",
+					got.State, got.Resolution)
+			}
+		})
+	}
+}
