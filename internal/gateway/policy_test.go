@@ -1,14 +1,16 @@
 package gateway
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/egress"
-	"time"
 )
 
 // TestPolicyGenerationAdvancesOnlyOnChange: the relay drops pooled
@@ -140,15 +142,18 @@ func TestAWideningAllowIsRefusedOnTheReloadChannel(t *testing.T) {
 	}
 }
 
-// TestConcurrentInstallsDoNotLoseTheStricterPolicy: the two installers
-// are separate exec processes into the same container, so what
-// serializes them has to be a lock the kernel holds.
+// TestAConcurrentInstallLeavesAPolicyInForce: installers racing each
+// other leave the relay a policy it can read, at every moment and at the
+// end.
 //
-// Without one they read the same policy in force, build two successors
-// and race the write: an emergency close is overwritten by a reload that
-// was already in flight, or the file is two documents spliced together —
-// which the reader refuses, after which every dial fails.
-func TestConcurrentInstallsDoNotLoseTheStricterPolicy(t *testing.T) {
+// This is the composition, not either mechanism. Two things hold it up —
+// the kernel lock that orders the installers and the unique temporary
+// name that makes each write atomic — and this test passes as long as
+// one of them does, which is exactly why it cannot stand for either.
+// TestConcurrentInstallsAreSerialized covers the lock and
+// TestAConcurrentWriteIsNeverReadHalfWritten covers the write; each
+// fails on its own mechanism alone.
+func TestAConcurrentInstallLeavesAPolicyInForce(t *testing.T) {
 	dir := t.TempDir()
 	path := PolicyPath(dir)
 	inForce := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
@@ -270,5 +275,138 @@ func TestAPolicyMoveRetiresTheTransport(t *testing.T) {
 	if got := r.roundTripper(); got == first {
 		t.Error("the transport survived a policy move; a connection pooled under the old one " +
 			"still carries the next request past the dialer, where the address is checked")
+	}
+}
+
+// TestConcurrentInstallsAreSerialized: two installers never occupy the
+// critical section at once.
+//
+// A reload and an emergency close arrive as separate `docker exec`
+// processes into the same container, so nothing in the program's own
+// memory can order them — it has to be a lock the kernel holds. Without
+// one they both read the same policy in force and each builds its
+// successor from a document the other is about to replace, so the second
+// rename silently discards the first install's decision.
+//
+// This is deliberately not the same test as the one above. A unique
+// temporary name alone keeps every observable state parseable, so a
+// splice test passes whether or not the lock is there, and for a while
+// one test stood for both mechanisms while only one of them was really
+// covered.
+func TestConcurrentInstallsAreSerialized(t *testing.T) {
+	dir := t.TempDir()
+	inForce := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+		`"allow":[],"deny":["10.0.0.0/8"]}`
+	if err := os.WriteFile(PolicyPath(dir), []byte(inForce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noKernel := func(egress.Policy) error { return nil }
+
+	// build runs between the read of the policy in force and the write
+	// of its successor, which is the whole of the section the lock has
+	// to hold shut.
+	var inside, peak atomic.Int32
+	install := func() error {
+		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+			n := inside.Add(1)
+			for {
+				seen := peak.Load()
+				if n <= seen || peak.CompareAndSwap(seen, n) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			inside.Add(-1)
+			next := current
+			next.Deny = []string{"10.0.0.0/8", "192.168.0.0/16"}
+			return next, next.Validate()
+		}, noKernel)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := install(); err != nil {
+				t.Errorf("install: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := peak.Load(); got != 1 {
+		t.Errorf("%d installers held the critical section at once; want 1 — "+
+			"each one past the read is building its successor from a policy "+
+			"another is about to replace", got)
+	}
+}
+
+// TestAConcurrentWriteIsNeverReadHalfWritten: a reader of a file
+// replaced by writeFileAtomic never sees a partial document.
+//
+// The rename is atomic; the write into the temporary file behind it is
+// not. Writers sharing one temporary name truncate and fill it in turn,
+// and the rename publishes whatever interleaving won. Every caller gets
+// this, including the ones with no lock around them, so it is tested
+// where it lives rather than through an installer that is serialized
+// anyway.
+func TestAConcurrentWriteIsNeverReadHalfWritten(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "doc.json")
+	// Documents of very different lengths: a splice between two equal
+	// ones can go unnoticed, and the tail of the longer is what makes a
+	// half-written file visibly unparseable.
+	docs := [][]byte{
+		[]byte(`{"a":1}`),
+		[]byte(`{"a":1,"b":"` + strings.Repeat("x", 4096) + `"}`),
+	}
+	if err := writeFileAtomic(path, docs[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	bad := make(chan string, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				continue // the rename is atomic; a missing file is not
+			}
+			if !json.Valid(raw) {
+				select {
+				case bad <- string(raw):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				if err := writeFileAtomic(path, docs[i%len(docs)]); err != nil {
+					t.Errorf("write: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+
+	select {
+	case raw := <-bad:
+		t.Fatalf("a reader observed a document that is not whole (%d bytes):\n%.200s", len(raw), raw)
+	default:
 	}
 }
