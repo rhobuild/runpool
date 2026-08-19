@@ -3,6 +3,8 @@ package store
 import (
 	"slices"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // LeaseState is one node of the capsule lease machine: the lifecycle of
@@ -89,12 +91,12 @@ const ReportedReleasedLeases = 50
 // so the reconciler can find a client to clean up with; AttemptID is the
 // link to the record of what the work actually did.
 type Lease struct {
-	ID          string
-	BindingID   int64
-	AttemptID   string
-	TierID      string
+	ID          assignment.LeaseID
+	BindingID   assignment.BindingID
+	AttemptID   assignment.AttemptID
+	TierID      assignment.TierID
 	State       LeaseState
-	RuntimeName string
+	RuntimeName assignment.RuntimeName
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -116,8 +118,8 @@ const (
 // object confirmed. Retries, LastError and NotBefore pace the periodic
 // reconciler per resource.
 type ResourceIntent struct {
-	ID        int64
-	LeaseID   string
+	ID        assignment.ResourceIntentID
+	LeaseID   assignment.LeaseID
 	Kind      ResourceKind
 	Role      string
 	Name      string

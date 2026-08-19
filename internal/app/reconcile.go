@@ -76,7 +76,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 
 	adopted := make(map[string]bool)
 	for _, lease := range live {
-		b := s.byBinding[lease.BindingID] // may be nil if the target was removed
+		b := s.byBinding[int64(lease.BindingID)] // may be nil if the target was removed
 		// Adoption means "this lease is still executing; wait it out".
 		// A lease already past draining is not executing — it is being
 		// unwound, and adopting it would run WalkToRunning and then a
@@ -84,11 +84,11 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		// returns before any cleanup. The lease would then hold its credit
 		// and its privileged container forever, because being marked
 		// adopted also exempts it from the orphan sweep.
-		if runner, ok := runnerByLease[lease.ID]; ok && runner.Running && b != nil && adoptable(lease.State) {
+		if runner, ok := runnerByLease[string(lease.ID)]; ok && runner.Running && b != nil && adoptable(lease.State) {
 			s.log.Info("adopting running capsule", "binding", b.key, "lease", lease.ID)
 			s.reportAdoption(b, s.alloc.Adopt(b.key))
 			s.adopt(b, lease, runner.ID)
-			adopted[lease.ID] = true
+			adopted[string(lease.ID)] = true
 			continue
 		}
 		// Every nonterminal lease holds a credit until it is resolved, even
@@ -99,7 +99,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 			s.reportAdoption(b, s.alloc.Adopt(b.key))
 			defer s.releaseCreditIfDone(b, lease.ID)
 		}
-		runner, hasRunner := runnerByLease[lease.ID]
+		runner, hasRunner := runnerByLease[string(lease.ID)]
 		s.resolveInterrupted(ctx, b, lease, runner, hasRunner)
 	}
 
@@ -170,7 +170,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	obs := assignment.ObservedAbsent
 	if evidence == store.EvidenceStartAuthorized && hasRunner {
 		var err error
-		obs, err = s.caps.InspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: runner.ID})
+		obs, err = s.caps.InspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
 		if err != nil {
 			log.Error("cannot observe the runtime of an ambiguous start", "error", err)
 		}
@@ -474,7 +474,7 @@ func (s *Controller) sweepPeriodically(ctx context.Context) {
 	}
 	keep := make(map[string]bool, len(live))
 	for _, lease := range live {
-		keep[lease.ID] = true
+		keep[string(lease.ID)] = true
 	}
 	if err := s.sweepOrphans(ctx, keep); err != nil {
 		s.log.Error("periodic sweep failed", "error", err)
@@ -543,7 +543,7 @@ func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, ret
 		return // its backoff has not elapsed; let it breathe
 	}
 	*retried++
-	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
+	b := s.byBinding[int64(lease.BindingID)] // may be nil if the target was removed
 	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
 		s.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)

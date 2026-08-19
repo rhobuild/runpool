@@ -42,8 +42,8 @@ type harness struct {
 	objects *fakeObjects
 
 	mu       sync.Mutex
-	launched []string
-	leases   map[string]store.Lease // attempt id -> lease, captured at launch
+	launched []assignment.AttemptID
+	leases   map[assignment.AttemptID]store.Lease // attempt id -> lease, captured at launch
 
 	msgSeq int
 }
@@ -62,7 +62,7 @@ func newHarness(t *testing.T, parallelism int) *harness {
 // restart path: the same binding identity resolves to the same rows.
 func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness {
 	t.Helper()
-	var bindingID int64
+	var bindingID assignment.BindingID
 	if err := st.Tx(context.Background(), func(tx *store.Tx) error {
 		var err error
 		bindingID, err = tx.EnsureBinding("app", "github_actions",
@@ -72,7 +72,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		t.Fatal(err)
 	}
 
-	h := &harness{t: t, store: st, leases: map[string]store.Lease{}}
+	h := &harness{t: t, store: st, leases: map[assignment.AttemptID]store.Lease{}}
 	b := &binding{
 		key:       "app/standard",
 		tier:      config.Tier{ID: "standard", Parallelism: parallelism},
@@ -93,14 +93,14 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		cache:     cacheMgr,
 		alloc:     allocator.New(),
 		bindings:  []*binding{b},
-		byBinding: map[int64]*binding{bindingID: b},
+		byBinding: map[int64]*binding{int64(bindingID): b},
 		// A lease this harness calls stranded was written moments ago,
 		// because no test here simulates the passage of time. The grace
 		// exists for a real gap between a lease committing and its owner
 		// registering, and a test whose subject is that gap sets its own.
 		strandedGrace: time.Nanosecond,
 	}
-	if err := h.srv.alloc.Register(b.tier.ID, b.key, parallelism); err != nil {
+	if err := h.srv.alloc.Register(assignment.TierID(b.tier.ID), b.key, parallelism); err != nil {
 		t.Fatal(err)
 	}
 	// The monitor is real, on a defaulted policy and a probe that reports
@@ -142,10 +142,10 @@ func (h *harness) serve() {
 	h.srv.wg.Wait()
 }
 
-func (h *harness) launchedAttempts() []string {
+func (h *harness) launchedAttempts() []assignment.AttemptID {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]string(nil), h.launched...)
+	return append([]assignment.AttemptID(nil), h.launched...)
 }
 
 // useRemover rebuilds the lease manager over a faulted daemon, so a test
@@ -154,7 +154,7 @@ func (h *harness) useRemover(r lease.Remover) {
 	h.srv.leases = lease.NewManager(h.store, r, h.srv.log)
 }
 
-func (h *harness) recordEvidence(leaseID string, e store.Evidence) {
+func (h *harness) recordEvidence(leaseID assignment.LeaseID, e store.Evidence) {
 	h.t.Helper()
 	if err := h.store.Tx(h.t.Context(), func(tx *store.Tx) error {
 		return tx.RecordEvidenceForLease(leaseID, e)
@@ -184,7 +184,7 @@ func (h *harness) ready() []store.Attempt {
 
 // attemptByLease resolves the attempt a lease serves, or a zero Attempt
 // when disposition already detached it.
-func (h *harness) attemptByLease(leaseID string) store.Attempt {
+func (h *harness) attemptByLease(leaseID assignment.LeaseID) store.Attempt {
 	h.t.Helper()
 	var out store.Attempt
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
@@ -220,9 +220,15 @@ func demand(workloadKey, project string, run int64) assignment.WorkloadAssignmen
 // success, exactly the contract the real client honours.
 type nopRemover struct{}
 
-func (nopRemover) RemoveOwnedContainer(context.Context, string, string, string) error { return nil }
-func (nopRemover) RemoveOwnedNetwork(context.Context, string, string, string) error   { return nil }
-func (nopRemover) RemoveOwnedVolume(context.Context, string, string, string) error    { return nil }
+func (nopRemover) RemoveOwnedContainer(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
+func (nopRemover) RemoveOwnedNetwork(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
+func (nopRemover) RemoveOwnedVolume(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
 
 var errDaemon = errors.New("daemon unreachable")
 
@@ -243,13 +249,13 @@ type fakeObjects struct {
 	removed []string
 }
 
-func (f *fakeObjects) ListOwnedContainers(context.Context, string) ([]docker.OwnedContainer, error) {
+func (f *fakeObjects) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
 	return f.containers, f.listErr
 }
-func (f *fakeObjects) ListOwnedNetworks(context.Context, string) ([]docker.OwnedResource, error) {
+func (f *fakeObjects) ListOwnedNetworks(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
 	return f.networks, nil
 }
-func (f *fakeObjects) ListOwnedVolumes(context.Context, string) ([]docker.OwnedResource, error) {
+func (f *fakeObjects) ListOwnedVolumes(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
 	return f.volumes, nil
 }
 func (f *fakeObjects) RemoveContainer(_ context.Context, id string) error { return f.remove(id) }
@@ -274,11 +280,11 @@ type fakeProbe struct {
 	usageErr error
 }
 
-func (f *fakeProbe) ProbeFilesystemFree(context.Context, string, string) (docker.FilesystemFree, error) {
+func (f *fakeProbe) ProbeFilesystemFree(context.Context, string, assignment.InstanceID) (docker.FilesystemFree, error) {
 	return f.free, f.freeErr
 }
 
-func (f *fakeProbe) OwnedVolumeUsage(context.Context, string) ([]docker.VolumeUsage, error) {
+func (f *fakeProbe) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
 	return f.usage, f.usageErr
 }
 
@@ -288,11 +294,11 @@ func (f *fakeProbe) OwnedVolumeUsage(context.Context, string) ([]docker.VolumeUs
 type nopVolumes struct{}
 
 func (nopVolumes) EnsureOwnedVolume(context.Context, string, map[string]string) error { return nil }
-func (nopVolumes) OwnedIDByName(_ context.Context, _, name, _, _ string) (string, error) {
+func (nopVolumes) OwnedIDByName(_ context.Context, _, name string, _ assignment.InstanceID, _ assignment.LeaseID) (string, error) {
 	return name, nil
 }
 func (nopVolumes) RemoveVolume(context.Context, string) error { return nil }
-func (nopVolumes) OwnedVolumeUsage(context.Context, string) ([]docker.VolumeUsage, error) {
+func (nopVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
 	return nil, nil
 }
 
@@ -404,7 +410,7 @@ func TestReadyAttemptsResumeAfterRestart(t *testing.T) {
 }
 
 // attemptState reloads one attempt by id, wherever its state moved.
-func attemptState(t *testing.T, h *harness, attemptID string) store.Attempt {
+func attemptState(t *testing.T, h *harness, attemptID assignment.AttemptID) store.Attempt {
 	t.Helper()
 	var out store.Attempt
 	h.inStore(func(s *store.Tx) error {
@@ -420,10 +426,10 @@ func attemptState(t *testing.T, h *harness, attemptID string) store.Attempt {
 
 // leaseFor claims the open attempt of a workload through the production
 // transaction, returning the lease and the attempt id.
-func leaseFor(t *testing.T, h *harness, workloadKey string) (store.Lease, string) {
+func leaseFor(t *testing.T, h *harness, workloadKey assignment.SourceWorkloadKey) (store.Lease, assignment.AttemptID) {
 	t.Helper()
 	var lease store.Lease
-	var attemptID string
+	var attemptID assignment.AttemptID
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
 		ready, err := tx.ReadyAttempts(h.bind.bindingID)
 		if err != nil {
@@ -445,7 +451,7 @@ func leaseFor(t *testing.T, h *harness, workloadKey string) (store.Lease, string
 	return lease, attemptID
 }
 
-func driveLeaseTo(t *testing.T, h *harness, leaseID string, target store.LeaseState) {
+func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target store.LeaseState) {
 	t.Helper()
 	// A lease starts reserved; every other state is reached by walking the
 	// real machine, so a test never fabricates a state the product cannot

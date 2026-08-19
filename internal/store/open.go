@@ -32,6 +32,8 @@ import (
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // dsn is the connection contract the durability suite in
@@ -188,7 +190,7 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // InstanceID is the stable opaque identity stamped on every owned Docker
 // resource (io.runpool.instance); it is generated once per state volume.
-func (s *Store) InstanceID() string { return s.instanceID }
+func (s *Store) InstanceID() assignment.InstanceID { return assignment.InstanceID(s.instanceID) }
 
 // SchemaVersion exposes the migration level for diagnostics.
 func (s *Store) SchemaVersion() (int, error) {

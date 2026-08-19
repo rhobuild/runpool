@@ -7,13 +7,15 @@ import (
 	"strconv"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // RecordGitHubBindingMetadata stores the adapter's configuration for a
 // binding, one row per neutral binding.
-func (t *Tx) RecordGitHubBindingMetadata(bindingID int64, scope, canonicalURL, runnerGroup, scaleSetName string, scaleSetID int64) error {
+func (t *Tx) RecordGitHubBindingMetadata(bindingID assignment.BindingID, scope, canonicalURL, runnerGroup, scaleSetName string, scaleSetID int64) error {
 	return t.q.UpsertGitHubBindingMetadata(t.ctx, sqlitedb.UpsertGitHubBindingMetadataParams{
-		BindingID: bindingID, Scope: scope, CanonicalUrl: canonicalURL,
+		BindingID: int64(bindingID), Scope: scope, CanonicalUrl: canonicalURL,
 		RunnerGroup: runnerGroup, ScaleSetName: scaleSetName,
 		ScaleSetID: sql.NullInt64{Int64: scaleSetID, Valid: scaleSetID > 0},
 	})
@@ -21,9 +23,9 @@ func (t *Tx) RecordGitHubBindingMetadata(bindingID int64, scope, canonicalURL, r
 
 // RecordGitHubAttemptMetadata stores the provider identifiers observed for an
 // attempt. Runner request ids are diagnostic metadata and may be zero.
-func (t *Tx) RecordGitHubAttemptMetadata(attemptID, jobID string, runnerRequestID, workflowRunID int64) error {
+func (t *Tx) RecordGitHubAttemptMetadata(attemptID assignment.AttemptID, jobID string, runnerRequestID, workflowRunID int64) error {
 	return t.q.UpsertGitHubAttemptMetadata(t.ctx, sqlitedb.UpsertGitHubAttemptMetadataParams{
-		AttemptID: attemptID, JobID: jobID,
+		AttemptID: string(attemptID), JobID: jobID,
 		RunnerRequestID: runnerRequestID, WorkflowRunID: workflowRunID,
 	})
 }
@@ -59,7 +61,7 @@ func (t *Tx) GitHubBindings() ([]GitHubBinding, error) {
 
 // GitHubScaleSetID returns the recorded ownership identity for a binding. Zero
 // means that no scale set has been recorded.
-func (t *Tx) GitHubScaleSetID(bindingID int64) (int64, error) {
+func (t *Tx) GitHubScaleSetID(bindingID assignment.BindingID) (int64, error) {
 	id, _, err := t.GitHubScaleSet(bindingID)
 	return id, err
 }
@@ -73,8 +75,8 @@ func (t *Tx) GitHubScaleSetID(bindingID int64) (int64, error) {
 // create and then failed, or was killed, before the provider's id came
 // back. Only the second is grounds for taking over a set that already
 // carries that name.
-func (t *Tx) GitHubScaleSet(bindingID int64) (id int64, recorded bool, err error) {
-	row, err := t.q.GetGitHubBindingMetadata(t.ctx, bindingID)
+func (t *Tx) GitHubScaleSet(bindingID assignment.BindingID) (id int64, recorded bool, err error) {
+	row, err := t.q.GetGitHubBindingMetadata(t.ctx, int64(bindingID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -86,9 +88,9 @@ func (t *Tx) GitHubScaleSet(bindingID int64) (id int64, recorded bool, err error
 
 // RecordGitHubRunnerID stores the ephemeral runner assigned to an attempt so
 // failure cleanup can deregister it.
-func (t *Tx) RecordGitHubRunnerID(attemptID string, runnerID int64) error {
+func (t *Tx) RecordGitHubRunnerID(attemptID assignment.AttemptID, runnerID int64) error {
 	affected, err := t.q.SetGitHubAttemptRunner(t.ctx, sqlitedb.SetGitHubAttemptRunnerParams{
-		RunnerID: runnerID, AttemptID: attemptID,
+		RunnerID: runnerID, AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -107,8 +109,8 @@ func (t *Tx) RecordGitHubRunnerID(attemptID string, runnerID int64) error {
 // It is keyed by name rather than typed because its only consumer prints
 // it. Anything deciding on these identifiers reads them through the
 // accessors above, where they keep their meaning.
-func (t *Tx) AttemptProviderReferences(attemptID string) (map[string]string, error) {
-	row, err := t.q.GetGitHubAttemptMetadata(t.ctx, attemptID)
+func (t *Tx) AttemptProviderReferences(attemptID assignment.AttemptID) (map[string]string, error) {
+	row, err := t.q.GetGitHubAttemptMetadata(t.ctx, string(attemptID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -136,8 +138,8 @@ func (t *Tx) AttemptProviderReferences(attemptID string) (map[string]string, err
 
 // GitHubRunnerID returns the recorded ephemeral runner. A missing metadata row
 // reports zero because there is nothing to deregister.
-func (t *Tx) GitHubRunnerID(attemptID string) (int64, error) {
-	row, err := t.q.GetGitHubAttemptMetadata(t.ctx, attemptID)
+func (t *Tx) GitHubRunnerID(attemptID assignment.AttemptID) (int64, error) {
+	row, err := t.q.GetGitHubAttemptMetadata(t.ctx, string(attemptID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}

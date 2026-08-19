@@ -16,6 +16,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // sandboxNetworks is what computing an egress policy needs from the
@@ -31,7 +33,7 @@ type sandboxNetworks interface {
 // sandboxGateways is what installing one needs: find the gateways, hand
 // each the new sets, and remove the ones that will not take them.
 type sandboxGateways interface {
-	ListOwnedContainers(ctx context.Context, instanceID string) ([]docker.OwnedContainer, error)
+	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedContainer, error)
 	Exec(ctx context.Context, id string, cmd []string) (int, string, error)
 	ExecWithInput(ctx context.Context, id string, cmd []string, input []byte) (int, string, error)
 	RemoveContainer(ctx context.Context, id string) error
@@ -93,7 +95,7 @@ func cloneSandbox(in *capsule.Sandbox) *capsule.Sandbox {
 type networkSandbox struct {
 	log        *slog.Logger
 	daemon     sandboxDaemon
-	instanceID string
+	instanceID assignment.InstanceID
 	probeImage string
 	// allow and denies are the operator's own two lists, read once. They
 	// extend the discovered set rather than replacing anything in it, and
@@ -108,10 +110,11 @@ type networkSandbox struct {
 // newNetworkSandbox assembles the initial policy and fails closed. Any
 // gap in the deny set is a hole in every capsule's egress, so serve does
 // not start without a complete one.
-func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon, instanceID, probeImage string,
+func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
+	instanceID assignment.InstanceID, probeImage string,
 	cfg *config.Config, log *slog.Logger) (*networkSandbox, error) {
 	n := &networkSandbox{
-		log: log, daemon: daemon, instanceID: instanceID, probeImage: probeImage,
+		log: log, daemon: daemon, instanceID: assignment.InstanceID(instanceID), probeImage: probeImage,
 	}
 	for _, c := range cfg.Network.AllowPrivateCIDRs {
 		n.allow = append(n.allow, c.String())
@@ -136,10 +139,10 @@ func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon, instanceID, pr
 // the uplink itself.
 func (n *networkSandbox) build(ctx context.Context) (*capsule.Sandbox, error) {
 	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, docker.NetworkSpec{
-		Name: "runpool-uplink-" + n.instanceID[:8],
+		Name: "runpool-uplink-" + string(n.instanceID)[:8],
 		Labels: map[string]string{
 			docker.LabelManaged:  "true",
-			docker.LabelInstance: n.instanceID,
+			docker.LabelInstance: string(n.instanceID),
 			docker.LabelRole:     capsule.RoleUplink,
 		},
 	})
@@ -472,14 +475,14 @@ func (n *networkSandbox) discoverHostCIDRs(ctx context.Context) ([]string, error
 		return nil, err
 	}
 	code, out, err := n.daemon.RunTask(ctx, docker.ContainerSpec{
-		Name:        "runpool-" + n.instanceID[:8] + "-hostnet-probe-" + hex.EncodeToString(nonce),
+		Name:        "runpool-" + string(n.instanceID)[:8] + "-hostnet-probe-" + hex.EncodeToString(nonce),
 		Image:       n.probeImage,
 		Entrypoint:  []string{"/bin/sh", "-c"},
 		Cmd:         []string{"ip -o -4 addr show scope global"},
 		NetworkMode: "host",
 		Labels: map[string]string{
 			docker.LabelManaged:  "true",
-			docker.LabelInstance: n.instanceID,
+			docker.LabelInstance: string(n.instanceID),
 			docker.LabelRole:     "probe",
 		},
 	})

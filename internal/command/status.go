@@ -13,6 +13,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // runStatus answers the operability questions the design requires an
@@ -71,9 +73,9 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	var obs daemonObservation
 	if dock, err := docker.New(ctx); err == nil {
 		defer dock.Close()
-		if obs.containers, err = dock.ListOwnedContainers(ctx, snap.InstanceID); err == nil {
-			if obs.networks, err = dock.ListOwnedNetworks(ctx, snap.InstanceID); err == nil {
-				obs.volumes, err = dock.ListOwnedVolumes(ctx, snap.InstanceID)
+		if obs.containers, err = dock.ListOwnedContainers(ctx, assignment.InstanceID(snap.InstanceID)); err == nil {
+			if obs.networks, err = dock.ListOwnedNetworks(ctx, assignment.InstanceID(snap.InstanceID)); err == nil {
+				obs.volumes, err = dock.ListOwnedVolumes(ctx, assignment.InstanceID(snap.InstanceID))
 			}
 		}
 		obs.err = err
@@ -147,9 +149,9 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	}
 	fmt.Fprintln(streams.Out)
 	for _, l := range live {
-		resources := snap.Resources[l.ID]
+		resources := snap.Resources[string(l.ID)]
 		project := ""
-		if a, ok := snap.Attempts[l.ID]; ok {
+		if a, ok := snap.Attempts[string(l.ID)]; ok {
 			project = a.TenantKey + "/" + a.ProjectKey
 		}
 		fmt.Fprintf(streams.Out, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))

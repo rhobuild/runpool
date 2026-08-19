@@ -74,14 +74,14 @@ type memRecorder struct {
 	objects []struct{ kind, id string }
 }
 
-func (r *memRecorder) Plan(kind, role, name string) (int64, error) {
+func (r *memRecorder) Plan(kind, role, name string) (assignment.ResourceIntentID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.objects = append(r.objects, struct{ kind, id string }{kind, name})
-	return int64(len(r.objects)), nil
+	return assignment.ResourceIntentID(len(r.objects)), nil
 }
-func (r *memRecorder) Creating(int64) error { return nil }
-func (r *memRecorder) Confirm(id int64, dockerID string) error {
+func (r *memRecorder) Creating(assignment.ResourceIntentID) error { return nil }
+func (r *memRecorder) Confirm(id assignment.ResourceIntentID, dockerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.objects[id-1].id = dockerID
@@ -149,7 +149,7 @@ func TestCapsuleLifecycle(t *testing.T) {
 	t.Cleanup(func() { rec.cleanup(t, dock) })
 
 	prepared, err := m.Prepare(ctx, capsule.Spec{
-		LeaseID:      leaseID,
+		LeaseID:      assignment.LeaseID(leaseID),
 		InstanceID:   "contract",
 		CapsuleImage: image,
 		JITConfig:    fakeJITConfig,
@@ -200,7 +200,7 @@ func TestCapsuleLifecycle(t *testing.T) {
 	// than for the state that precedes it.
 	deadline = time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		tail, err := dock.TailLogs(ctx, prepared.RuntimeID, 200)
+		tail, err := dock.TailLogs(ctx, string(prepared.RuntimeID), 200)
 		if err != nil {
 			t.Fatalf("logs: %v", err)
 		}
@@ -213,7 +213,7 @@ func TestCapsuleLifecycle(t *testing.T) {
 	// End the serving the way the platform ends one. PID 1 is the
 	// supervisor, and its TERM path drains the runner and the inner
 	// daemon before reporting the exit.
-	if code, out, err := dock.ExecWithInput(ctx, prepared.RuntimeID,
+	if code, out, err := dock.ExecWithInput(ctx, string(prepared.RuntimeID),
 		[]string{"kill", "-TERM", "1"}, nil); err != nil || code != 0 {
 		t.Fatalf("signal the supervisor: exit %d, %v: %s", code, err, out)
 	}
@@ -235,14 +235,14 @@ func TestCapsuleLifecycle(t *testing.T) {
 
 	// The capsule's exit is the job's exit: the daemon-side wait must
 	// agree with the observation.
-	exit, err := dock.WaitExit(ctx, prepared.RuntimeID)
+	exit, err := dock.WaitExit(ctx, string(prepared.RuntimeID))
 	if err != nil {
 		t.Fatalf("wait: %v", err)
 	}
 	t.Logf("capsule exited %d after the drain ended the runner", exit)
 
 	// The JIT bundle must not have reached the container log driver.
-	tail, err := dock.TailLogs(ctx, prepared.RuntimeID, 200)
+	tail, err := dock.TailLogs(ctx, string(prepared.RuntimeID), 200)
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}

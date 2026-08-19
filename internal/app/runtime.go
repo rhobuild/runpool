@@ -35,11 +35,11 @@ func (s *Controller) createLease(ctx context.Context, b *binding, attempt store.
 // walk is what an operator watches, while disposition rests on evidence
 // and the terminal transitions, so a conflict is logged rather than
 // fatal.
-func (s *Controller) advanceAttempt(ctx context.Context, attemptID, from, to string) {
+func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.AttemptID, from, to string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.Advance(attemptID, from, to)
+		return tx.Advance(assignment.AttemptID(attemptID), from, to)
 	}); err != nil {
 		s.log.Warn("attempt did not advance", "attempt", attemptID,
 			"from", from, "to", to, "error", err)
@@ -92,7 +92,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 
-	runnerName := "runpool-" + docker.ShortID(lease.ID)
+	runnerName := "runpool-" + docker.ShortID(string(lease.ID))
 	jit, err := b.gh.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
 	if err != nil {
 		log.Error("jit generation failed", "error", err)
@@ -103,7 +103,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// GitHub assigned is the adapter's, and lands in the attempt's
 	// metadata table where deregistration reads it back.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		if err := tx.SetLeaseRuntimeName(lease.ID, jit.RunnerName); err != nil {
+		if err := tx.SetLeaseRuntimeName(lease.ID, assignment.RuntimeName(jit.RunnerName)); err != nil {
 			return err
 		}
 		if err := tx.RecordGitHubRunnerID(attemptID, int64(jit.RunnerID)); err != nil {
@@ -145,8 +145,8 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		LeaseID:      lease.ID,
 		InstanceID:   s.store.InstanceID(),
 		AttemptID:    attemptID,
-		TargetID:     b.target.ID,
-		TierID:       b.tier.ID,
+		TargetID:     assignment.TargetID(b.target.ID),
+		TierID:       assignment.TierID(b.tier.ID),
 		CapsuleImage: b.capsuleImage,
 		JITConfig:    jit.Encoded,
 		Resources:    b.tier.Resources,
@@ -250,7 +250,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	runnerContainer := prepared.RuntimeID
-	log.Info("capsule running", "runner", jit.RunnerName, "container", docker.ShortID(runnerContainer))
+	log.Info("capsule running", "runner", jit.RunnerName, "container", docker.ShortID(string(runnerContainer)))
 
 	// From here the tier's ceiling governs, and only here: this is the
 	// wait for work the provider owns, and the ceiling is the backstop
@@ -259,7 +259,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// budget, so a restart neither extends nor restarts it.
 	waitCtx, cancelWait := context.WithTimeout(ctx, remainingCeiling(b.tier, lease.CreatedAt))
 	defer cancelWait()
-	exit, err := s.wait.WaitExit(waitCtx, runnerContainer)
+	exit, err := s.wait.WaitExit(waitCtx, string(runnerContainer))
 	if err == nil {
 		// What the status proves, not that the wait returned. The
 		// supervisor reserves one code for "the runner never owned the
@@ -291,7 +291,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	if exit != 0 {
-		tail, _ := s.wait.TailLogs(ctx, runnerContainer, 40)
+		tail, _ := s.wait.TailLogs(ctx, string(runnerContainer), 40)
 		log.Warn("runner exited non-zero", "exit", exit, "log_tail", tail)
 	} else {
 		log.Info("runner exited cleanly")
@@ -307,7 +307,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 // releaseCreditIfDone returns the binding's admission credit only when the lease has
 // reached its terminal state. A quarantined or otherwise stuck lease
 // keeps consuming capacity until reconciliation or cleanup resolves it.
-func (s *Controller) releaseCreditIfDone(b *binding, leaseID string) {
+func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var lease store.Lease
@@ -349,14 +349,14 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID string) {
 // by definition — the next pass, or the next start, finds the lease
 // exactly where this left it — and a recovery that outlived the
 // shutdown budget would have the platform kill the process inside one.
-func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID string,
+func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID assignment.LeaseID,
 	startObs assignment.ExecutionObservation) error {
 
 	ctx, cancel := context.WithTimeout(ctx, recoveryBudget)
 	defer cancel()
 	bindingKey := "(unconfigured)"
 	if b != nil {
-		bindingKey = b.key
+		bindingKey = string(b.key)
 	}
 	log := s.log.With("binding", bindingKey, "lease", leaseID)
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 var (
@@ -50,9 +52,9 @@ type WorkloadRow struct {
 //     delivery returns ErrOpenAttemptExists: the caller supersedes or
 //     resolves the predecessor first, in the same transaction, and
 //     retries.
-func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (int64, error) {
+func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (assignment.DeliveryID, error) {
 	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
-		BindingID: bindingID, SourceDeliveryKey: sourceDeliveryKey,
+		BindingID: int64(bindingID), SourceDeliveryKey: sourceDeliveryKey,
 	})
 	switch {
 	case err == nil:
@@ -67,7 +69,7 @@ func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerpri
 		// a delivery whose work no query can ever find.
 	case errors.Is(err, sql.ErrNoRows):
 		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
-			BindingID:         bindingID,
+			BindingID:         int64(bindingID),
 			SourceDeliveryKey: sourceDeliveryKey,
 			PayloadSha256:     fingerprint[:],
 		})
@@ -80,7 +82,7 @@ func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerpri
 
 	for _, w := range workloads {
 		if w.SourceWorkloadKey == "" {
-			return delivery.ID, fmt.Errorf("workload with no key in delivery %s cannot be made durable", sourceDeliveryKey)
+			return assignment.DeliveryID(delivery.ID), fmt.Errorf("workload with no key in delivery %s cannot be made durable", sourceDeliveryKey)
 		}
 		if err := t.insertAttempt(delivery, w); err != nil {
 			// The id travels with the error on purpose. The delivery row
@@ -89,10 +91,10 @@ func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerpri
 			// asking - without it, the only way to resolve the conflict
 			// is to supersede blindly, including the attempts this very
 			// delivery just inserted.
-			return delivery.ID, err
+			return assignment.DeliveryID(delivery.ID), err
 		}
 	}
-	return delivery.ID, nil
+	return assignment.DeliveryID(delivery.ID), nil
 }
 
 func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) error {
@@ -138,9 +140,10 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 // Only an attempt that provably consumed nothing may be superseded;
 // anything further along is settled or reviewed through its own path,
 // and the redelivery waits for that to happen.
-func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution string, exceptDelivery int64) error {
+func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkloadKey assignment.SourceWorkloadKey,
+	resolution string, exceptDelivery assignment.DeliveryID) error {
 	open, err := t.q.GetOpenAttemptByWorkload(t.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
-		BindingID: bindingID, SourceWorkloadKey: sourceWorkloadKey,
+		BindingID: int64(bindingID), SourceWorkloadKey: string(sourceWorkloadKey),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -156,7 +159,7 @@ func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution
 	// inserted, and the workload stays superseded, unserved, with its
 	// message acknowledged. Nothing afterwards notices, because the
 	// delivery did land.
-	if open.DeliveryID == exceptDelivery {
+	if assignment.DeliveryID(open.DeliveryID) == exceptDelivery {
 		return ErrNotFound
 	}
 	affected, err := t.q.SupersedeAttempt(t.ctx, sqlitedb.SupersedeAttemptParams{

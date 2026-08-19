@@ -11,6 +11,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // TestNetworkSandboxBypass is the egress bypass suite, run against a
@@ -30,7 +32,8 @@ import (
 //
 // Then the gateway is removed, and egress must go with it.
 func TestNetworkSandboxBypass(t *testing.T) {
-	m, dock, leaseID := launcher(t)
+	m, dock, name := launcher(t)
+	leaseID := assignment.LeaseID(name)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 
@@ -38,7 +41,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 
 	// The uplink stands in for the instance's shared egress network.
 	uplinkID, err := dock.CreateNetwork(ctx, docker.NetworkSpec{
-		Name:   leaseID + "-uplink",
+		Name:   string(string(leaseID) + "-uplink"),
 		Labels: map[string]string{docker.LabelManaged: "true", docker.LabelInstance: "contract", docker.LabelRole: capsule.RoleUplink},
 	})
 	if err != nil {
@@ -57,7 +60,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 		[]string{"172.30.0.0/16"})  // stand-in other Docker network
 
 	prepared, err := m.Prepare(ctx, capsule.Spec{
-		LeaseID:      leaseID,
+		LeaseID:      assignment.LeaseID(leaseID),
 		InstanceID:   "contract",
 		CapsuleImage: image,
 		JITConfig:    fakeJITConfig,
@@ -77,7 +80,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	// direct opens a raw TCP connection from the capsule, with no
 	// proxy: the path the host must refuse in every case.
 	direct := func(host string, port int) bool {
-		code, _, err := dock.Exec(ctx, capsuleID, []string{
+		code, _, err := dock.Exec(ctx, string(capsuleID), []string{
 			"bash", "-c", fmt.Sprintf("timeout 5 bash -c 'echo > /dev/tcp/%s/%d' 2>/dev/null", host, port),
 		})
 		return err == nil && code == 0
@@ -85,7 +88,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	// relayed asks the gateway to reach a URL. Exit 0 means the relay
 	// connected; the body is irrelevant.
 	relayed := func(url string) (bool, string) {
-		code, out, err := dock.Exec(ctx, capsuleID, []string{
+		code, out, err := dock.Exec(ctx, string(capsuleID), []string{
 			"bash", "-c", fmt.Sprintf(
 				"curl -sS -o /dev/null -w '%%{http_code}' --max-time 20 %s 2>&1", url),
 		})
@@ -116,7 +119,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 
 	// DNS resolves — through the gateway's relay, the only resolver the
 	// capsule can reach.
-	if code, out, err := dock.Exec(ctx, capsuleID, []string{"getent", "hosts", "example.com"}); err != nil || code != 0 {
+	if code, out, err := dock.Exec(ctx, string(capsuleID), []string{"getent", "hosts", "example.com"}); err != nil || code != 0 {
 		t.Errorf("DNS through the gateway failed: exit %d, %v, %s", code, err, out)
 		dumpSandboxDiag(ctx, t, dock, capsuleID, leaseID)
 	}
@@ -149,7 +152,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+short, "contract", leaseID)
+	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}
@@ -167,21 +170,22 @@ func TestNetworkSandboxBypass(t *testing.T) {
 // dumpSandboxDiag prints the sandbox's live state when an assertion
 // fails, so a failure is diagnosed from the actual routes and rules
 // rather than guessed at.
-func dumpSandboxDiag(ctx context.Context, t *testing.T, dock *docker.Client, capsuleID, leaseID string) {
+func dumpSandboxDiag(ctx context.Context, t *testing.T, dock *docker.Client,
+	capsuleID assignment.RuntimeID, leaseID assignment.LeaseID) {
 	t.Helper()
 	show := func(container, label string, cmd ...string) {
 		code, out, err := dock.Exec(ctx, container, cmd)
 		t.Logf("--- %s (exit %d, err %v) ---\n%s", label, code, err, out)
 	}
-	show(capsuleID, "capsule: ip route", "ip", "route")
-	show(capsuleID, "capsule: resolv.conf", "cat", "/etc/resolv.conf")
-	show(capsuleID, "capsule: proxy env", "bash", "-c", "env | grep -i proxy | sort")
+	show(string(capsuleID), "capsule: ip route", "ip", "route")
+	show(string(capsuleID), "capsule: resolv.conf", "cat", "/etc/resolv.conf")
+	show(string(capsuleID), "capsule: proxy env", "bash", "-c", "env | grep -i proxy | sort")
 
 	short := leaseID
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+short, "contract", leaseID)
+	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Logf("could not resolve gateway for diagnostics: %v", err)
 		return

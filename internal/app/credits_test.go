@@ -7,6 +7,8 @@ import (
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // TestCreditsRebuildFromAdoptedCapsules: after a restart the allocator
@@ -16,7 +18,7 @@ import (
 func TestCreditsRebuildFromAdoptedCapsules(t *testing.T) {
 	a := allocator.New()
 	for _, key := range []string{"a", "b"} {
-		if err := a.Register("std", key, 2); err != nil {
+		if err := a.Register("std", assignment.BindingKey(key), 2); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -80,14 +82,14 @@ func TestSilentBindingIsFoundByRotation(t *testing.T) {
 	a := allocator.New()
 	keys := []string{"repo-a", "repo-b", "repo-c", "repo-d"}
 	for _, k := range keys {
-		if err := a.Register("std", k, 2); err != nil {
+		if err := a.Register("std", assignment.BindingKey(k), 2); err != nil {
 			t.Fatal(err)
 		}
 	}
 	seen := map[string]bool{}
 	for range len(keys) {
 		for _, k := range keys {
-			if a.Advertised(k) > 0 {
+			if a.Advertised(assignment.BindingKey(k)) > 0 {
 				seen[k] = true
 			}
 		}

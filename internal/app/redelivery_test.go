@@ -253,11 +253,11 @@ func TestRecordEvidenceClassifiesEveryOutcome(t *testing.T) {
 
 	record := func(id string, e store.Evidence) error {
 		return h.store.Tx(t.Context(), func(tx *store.Tx) error {
-			return tx.RecordEvidenceForLease(id, e)
+			return tx.RecordEvidenceForLease(assignment.LeaseID(id), e)
 		})
 	}
 
-	if err := record(lease.ID, store.Evidence("definitely-not-a-value")); !errors.Is(err, store.ErrInvalidExecutionObservation) {
+	if err := record(string(lease.ID), store.Evidence("definitely-not-a-value")); !errors.Is(err, store.ErrInvalidExecutionObservation) {
 		t.Errorf("an unknown value returned %v; want ErrInvalidExecutionObservation — "+
 			"a silent no-op tells the caller something was recorded when nothing was", err)
 	}
@@ -265,15 +265,15 @@ func TestRecordEvidenceClassifiesEveryOutcome(t *testing.T) {
 		t.Error("recording against a missing lease succeeded; the target's absence was swallowed")
 	}
 
-	if err := record(lease.ID, store.EvidenceRunningObserved); err != nil {
+	if err := record(string(lease.ID), store.EvidenceRunningObserved); err != nil {
 		t.Fatalf("recording a running observation: %v", err)
 	}
 	// Re-observing the same fact is not a fault.
-	if err := record(lease.ID, store.EvidenceRunningObserved); err != nil {
+	if err := record(string(lease.ID), store.EvidenceRunningObserved); err != nil {
 		t.Errorf("repeating an identical observation returned %v; want explicit idempotent success", err)
 	}
 	// A slower writer cannot unmake an observation.
-	if err := record(lease.ID, store.EvidenceRuntimePrepared); !errors.Is(err, store.ErrObservationConflict) {
+	if err := record(string(lease.ID), store.EvidenceRuntimePrepared); !errors.Is(err, store.ErrObservationConflict) {
 		t.Errorf("a backwards write returned %v; want ErrObservationConflict — a runner "+
 			"that was seen running cannot become one that never started", err)
 	}
@@ -355,10 +355,10 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.inStore(func(tx *store.Tx) error {
-		if _, err := tx.AckRequested(delivery); err != nil {
+		if _, err := tx.AckRequested(assignment.DeliveryID(delivery)); err != nil {
 			return err
 		}
-		return tx.AckConfirmed(delivery)
+		return tx.AckConfirmed(assignment.DeliveryID(delivery))
 	})
 
 	// The broker sends it again, now carrying the cancellation. One full
@@ -398,7 +398,7 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 			return err
 		}
 		// Settled, then: fetch it through its delivery.
-		attempts, aerr := tx.AttemptsOfDelivery(delivery)
+		attempts, aerr := tx.AttemptsOfDelivery(assignment.DeliveryID(delivery))
 		if aerr != nil {
 			return aerr
 		}

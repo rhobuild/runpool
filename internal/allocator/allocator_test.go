@@ -3,11 +3,13 @@ package allocator
 import (
 	"sync"
 	"testing"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
-func mustRegister(t *testing.T, a *Allocator, tier, key string, parallelism int) {
+func mustRegister(t *testing.T, a *Allocator, tier, key assignment.SourceWorkloadKey, parallelism int) {
 	t.Helper()
-	if err := a.Register(tier, key, parallelism); err != nil {
+	if err := a.Register(assignment.TierID(tier), assignment.BindingKey(key), parallelism); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -30,7 +32,7 @@ func advertisedSum(a *Allocator, _ ...string) int {
 func TestMoreBindingsThanParallelism(t *testing.T) {
 	a := New()
 	for _, key := range []string{"a", "b", "c"} {
-		mustRegister(t, a, "std", key, 2)
+		mustRegister(t, a, "std", assignment.SourceWorkloadKey(key), 2)
 	}
 	if got := advertisedSum(a, "a", "b", "c"); got > 2 {
 		t.Errorf("sum(advertised) = %d; the tier parallelism is 2", got)
@@ -66,12 +68,12 @@ func TestInvariantHoldsAcrossStates(t *testing.T) {
 	} {
 		a := New()
 		for _, k := range keys {
-			mustRegister(t, a, "std", k, tc.parallelism)
+			mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), tc.parallelism)
 		}
 		for i, k := range keys {
-			a.SetAssignedDemand(k, tc.wants[i])
+			a.SetAssignedDemand(assignment.BindingKey(k), tc.wants[i])
 			for range tc.holds[i] {
-				if !a.TryReserve(k) {
+				if !a.TryReserve(assignment.BindingKey(k)) {
 					t.Fatalf("%s: %s could not reserve within budget", tc.name, k)
 				}
 			}
@@ -175,7 +177,7 @@ func TestDiscoveryCreditMakesASilentBindingVisible(t *testing.T) {
 	// safe.
 	for range 3 {
 		for _, k := range []string{"a", "b", "c"} {
-			if a.Advertised(k) > 0 {
+			if a.Advertised(assignment.BindingKey(k)) > 0 {
 				seen[k] = true
 			}
 		}
@@ -195,11 +197,11 @@ func TestDiscoveryIsNotOfferedToEveryoneAtOnce(t *testing.T) {
 	a := New()
 	keys := []string{"a", "b", "c", "d"}
 	for _, k := range keys {
-		mustRegister(t, a, "std", k, 2)
+		mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), 2)
 	}
 	holders := 0
 	for _, k := range keys {
-		if a.Advertised(k) > 0 {
+		if a.Advertised(assignment.BindingKey(k)) > 0 {
 			holders++
 		}
 	}
@@ -214,14 +216,14 @@ func TestDiscoveryIsNotOfferedToEveryoneAtOnce(t *testing.T) {
 func TestRotationSkipsBindingsThatCanAlreadySee(t *testing.T) {
 	a := New()
 	for _, k := range []string{"a", "b", "c"} {
-		mustRegister(t, a, "std", k, 3)
+		mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), 3)
 	}
 	a.SetAssignedDemand("b", 5) // b has demand: it is visible without the credit
 
 	held := map[string]int{}
 	for range 6 {
 		a.Rotate()
-		held[a.DiscoveryHolder("std")]++
+		held[string(a.DiscoveryHolder("std"))]++
 	}
 	if held["b"] != 0 {
 		t.Errorf("rotation gave the discovery credit to a binding with demand %d times", held["b"])
@@ -336,7 +338,7 @@ func TestNoOvershootUnderConcurrentTraffic(t *testing.T) {
 	keys := []string{"a", "b", "c", "d"}
 	const parallelism = 3
 	for _, k := range keys {
-		mustRegister(t, a, "std", k, parallelism)
+		mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), parallelism)
 	}
 
 	var workers sync.WaitGroup
@@ -351,9 +353,9 @@ func TestNoOvershootUnderConcurrentTraffic(t *testing.T) {
 					return
 				default:
 				}
-				a.SetAssignedDemand(k, i%5)
-				if a.TryReserve(k) {
-					a.Release(k)
+				a.SetAssignedDemand(assignment.BindingKey(k), i%5)
+				if a.TryReserve(assignment.BindingKey(k)) {
+					a.Release(assignment.BindingKey(k))
 				}
 				a.Rotate()
 			}
@@ -405,7 +407,7 @@ func TestGlobalDiscoveryRotatesAcrossTiers(t *testing.T) {
 	seen := map[string]bool{}
 	for range 2 {
 		for _, key := range []string{"small-a", "large-a"} {
-			if a.Advertised(key) == 1 {
+			if a.Advertised(assignment.BindingKey(key)) == 1 {
 				seen[key] = true
 			}
 		}
@@ -512,9 +514,9 @@ func TestNoGlobalOvershootUnderConcurrentTraffic(t *testing.T) {
 					return
 				default:
 				}
-				a.SetAssignedDemand(key, i%5)
-				if a.TryReserve(key) {
-					a.Release(key)
+				a.SetAssignedDemand(assignment.BindingKey(key), i%5)
+				if a.TryReserve(assignment.BindingKey(key)) {
+					a.Release(assignment.BindingKey(key))
 				}
 				a.Rotate()
 			}
@@ -623,14 +625,14 @@ func TestPoolReportUnderAGlobalLimit(t *testing.T) {
 
 	flagged := map[string]bool{}
 	for _, tier := range []string{"small", "large"} {
-		_, rows := a.PoolReport(tier)
+		_, rows := a.PoolReport(assignment.TierID(tier))
 		for _, r := range rows {
 			if r.Discovery {
-				flagged[r.Key] = true
+				flagged[string(r.Key)] = true
 			}
 		}
-		holder := a.DiscoveryHolder(tier)
-		if holder != "" && !flagged[holder] {
+		holder := a.DiscoveryHolder(assignment.TierID(tier))
+		if holder != "" && !flagged[string(holder)] {
 			t.Errorf("tier %s reports holder %q that its own rows do not flag", tier, holder)
 		}
 	}
@@ -689,7 +691,7 @@ func TestAdoptionOverBudgetIsReportedAndConverges(t *testing.T) {
 	a := New()
 	keys := []string{"a", "b"}
 	for _, k := range keys {
-		mustRegister(t, a, "std", k, 1) // the tier shrank to one
+		mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), 1) // the tier shrank to one
 	}
 
 	// Two capsules survived the restart; the tier now allows one.

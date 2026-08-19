@@ -188,33 +188,33 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	}
 	for _, b := range snap.Bindings {
 		doc.Bindings = append(doc.Bindings, bindingDTO{
-			TargetID: b.TargetID, ProviderKind: b.ProviderKind,
-			SourceBindingKey: b.SourceBindingKey,
+			TargetID: string(b.TargetID), ProviderKind: b.ProviderKind,
+			SourceBindingKey: string(b.SourceBindingKey),
 			LastContactAt:    rfc3339(b.Contact.LastContact),
 			LastError:        b.Contact.LastError,
 			LastErrorAt:      rfc3339(b.Contact.LastErrorAt),
 		})
 	}
 	for _, l := range snap.Leases {
-		attempt := snap.Attempts[l.ID]
+		attempt := snap.Attempts[string(l.ID)]
 		project := ""
 		if attempt.TenantKey != "" || attempt.ProjectKey != "" {
 			project = attempt.TenantKey + "/" + attempt.ProjectKey
 		}
 		lease := leaseDTO{
-			ID:          l.ID,
+			ID:          string(l.ID),
 			State:       string(l.State),
 			Terminal:    l.State.Terminal(),
-			AttemptID:   l.AttemptID,
+			AttemptID:   string(l.AttemptID),
 			Project:     project,
-			RuntimeName: l.RuntimeName,
+			RuntimeName: string(l.RuntimeName),
 			Evidence:    string(attempt.Evidence),
 			CreatedAt:   rfc3339(l.CreatedAt),
 			Resources:   []resourceDTO{},
 		}
-		for _, in := range snap.Resources[l.ID] {
+		for _, in := range snap.Resources[string(l.ID)] {
 			lease.Resources = append(lease.Resources, resourceDTO{
-				Kind: string(in.Kind), Role: in.Role, Name: in.Name, LeaseID: in.LeaseID, State: in.State,
+				Kind: string(in.Kind), Role: in.Role, Name: in.Name, LeaseID: string(in.LeaseID), State: in.State,
 			})
 		}
 		doc.Leases = append(doc.Leases, lease)
@@ -253,7 +253,7 @@ func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64
 			continue
 		}
 		active++
-		activeByTier[lease.TierID]++
+		activeByTier[string(lease.TierID)]++
 	}
 
 	mode := "independent-tiers"
@@ -310,7 +310,7 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 	live := map[string]bool{}
 	for _, l := range leases {
 		if !l.State.Terminal() {
-			live[l.ID] = true
+			live[string(l.ID)] = true
 		}
 	}
 	out := []string{}
@@ -330,8 +330,8 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 		}
 	}
 	for _, l := range leases {
-		if live[l.ID] && l.State == store.LeaseWorkloadRunning && !withContainer[l.ID] {
-			out = append(out, "lease "+l.ID+" claims to be running with no container")
+		if live[string(l.ID)] && l.State == store.LeaseWorkloadRunning && !withContainer[string(l.ID)] {
+			out = append(out, "lease "+string(l.ID)+" claims to be running with no container")
 		}
 	}
 

@@ -12,6 +12,8 @@ import (
 	"github.com/rhobuild/runpool/internal/disk"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // The disk monitor measures once a minute. Pressure moves at the speed
@@ -24,8 +26,8 @@ const monitorInterval = time.Minute
 // because that is what lets a test present a filesystem with no room
 // left — the one state the daemon cannot be asked to be in.
 type diskProbe interface {
-	ProbeFilesystemFree(ctx context.Context, image, instanceID string) (docker.FilesystemFree, error)
-	OwnedVolumeUsage(ctx context.Context, instanceID string) ([]docker.VolumeUsage, error)
+	ProbeFilesystemFree(ctx context.Context, image string, instanceID assignment.InstanceID) (docker.FilesystemFree, error)
+	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]docker.VolumeUsage, error)
 }
 
 // admissionGate is the half of the credit pool a verdict acts on.

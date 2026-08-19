@@ -73,7 +73,7 @@ func TestFailedAndQuarantinedLeasesReachReleased(t *testing.T) {
 			if err := h.deliver(demand("probe-"+string(from), "app", 44)); err != nil {
 				t.Fatal(err)
 			}
-			lease, _ := leaseFor(t, h, "probe-"+string(from))
+			lease, _ := leaseFor(t, h, assignment.SourceWorkloadKey("probe-"+string(from)))
 			driveLeaseTo(t, h, lease.ID, from)
 
 			h.resolveWithoutRuntime(t.Context(), lease)
@@ -86,7 +86,7 @@ func TestFailedAndQuarantinedLeasesReachReleased(t *testing.T) {
 	}
 }
 
-func reloadLease(t *testing.T, h *harness, leaseID string) store.Lease {
+func reloadLease(t *testing.T, h *harness, leaseID assignment.LeaseID) store.Lease {
 	t.Helper()
 	var lease store.Lease
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {

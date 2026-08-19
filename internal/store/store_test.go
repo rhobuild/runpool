@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 func openStore(t *testing.T, dir string) *Store {
@@ -36,9 +38,9 @@ func inTx(t *testing.T, s *Store, fn func(*Tx) error) {
 	}
 }
 
-func seedBinding(t *testing.T, s *Store) int64 {
+func seedBinding(t *testing.T, s *Store) assignment.BindingID {
 	t.Helper()
-	var id int64
+	var id assignment.BindingID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		id, err = tx.EnsureBinding("default", "github_actions",
@@ -51,21 +53,22 @@ func seedBinding(t *testing.T, s *Store) int64 {
 // seedAttempt records one delivery carrying one workload and returns the
 // ready attempt it produced — the starting point for anything that needs
 // work to lease.
-func seedAttempt(t *testing.T, s *Store, binding int64, deliveryKey, workloadKey string) string {
+func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
+	deliveryKey string, workloadKey assignment.SourceWorkloadKey) assignment.AttemptID {
 	t.Helper()
 	var id string
 	inTx(t, s, func(tx *Tx) error {
 		if _, err := tx.RecordDelivery(binding, deliveryKey, fingerprint(deliveryKey),
-			[]WorkloadRow{{SourceWorkloadKey: workloadKey, TenantKey: "acme", ProjectKey: "app"}}); err != nil {
+			[]WorkloadRow{{SourceWorkloadKey: string(workloadKey), TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
 		attempt, err := tx.q.GetOpenAttemptByWorkload(tx.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
-			BindingID: binding, SourceWorkloadKey: workloadKey,
+			BindingID: int64(binding), SourceWorkloadKey: string(workloadKey),
 		})
 		id = attempt.ID
 		return err
 	})
-	return id
+	return assignment.AttemptID(id)
 }
 
 func fingerprint(s string) [32]byte { return sha256.Sum256([]byte(s)) }
@@ -79,7 +82,7 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 	binding := seedBinding(t, s)
 	workloads := []WorkloadRow{{SourceWorkloadKey: "job-1", TenantKey: "acme", ProjectKey: "app"}}
 
-	var first int64
+	var first assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		first, err = tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
@@ -95,7 +98,7 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 		if again != first {
 			t.Errorf("redelivery produced delivery %d; want the original %d", again, first)
 		}
-		n, err := tx.q.CountOpenAttempts(tx.ctx, binding)
+		n, err := tx.q.CountOpenAttempts(tx.ctx, int64(binding))
 		if err != nil {
 			return err
 		}
@@ -157,7 +160,7 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 		if len(ready) != 1 || ready[0].SourceWorkloadKey != "job-r" {
 			t.Errorf("ready attempts = %+v; want exactly the reassigned workload", ready)
 		}
-		n, err := tx.q.CountOpenAttempts(tx.ctx, binding)
+		n, err := tx.q.CountOpenAttempts(tx.ctx, int64(binding))
 		if err != nil {
 			return err
 		}
@@ -236,7 +239,7 @@ func TestAckStateMachineConvergesAfterUncertainty(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
 
-	var deliveryID int64
+	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", fingerprint("ack"),
@@ -381,7 +384,7 @@ func TestPurgeLeaseRefusesWhileItsAttemptIsUnresolved(t *testing.T) {
 	binding := seedBinding(t, s)
 	attempt := seedAttempt(t, s, binding, "msg-fk", "job-fk")
 
-	var leaseID string
+	var leaseID assignment.LeaseID
 	inTx(t, s, func(tx *Tx) error {
 		lease, err := tx.LeaseAttempt(attempt, binding, "standard")
 		leaseID = lease.ID
@@ -495,7 +498,7 @@ func TestAckRequestedIsRetriedAfterACrashInFlight(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
 
-	var deliveryID int64
+	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", fingerprint("wedge"),
@@ -594,9 +597,9 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	// the random id tiebreak — which is how an order assertion passes
 	// whichever way the query is written.
 	base := time.Now().Add(-released * time.Hour)
-	finishOrder := make([]string, released)
+	finishOrder := make([]assignment.LeaseID, released)
 	for i := range released {
-		id, _ := releasedLease(t, s, binding, fmt.Sprintf("done-%03d", i))
+		id, _ := releasedLease(t, s, binding, assignment.SourceWorkloadKey(fmt.Sprintf("done-%03d", i)))
 		backdateLease(t, s, id, base, base.Add(time.Duration(i)*time.Hour))
 		finishOrder[i] = id
 	}
@@ -604,14 +607,14 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	// Three live leases, each in a different state.
 	live := map[string]bool{}
 	for i, state := range []LeaseState{LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered} {
-		key := fmt.Sprintf("live-%d", i)
-		attempt := seedAttempt(t, s, binding, "msg-"+key, "job-"+key)
+		key := assignment.SourceWorkloadKey(fmt.Sprintf("live-%d", i))
+		attempt := seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
 		inTx(t, s, func(tx *Tx) error {
 			lease, err := tx.LeaseAttempt(attempt, binding, "standard")
 			if err != nil {
 				return err
 			}
-			live[lease.ID] = true
+			live[string(lease.ID)] = true
 			if state == LeaseReserved {
 				return nil
 			}
@@ -633,7 +636,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	var gotLive, gotReleased int
 	seen := map[string]bool{}
 	for _, l := range snap.Leases {
-		seen[l.ID] = true
+		seen[string(l.ID)] = true
 		if l.State.Terminal() {
 			gotReleased++
 		} else {
@@ -664,7 +667,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	// — selection order and emission order are opposite, so both halves are
 	// named here rather than left to a monotonicity check that a reversed
 	// query would also satisfy.
-	var carried []string
+	var carried []assignment.LeaseID
 	for _, l := range snap.Leases {
 		if l.State.Terminal() {
 			carried = append(carried, l.ID)
@@ -681,7 +684,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 // waiting for one. Start and finish are separate arguments because the two
 // are the whole question: a lease that ran for months finished once, and
 // only the second of those times says whether its record is still wanted.
-func backdateLease(t *testing.T, s *Store, leaseID string, started, finished time.Time) {
+func backdateLease(t *testing.T, s *Store, leaseID assignment.LeaseID, started, finished time.Time) {
 	t.Helper()
 	inTx(t, s, func(tx *Tx) error {
 		_, err := tx.tx.Exec(
@@ -692,9 +695,9 @@ func backdateLease(t *testing.T, s *Store, leaseID string, started, finished tim
 }
 
 // releasedLease drives one attempt to a released lease and returns both ids.
-func releasedLease(t *testing.T, s *Store, binding int64, key string) (leaseID, attemptID string) {
+func releasedLease(t *testing.T, s *Store, binding assignment.BindingID, key assignment.SourceWorkloadKey) (leaseID assignment.LeaseID, attemptID assignment.AttemptID) {
 	t.Helper()
-	attemptID = seedAttempt(t, s, binding, "msg-"+key, "job-"+key)
+	attemptID = seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
 	inTx(t, s, func(tx *Tx) error {
 		lease, err := tx.LeaseAttempt(attemptID, binding, "standard")
 		if err != nil {
@@ -881,7 +884,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 // backdateAttempt ages an attempt's arrival without waiting for it.
 // received_at is what the ready queue is ordered by, so moving it is the
 // whole of what growing old means for an attempt.
-func backdateAttempt(t *testing.T, s *Store, attemptID string, arrived time.Time) {
+func backdateAttempt(t *testing.T, s *Store, attemptID assignment.AttemptID, arrived time.Time) {
 	t.Helper()
 	inTx(t, s, func(tx *Tx) error {
 		_, err := tx.tx.Exec(
@@ -924,7 +927,7 @@ func TestReadyAttemptsAreServedOldestFirst(t *testing.T) {
 
 	got := make([]string, len(ready))
 	for i, a := range ready {
-		got[i] = a.SourceWorkloadKey
+		got[i] = string(a.SourceWorkloadKey)
 	}
 	want := []string{"job-oldest", "job-middle", "job-newest"}
 	if !slices.Equal(got, want) {
@@ -936,12 +939,12 @@ func TestReadyAttemptsAreServedOldestFirst(t *testing.T) {
 // one serving of an attempt costs. Requeue happens in the same commit as
 // the release, so the next serving always starts with the predecessor
 // already terminal.
-func serve(t *testing.T, s *Store, binding int64, attemptID string) Lease {
+func serve(t *testing.T, s *Store, binding int64, attemptID assignment.AttemptID) Lease {
 	t.Helper()
 	var lease Lease
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		lease, err = tx.LeaseAttempt(attemptID, binding, "standard")
+		lease, err = tx.LeaseAttempt(attemptID, assignment.BindingID(binding), "standard")
 		return err
 	})
 	for _, step := range [][2]LeaseState{
@@ -966,7 +969,7 @@ func TestARequeuedAttemptIsServedAgain(t *testing.T) {
 	binding := seedBinding(t, s)
 	attemptID := seedAttempt(t, s, binding, "msg-1", "job-1")
 
-	first := serve(t, s, binding, attemptID)
+	first := serve(t, s, int64(binding), attemptID)
 	inTx(t, s, func(tx *Tx) error { return tx.Requeue(attemptID) })
 
 	var second Lease
@@ -1039,7 +1042,7 @@ func TestTheRetryBudgetEndsInReviewRatherThanForever(t *testing.T) {
 	attemptID := seedAttempt(t, s, binding, "msg-1", "job-1")
 
 	for i := 1; i < DefaultRetryBudget; i++ {
-		serve(t, s, binding, attemptID)
+		serve(t, s, int64(binding), attemptID)
 		inTx(t, s, func(tx *Tx) error {
 			if err := tx.Requeue(attemptID); err != nil {
 				t.Fatalf("serving %d was refused within the budget: %v", i, err)
@@ -1047,7 +1050,7 @@ func TestTheRetryBudgetEndsInReviewRatherThanForever(t *testing.T) {
 			return nil
 		})
 	}
-	serve(t, s, binding, attemptID)
+	serve(t, s, int64(binding), attemptID)
 
 	err := s.Tx(t.Context(), func(tx *Tx) error { return tx.Requeue(attemptID) })
 	if !errors.Is(err, ErrRetryBudgetExhausted) {
@@ -1066,7 +1069,7 @@ func TestAnOperatorRetryIsNotOverruledByTheBudget(t *testing.T) {
 	attemptID := seedAttempt(t, s, binding, "msg-1", "job-1")
 
 	for i := 0; i < DefaultRetryBudget; i++ {
-		serve(t, s, binding, attemptID)
+		serve(t, s, int64(binding), attemptID)
 		if i < DefaultRetryBudget-1 {
 			inTx(t, s, func(tx *Tx) error { return tx.Requeue(attemptID) })
 		}
@@ -1111,7 +1114,7 @@ func TestARetryInFlightIsNotStranded(t *testing.T) {
 	binding := seedBinding(t, s)
 	attemptID := seedAttempt(t, s, binding, "msg-1", "job-1")
 
-	serve(t, s, binding, attemptID)
+	serve(t, s, int64(binding), attemptID)
 	inTx(t, s, func(tx *Tx) error { return tx.Requeue(attemptID) })
 	inTx(t, s, func(tx *Tx) error {
 		_, err := tx.LeaseAttempt(attemptID, binding, "standard")
@@ -1182,23 +1185,23 @@ func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 		requeue func(*Tx, string) error
 	}{
 		{"plain requeue from prepared", "prepared", func(tx *Tx, id string) error {
-			if err := tx.Advance(id, "leased", "preparing"); err != nil {
+			if err := tx.Advance(assignment.AttemptID(id), "leased", "preparing"); err != nil {
 				return err
 			}
-			if err := tx.Advance(id, "preparing", "prepared"); err != nil {
+			if err := tx.Advance(assignment.AttemptID(id), "preparing", "prepared"); err != nil {
 				return err
 			}
-			return tx.Requeue(id)
+			return tx.Requeue(assignment.AttemptID(id))
 		}},
 		{"proven inert from starting", "starting", func(tx *Tx, id string) error {
 			for _, step := range [][2]string{
 				{"leased", "preparing"}, {"preparing", "prepared"}, {"prepared", "starting"},
 			} {
-				if err := tx.Advance(id, step[0], step[1]); err != nil {
+				if err := tx.Advance(assignment.AttemptID(id), step[0], step[1]); err != nil {
 					return err
 				}
 			}
-			return tx.RequeueProvenInert(id)
+			return tx.RequeueProvenInert(assignment.AttemptID(id))
 		}},
 	}
 	for _, tc := range cases {
@@ -1215,7 +1218,7 @@ func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 						return err
 					}
 				}
-				return tc.requeue(tx, attemptID)
+				return tc.requeue(tx, string(attemptID))
 			})
 			inTx(t, s, func(tx *Tx) error {
 				if err := tx.RecordEvidence(attemptID, EvidenceRuntimePrepared); err != nil {
@@ -1325,7 +1328,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 			binding := seedBinding(t, s)
 			workloads := []WorkloadRow{{SourceWorkloadKey: "job-held", TenantKey: "acme", ProjectKey: "app"}}
 
-			var attemptID string
+			var attemptID assignment.AttemptID
 			inTx(t, s, func(tx *Tx) error {
 				if _, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads); err != nil {
 					return err
@@ -1387,7 +1390,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 	s := newStore(t)
 
-	var kept, dropped, withWork int64
+	var kept, dropped, withWork assignment.BindingID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		if kept, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-standard"); err != nil {
@@ -1407,14 +1410,14 @@ func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 	var forgotten int
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		forgotten, err = tx.ForgetUnclaimedBindings([]int64{kept})
+		forgotten, err = tx.ForgetUnclaimedBindings([]assignment.BindingID{kept})
 		return err
 	})
 	if forgotten != 1 {
 		t.Errorf("forgot %d bindings; want exactly the one that holds no work", forgotten)
 	}
 
-	var ids []int64
+	var ids []assignment.BindingID
 	inTx(t, s, func(tx *Tx) error {
 		rows, err := tx.Bindings()
 		if err != nil {

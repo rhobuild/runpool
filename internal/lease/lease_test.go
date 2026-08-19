@@ -18,9 +18,15 @@ import (
 // success, exactly the contract the real client honours.
 type nopRemover struct{}
 
-func (nopRemover) RemoveOwnedContainer(context.Context, string, string, string) error { return nil }
-func (nopRemover) RemoveOwnedNetwork(context.Context, string, string, string) error   { return nil }
-func (nopRemover) RemoveOwnedVolume(context.Context, string, string, string) error    { return nil }
+func (nopRemover) RemoveOwnedContainer(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
+func (nopRemover) RemoveOwnedNetwork(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
+func (nopRemover) RemoveOwnedVolume(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
+	return nil
+}
 
 // wedgedRemover fails every removal until healed — the daemon a
 // quarantined lease is waiting on.
@@ -32,13 +38,13 @@ func (w *wedgedRemover) fail() error {
 	}
 	return errors.New("daemon wedged")
 }
-func (w *wedgedRemover) RemoveOwnedContainer(context.Context, string, string, string) error {
+func (w *wedgedRemover) RemoveOwnedContainer(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return w.fail()
 }
-func (w *wedgedRemover) RemoveOwnedNetwork(context.Context, string, string, string) error {
+func (w *wedgedRemover) RemoveOwnedNetwork(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return w.fail()
 }
-func (w *wedgedRemover) RemoveOwnedVolume(context.Context, string, string, string) error {
+func (w *wedgedRemover) RemoveOwnedVolume(context.Context, string, assignment.InstanceID, assignment.LeaseID) error {
 	return w.fail()
 }
 
@@ -76,8 +82,8 @@ func newFixture(t *testing.T, remove Remover) *fixture {
 		if err != nil {
 			return err
 		}
-		f.attempt = ready[0].ID
-		f.lease, err = tx.LeaseAttempt(f.attempt, binding, "standard")
+		f.attempt = string(ready[0].ID)
+		f.lease, err = tx.LeaseAttempt(assignment.AttemptID(f.attempt), binding, "standard")
 		return err
 	})
 	return f
@@ -143,7 +149,7 @@ func (f *fixture) attemptState() store.Attempt {
 	var a store.Attempt
 	f.tx(func(tx *store.Tx) error {
 		var err error
-		a, err = tx.Get(f.attempt)
+		a, err = tx.Get(assignment.AttemptID(f.attempt))
 		return err
 	})
 	return a
@@ -157,7 +163,7 @@ func (f *fixture) advanceAttemptTo(target string) {
 	ladder := []string{"leased", "preparing", "prepared", "starting", "running"}
 	f.tx(func(tx *store.Tx) error {
 		for i := 1; i < len(ladder); i++ {
-			if err := tx.Advance(f.attempt, ladder[i-1], ladder[i]); err != nil {
+			if err := tx.Advance(assignment.AttemptID(f.attempt), ladder[i-1], ladder[i]); err != nil {
 				return err
 			}
 			if ladder[i] == target {
@@ -244,7 +250,7 @@ func TestFinalizeIsAtomic(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.MarkResourcePresent(id, "leftover")
+		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "leftover")
 	})
 
 	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err == nil {
@@ -269,7 +275,7 @@ func TestReleaseRemovesEverythingAndDisposes(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.MarkResourcePresent(id, "runner-1")
+		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "runner-1")
 	})
 
 	if err := f.m.Release(t.Context(), f.lease.ID, store.LeaseWorkloadRunning); err != nil {
@@ -306,7 +312,7 @@ func TestReleaseQuarantinesOnAWedgedDaemon(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return tx.MarkResourcePresent(id, "wedge-1")
+		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "wedge-1")
 	})
 
 	if err := f.m.Release(t.Context(), f.lease.ID, store.LeaseWorkloadRunning); err == nil {
@@ -413,7 +419,7 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 		var attempt store.Attempt
 		f.tx(func(tx *store.Tx) error {
 			var err error
-			attempt, err = tx.Get(f.attempt)
+			attempt, err = tx.Get(assignment.AttemptID(f.attempt))
 			return err
 		})
 		if attempt.State == "manual_review" {
@@ -433,7 +439,7 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 		// The next serving.
 		f.tx(func(tx *store.Tx) error {
 			var err error
-			f.lease, err = tx.LeaseAttempt(f.attempt, attempt.BindingID, "standard")
+			f.lease, err = tx.LeaseAttempt(assignment.AttemptID(f.attempt), attempt.BindingID, "standard")
 			return err
 		})
 	}

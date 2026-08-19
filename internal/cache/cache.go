@@ -17,6 +17,8 @@ import (
 
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // Volume labels a cache lane carries, alongside the instance ownership
@@ -51,20 +53,21 @@ type LaneMount struct {
 // measure what this instance's volumes weigh, for the GC planner.
 type laneVolumes interface {
 	EnsureOwnedVolume(ctx context.Context, name string, labels map[string]string) error
-	OwnedIDByName(ctx context.Context, kind, name, instanceID, leaseID string) (string, error)
+	OwnedIDByName(ctx context.Context, kind, name string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
 	RemoveVolume(ctx context.Context, name string) error
-	OwnedVolumeUsage(ctx context.Context, instanceID string) ([]docker.VolumeUsage, error)
+	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]docker.VolumeUsage, error)
 }
 
 type LaneManager struct {
 	store      *store.Store
 	volumes    laneVolumes
-	instanceID string
+	instanceID assignment.InstanceID
 }
 
 // New returns a cache manager. It touches no filesystem: lanes are
 // daemon-side volumes, and the store carries their exclusivity.
-func New(st *store.Store, volumes laneVolumes, instanceID string) *LaneManager {
+func New(st *store.Store, volumes laneVolumes, instanceID assignment.InstanceID) *LaneManager {
 	return &LaneManager{store: st, volumes: volumes, instanceID: instanceID}
 }
 
@@ -75,7 +78,8 @@ func VolumeName(laneID string) string { return volumePrefix + laneID }
 // volume exists. It returns ok=false with no error when the pool is
 // momentarily exhausted; the job then runs without a cache rather than
 // corrupting a shared one.
-func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation, leaseID string, maxLanes int) (LaneMount, bool, error) {
+func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation string,
+	leaseID assignment.LeaseID, maxLanes int) (LaneMount, bool, error) {
 	var lane store.CacheLane
 	err := m.store.Tx(ctx, func(tx *store.Tx) error {
 		projectID, err := tx.EnsureCacheProject(sourceProjectKey)
@@ -95,7 +99,7 @@ func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation,
 	name := VolumeName(lane.ID)
 	labels := map[string]string{
 		docker.LabelManaged:  "true",
-		docker.LabelInstance: m.instanceID,
+		docker.LabelInstance: string(m.instanceID),
 		docker.LabelRole:     labelRoleValue,
 		LabelProject:         lane.ProjectID,
 		LabelGen:             lane.Generation,

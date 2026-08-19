@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // seedLease is the common starting point for the runtime-lifecycle
@@ -14,11 +16,11 @@ import (
 func seedLease(t *testing.T, s *Store, key string) Lease {
 	t.Helper()
 	binding := seedBinding(t, s)
-	attempt := seedAttempt(t, s, binding, "msg-"+key, "job-"+key)
+	attempt := seedAttempt(t, s, binding, "msg-"+key, assignment.SourceWorkloadKey("job-"+key))
 	var lease Lease
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		lease, err = tx.LeaseAttempt(attempt, binding, "standard")
+		lease, err = tx.LeaseAttempt(assignment.AttemptID(attempt), assignment.BindingID(binding), "standard")
 		return err
 	})
 	return lease
@@ -222,7 +224,7 @@ func TestAttemptOfRuntimeNameSurvivesTheLeaseEnding(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if got != lease.AttemptID {
+		if assignment.AttemptID(got) != lease.AttemptID {
 			t.Errorf("runtime name resolved to attempt %q; want %q", got, lease.AttemptID)
 		}
 		return nil
@@ -243,7 +245,7 @@ func TestAttemptOfRuntimeNameSurvivesTheLeaseEnding(t *testing.T) {
 			t.Errorf("a released lease stopped answering to its runtime name: %v", err)
 			return nil
 		}
-		if got != lease.AttemptID {
+		if assignment.AttemptID(got) != lease.AttemptID {
 			t.Errorf("after release the name resolved to attempt %q; want %q", got, lease.AttemptID)
 		}
 		return nil
@@ -269,7 +271,7 @@ func TestTxRollsBackOnError(t *testing.T) {
 
 	boom := errors.New("boom")
 	err := s.Tx(t.Context(), func(tx *Tx) error {
-		if _, err := tx.LeaseAttempt(attempt, binding, "standard"); err != nil {
+		if _, err := tx.LeaseAttempt(assignment.AttemptID(attempt), assignment.BindingID(binding), "standard"); err != nil {
 			return err
 		}
 		return boom
@@ -286,7 +288,7 @@ func TestTxRollsBackOnError(t *testing.T) {
 			t.Errorf("rolled-back lease persisted: %+v", leases)
 		}
 		// The claim rolled back with it, so the work is servable again.
-		ready, err := tx.ReadyAttempts(binding)
+		ready, err := tx.ReadyAttempts(assignment.BindingID(binding))
 		if err != nil {
 			return err
 		}
@@ -307,7 +309,7 @@ func TestResourceIntentLifecycleAndReleaseRule(t *testing.T) {
 	s := newStore(t)
 	lease := seedLease(t, s, "intents")
 
-	var netIntent, dindIntent int64
+	var netIntent, dindIntent assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		if netIntent, err = tx.PlanResource(lease.ID, ResourceNetwork, "capsule-net", "runpool-net-x"); err != nil {
@@ -409,7 +411,7 @@ func TestPendingRemovalsHonourBackoff(t *testing.T) {
 	s := newStore(t)
 	lease := seedLease(t, s, "backoff")
 
-	var wedged, healthy int64
+	var wedged, healthy assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		if wedged, err = tx.PlanResource(lease.ID, ResourceVolume, "work", "runpool-work-x"); err != nil {

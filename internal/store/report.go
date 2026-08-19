@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // Snapshot is everything an operator needs to answer "what does this
@@ -43,10 +45,10 @@ type Snapshot struct {
 // group and scale set name, which is enough for an operator to tell two
 // bindings apart without the adapter's table being consulted.
 type BindingInfo struct {
-	ID               int64
-	TargetID         string
+	ID               assignment.BindingID
+	TargetID         assignment.TargetID
 	ProviderKind     string
-	SourceBindingKey string
+	SourceBindingKey assignment.SourceBindingKey
 	// Contact is what this binding's loop last managed with its provider.
 	// A binding that has never run carries the zero value, which is not
 	// the same as one that is failing: the first has nothing to report,
@@ -65,8 +67,8 @@ func (t *Tx) Bindings() ([]BindingInfo, error) {
 	out := make([]BindingInfo, len(rows))
 	for i, r := range rows {
 		out[i] = BindingInfo{
-			ID: r.ID, TargetID: r.TargetID, ProviderKind: r.ProviderKind,
-			SourceBindingKey: r.SourceBindingKey,
+			ID: assignment.BindingID(r.ID), TargetID: assignment.TargetID(r.TargetID), ProviderKind: r.ProviderKind,
+			SourceBindingKey: assignment.SourceBindingKey(r.SourceBindingKey),
 			Contact:          providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
 		}
 	}
@@ -132,7 +134,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 				return err
 			}
 			if queued > 0 {
-				snap.Queued[b.ID] = int(queued)
+				snap.Queued[int64(b.ID)] = int(queued)
 			}
 		}
 		if snap.CacheLanes, err = tx.CacheLanes(); err != nil {
@@ -186,7 +188,7 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 	byAttempt := make(map[string]string, len(leases)) // attempt id -> lease id
 	args := make([]any, 0, len(leases))
 	for _, l := range leases {
-		byAttempt[l.AttemptID] = l.ID
+		byAttempt[string(l.AttemptID)] = string(l.ID)
 		args = append(args, l.AttemptID)
 	}
 	rows, err := t.tx.Query(selectAttempt+
@@ -229,7 +231,7 @@ func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, err
 		if err != nil {
 			return nil, err
 		}
-		out[in.LeaseID] = append(out[in.LeaseID], in)
+		out[string(in.LeaseID)] = append(out[string(in.LeaseID)], in)
 	}
 	return out, rows.Err()
 }

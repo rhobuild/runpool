@@ -14,7 +14,7 @@ import (
 // unknown. The result comes from the daemon and supervisor, never from the
 // controller's intended transition.
 func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntime) (assignment.ExecutionObservation, error) {
-	state, err := m.dock.ContainerStatus(ctx, prepared.RuntimeID)
+	state, err := m.dock.ContainerStatus(ctx, string(prepared.RuntimeID))
 	switch {
 	case err == nil:
 	case docker.IsNotFound(err):
@@ -22,12 +22,12 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	default:
 		return assignment.ObservedUnavailable, err
 	}
-	obs, askSupervisor, err := classifyContainerState(prepared.RuntimeID, state)
+	obs, askSupervisor, err := classifyContainerState(string(prepared.RuntimeID), state)
 	if !askSupervisor {
 		return obs, err
 	}
 
-	code, out, err := m.dock.Exec(ctx, prepared.RuntimeID, []string{supervisorPath, "state"})
+	code, out, err := m.dock.Exec(ctx, string(prepared.RuntimeID), []string{supervisorPath, "state"})
 	if err != nil || code != 0 {
 		return assignment.ObservedUnavailable, fmt.Errorf("capsule state unreadable (exit %d): %s", code, out)
 	}

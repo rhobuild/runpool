@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/moby/moby/client"
+
+	"github.com/rhobuild/runpool/internal/assignment"
 )
 
 // VolumeUsage is one owned volume's measured size, as the daemon
@@ -24,14 +26,14 @@ type VolumeUsage struct {
 // disk-usage endpoint has no label filter, so the daemon's full answer
 // is filtered here; sizes come from the daemon's own accounting, which
 // is the only view that is correct wherever the controller runs.
-func (c *Client) OwnedVolumeUsage(ctx context.Context, instanceID string) ([]VolumeUsage, error) {
+func (c *Client) OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]VolumeUsage, error) {
 	du, err := c.cli.DiskUsage(ctx, client.DiskUsageOptions{Volumes: true, Verbose: true})
 	if err != nil {
 		return nil, err
 	}
 	var out []VolumeUsage
 	for _, v := range du.Volumes.Items {
-		if v.Labels[LabelManaged] != "true" || v.Labels[LabelInstance] != instanceID {
+		if v.Labels[LabelManaged] != "true" || v.Labels[LabelInstance] != string(instanceID) {
 			continue
 		}
 		size := int64(-1)
@@ -59,13 +61,13 @@ type FilesystemFree struct {
 // like every image the product runs; the probe container is labeled,
 // removed on exit, and mounts nothing. The name carries a nonce so a
 // monitor pass and a doctor run never collide on the daemon.
-func (c *Client) ProbeFilesystemFree(ctx context.Context, image, instanceID string) (FilesystemFree, error) {
+func (c *Client) ProbeFilesystemFree(ctx context.Context, image string, instanceID assignment.InstanceID) (FilesystemFree, error) {
 	nonce := make([]byte, 4)
 	if _, err := rand.Read(nonce); err != nil {
 		return FilesystemFree{}, err
 	}
 	code, out, err := c.RunTask(ctx, ContainerSpec{
-		Name:  "runpool-" + instanceID + "-df-probe-" + hex.EncodeToString(nonce),
+		Name:  "runpool-" + string(instanceID) + "-df-probe-" + hex.EncodeToString(nonce),
 		Image: image,
 		// The entrypoint is overridden so any pinned image works as the
 		// probe — production reuses the capsule image, whose entrypoint
@@ -74,7 +76,7 @@ func (c *Client) ProbeFilesystemFree(ctx context.Context, image, instanceID stri
 		Cmd:        []string{"df -Pk / && df -Pi /"},
 		Labels: map[string]string{
 			LabelManaged:  "true",
-			LabelInstance: instanceID,
+			LabelInstance: string(instanceID),
 			LabelKind:     "container",
 			LabelRole:     "probe",
 		},
