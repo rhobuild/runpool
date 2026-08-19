@@ -406,3 +406,44 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 		t.Errorf("a non-hosted target must warn naming host and credential:\n%s", logged)
 	}
 }
+
+// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser: a binding's
+// durable identity is what an operator configured, not a parsed form of
+// the address they wrote.
+//
+// The key was built from the parsed scope and the canonical URL, so a
+// change to how a URL is read moves the key of a deployment that changed
+// nothing: the next start inserts a second binding beside the first, and
+// the original is left in `status` for good with no command that removes
+// it. Every delivery, attempt and lease hangs off that row, so the
+// history goes with it.
+func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
+	base := config.Target{ID: "app", RunnerGroup: "default"}
+	want := sourceBindingKey(base, "runpool-standard")
+
+	for name, url := range map[string]string{
+		"a plain repository URL": "https://github.com/acme/app",
+		"the clone form":         "https://github.com/acme/app.git",
+		"a trailing slash":       "https://github.com/acme/app/",
+		"a different host":       "https://ghe.example.com/acme/app",
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := base
+			target.URL = url
+			if got := sourceBindingKey(target, "runpool-standard"); got != want {
+				t.Errorf("key = %q for %s; want %q — the identity moved with the address form",
+					got, url, want)
+			}
+		})
+	}
+
+	// And it still separates what genuinely differs.
+	other := base
+	other.RunnerGroup = "isolated"
+	if sourceBindingKey(other, "runpool-standard") == want {
+		t.Error("two runner groups share one binding key")
+	}
+	if sourceBindingKey(base, "runpool-large") == want {
+		t.Error("two scale sets share one binding key")
+	}
+}

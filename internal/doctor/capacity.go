@@ -67,7 +67,7 @@ func checkCapacity(cfg *config.Config) Result {
 
 // checkPhysicalCapacity fails before admission when the worst workload set
 // plus the configured host reserve cannot fit on the daemon host.
-func checkPhysicalCapacity(ctx context.Context, cfg *config.Config, d *docker.Client) Result {
+func checkPhysicalCapacity(ctx context.Context, cfg *config.Config, d daemonInfo) Result {
 	if d == nil {
 		return Result{"physical capacity", Fail, "daemon not connected", ""}
 	}

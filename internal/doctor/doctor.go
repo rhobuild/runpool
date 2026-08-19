@@ -117,15 +117,20 @@ func Run(ctx context.Context, opts Options) Report {
 	if opts.Config != nil {
 		add(checkHostTopology(opts.Config))
 	}
-	add(checkDaemon(ctx, opts.Docker))
-	add(checkIsolatedBridge(ctx, opts.Docker))
-	// A nil client must stay a nil interface: wrapped, it would be a
-	// non-nil daemonInfo holding nothing, and the guard inside would
-	// pass it to a method call.
-	var di daemonInfo
+	// A nil client must stay a nil interface. Wrapped, it is a non-nil
+	// value holding nothing, so every `d == nil` guard below it passes
+	// and the next line calls a method on nothing. The conversion is the
+	// trap, not the guard, so it is made once here rather than checked
+	// again at each seam.
+	var (
+		di daemonInfo
+		np networkProbeClient
+	)
 	if opts.Docker != nil {
-		di = opts.Docker
+		di, np = opts.Docker, opts.Docker
 	}
+	add(checkDaemon(ctx, di))
+	add(checkIsolatedBridge(ctx, np))
 	for _, res := range checkCgroups(ctx, di, opts.Config) {
 		add(res)
 	}
@@ -135,7 +140,7 @@ func Run(ctx context.Context, opts Options) Report {
 	add(checkStorage("state directory", opts.StateDir))
 	if opts.Config != nil {
 		add(checkCapacity(opts.Config))
-		add(checkPhysicalCapacity(ctx, opts.Config, opts.Docker))
+		add(checkPhysicalCapacity(ctx, opts.Config, di))
 		if opts.NewCredentialProbe != nil {
 			for _, res := range checkCredentials(ctx, opts) {
 				add(res)
@@ -169,7 +174,12 @@ func checkPlatform() Result {
 	return Result{"platform", Pass, runtime.GOOS + "/" + runtime.GOARCH, ""}
 }
 
-func checkDaemon(ctx context.Context, d *docker.Client) Result {
+// checkDaemon reads the one method it needs through the same seam
+// checkCgroups uses. Taking the concrete client instead left its three
+// refusals unreachable from any test: no live daemon can be asked to be
+// absent, rootless, or older than the floor on demand — and those are
+// precisely the verdicts that stop a host from serving.
+func checkDaemon(ctx context.Context, d daemonInfo) Result {
 	if d == nil {
 		return Result{"docker daemon", Fail, "not connected",
 			"mount the daemon socket at /var/run/docker.sock"}

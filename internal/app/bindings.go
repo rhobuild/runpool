@@ -22,6 +22,7 @@ import (
 // result. Creating-or-adopting the scale set is the binding's own loop's
 // first act, where a failure is retried instead of ending the process.
 func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, environ func(string) string) error {
+	var claimed []int64
 	tiers := make(map[string]config.Tier, len(cfg.Tiers))
 	for _, t := range cfg.Tiers {
 		tiers[t.ID] = t
@@ -67,11 +68,8 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 			tier := tiers[tb.TierID]
 
 			// The neutral binding row comes first: it keys the delivery,
-			// attempt and lease machinery. Its source key is a versioned
-			// encoding of the provider identity, never an ambiguous
-			// concatenation.
-			sourceBindingKey := fmt.Sprintf("v1|%s|%s|%s|%s",
-				ref.Scope, ref.CanonicalURL, target.RunnerGroup, tb.ScaleSetName)
+			// attempt and lease machinery.
+			sourceBindingKey := sourceBindingKey(target, tb.ScaleSetName)
 			var bindingID, knownSetID int64
 			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 				var err error
@@ -114,12 +112,42 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 			}
 			s.bindings = append(s.bindings, b)
 			s.byBinding[bindingID] = b
+			claimed = append(claimed, bindingID)
 		}
 	}
 	if len(s.bindings) == 0 {
 		return errors.New("no bindings configured")
 	}
+	// What configuration no longer claims is forgotten. A renamed scale
+	// set or a removed tier leaves a row nothing serves, and the report
+	// carries it forever with no command that removes it.
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		forgotten, err := tx.ForgetUnclaimedBindings(claimed)
+		if err != nil {
+			return err
+		}
+		if forgotten > 0 {
+			s.log.Info("forgot bindings configuration no longer claims", "count", forgotten)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	return nil
+}
+
+// sourceBindingKey is a binding's durable identity: the row every
+// delivery, attempt and lease hangs off.
+//
+// It is built from what an operator configured and never from a parsed
+// form of the target's URL. A key carrying the parsed scope and the
+// canonical URL moves whenever the parser changes how it reads an
+// address a deployment did not touch — and a moved key is a second row
+// beside the first, with the original left in `status` for good and
+// nothing that removes it. Scope and canonical URL still travel, in the
+// adapter's own metadata, which is where provider identity belongs.
+func sourceBindingKey(target config.Target, scaleSetName string) string {
+	return fmt.Sprintf("v2|%s|%s|%s", target.ID, target.RunnerGroup, scaleSetName)
 }
 
 // ensureScaleSet creates or adopts this binding's scale set and records
