@@ -249,13 +249,31 @@ const (
 	dispositionReview
 )
 
-// attemptIsOpen reports whether an attempt is still this lease's to
-// resolve. Anything else — superseded by a redelivery, settled, canceled
-// by the provider, or held for a person — belongs to whoever put it
-// there, and a serving that ends afterwards leaves it alone.
-func attemptIsOpen(state string) bool {
+// servedByThisLease reports whether an attempt is still this lease's to
+// resolve: the five states one serving passes through, from the claim
+// that created the lease to the runner owning the job.
+//
+// Every other state belongs to whoever put the attempt there — a
+// redelivery that superseded it, a provider that canceled it, a person
+// holding it for review, or an operator who resolved one back to
+// `ready` — and a serving that ends afterwards leaves it alone.
+//
+// `ready` is deliberately absent, and its absence is what makes the
+// requeue total: `leased`, `preparing` and `prepared` are exactly what
+// RequeueAttempt accepts, and `starting` and `running` are exactly what
+// RequeueProvenInertAttempt accepts, so every disposition this set
+// admits matches a row. An attempt found in `ready` was put there by
+// something else, and requeueing it again matches nothing — which fails
+// the finalizing transaction and pins the lease in cleaning with its
+// admission credit, for a workload that is already servable.
+//
+// It is not called "open": GetOpenAttemptByWorkload means a different,
+// wider set — the seven states that block a redelivery, `manual_review`
+// among them — and one word for two sets one grep apart is how the
+// wrong one gets copied.
+func servedByThisLease(state string) bool {
 	switch state {
-	case "ready", "leased", "preparing", "prepared", "starting", "running":
+	case "leased", "preparing", "prepared", "starting", "running":
 		return true
 	}
 	return false
@@ -275,7 +293,7 @@ func attemptIsOpen(state string) bool {
 // code the capsule reserves for exactly that.
 func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
 	switch {
-	case !attemptIsOpen(attempt.State):
+	case !servedByThisLease(attempt.State):
 		return dispositionNone
 	case obs == assignment.ObservedCreated:
 		return dispositionRequeue
