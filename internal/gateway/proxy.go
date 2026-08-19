@@ -91,7 +91,7 @@ type Relay struct {
 	Log    *slog.Logger
 
 	once      sync.Once
-	transport *http.Transport
+	transport atomic.Pointer[http.Transport]
 	// policyGen is the policy generation the pooled connections were
 	// authorised under.
 	policyGen atomic.Uint64
@@ -251,9 +251,11 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 	outbound.RequestURI = ""
 	stripHopByHop(outbound.Header)
 
-	rt := r.roundTripper()
+	// The check runs first and the transport is read after it: the check
+	// can replace the transport, and reading it beforehand sends this
+	// request through the pool that was just retired.
 	r.expireStaleConnections()
-	resp, err := rt.RoundTrip(outbound)
+	resp, err := r.roundTripper().RoundTrip(outbound)
 	if err != nil {
 		r.refuse(w, err)
 		return
@@ -269,14 +271,22 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// expireStaleConnections drops pooled connections once the policy moves.
+// expireStaleConnections retires the pool once the policy moves.
+//
 // The address check lives in the transport's dialer, and http.Transport
-// only dials when no idle connection exists for the destination — so a
-// restriction installed while a job kept a connection warm would not bind
-// to its next request until IdleConnTimeout expired. Closing idle
-// connections forces the next request back through the dialer, where the
-// check is. Connections mid-request are left alone, which is the
-// documented "established ones are unaffected".
+// only dials when it has no connection for the destination — so a
+// restriction installed while a job kept a connection warm would not
+// bind to its next request. Closing the idle connections is not enough
+// to fix that: by contract it leaves a connection carrying a request
+// alone, and that connection returns to the pool afterwards, where the
+// next request reuses it without ever reaching the dialer. The kernel
+// does not catch it either, because the ruleset accepts established
+// traffic ahead of every reject. A revoked address therefore stayed
+// reachable for as long as a job kept using it.
+//
+// Replacing the transport is what makes the old pool unreachable:
+// nothing routes through it again, whatever state its connections were
+// in. The ones already carrying a request finish it and go with it.
 func (r *Relay) expireStaleConnections() {
 	if r.Policy == nil {
 		return
@@ -286,42 +296,58 @@ func (r *Relay) expireStaleConnections() {
 	// here is the whole point: without it the generation could not move in
 	// exactly the case this function exists for. A cached hit is one stat.
 	if _, err := r.Policy.Current(); err != nil {
-		// An unreadable policy is not in force. Drop the pool so the next
-		// request must dial, where that error refuses the connection.
-		r.transport.CloseIdleConnections()
+		// An unreadable policy is not in force. Retire the pool so the
+		// next request must dial, where that error refuses it.
+		r.retireTransport()
 		return
 	}
 	gen := r.Policy.Generation()
 	// The first observation only records where the policy started; there is
 	// nothing pooled under an older one yet.
 	if prev := r.policyGen.Swap(gen); prev != 0 && prev != gen {
-		r.transport.CloseIdleConnections()
+		r.retireTransport()
 	}
 }
 
-// roundTripper is built once. A transport per request — the shape this
-// replaces — leaks a connection pool and its idle goroutines on every
-// call, which is unbounded growth driven by the workload.
+// retireTransport puts a fresh pool in place and releases what the old
+// one still holds idle.
+func (r *Relay) retireTransport() {
+	if old := r.transport.Swap(r.newTransport()); old != nil {
+		old.CloseIdleConnections()
+	}
+}
+
+// roundTripper returns the transport in force, building the first one on
+// demand. A transport per request — the shape this replaces — leaks a
+// connection pool and its idle goroutines on every call, which is
+// unbounded growth driven by the workload.
 func (r *Relay) roundTripper() http.RoundTripper {
+	// CompareAndSwap rather than Store: a policy that moved before the
+	// first request has already installed one through retireTransport,
+	// and storing over it would discard the pool in force.
 	r.once.Do(func() {
-		r.transport = &http.Transport{
-			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-				host, port, err := parseAuthority(addr)
-				if err != nil {
-					return nil, err
-				}
-				return r.dial(ctx, host, port)
-			},
-			MaxConnsPerHost:        MaxUpstreamConns,
-			MaxIdleConns:           MaxUpstreamConns,
-			IdleConnTimeout:        90 * time.Second,
-			TLSHandshakeTimeout:    15 * time.Second,
-			ExpectContinueTimeout:  5 * time.Second,
-			ResponseHeaderTimeout:  60 * time.Second,
-			MaxResponseHeaderBytes: MaxHeaderBytes,
-		}
+		r.transport.CompareAndSwap(nil, r.newTransport())
 	})
-	return r.transport
+	return r.transport.Load()
+}
+
+func (r *Relay) newTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, port, err := parseAuthority(addr)
+			if err != nil {
+				return nil, err
+			}
+			return r.dial(ctx, host, port)
+		},
+		MaxConnsPerHost:        MaxUpstreamConns,
+		MaxIdleConns:           MaxUpstreamConns,
+		IdleConnTimeout:        90 * time.Second,
+		TLSHandshakeTimeout:    15 * time.Second,
+		ExpectContinueTimeout:  5 * time.Second,
+		ResponseHeaderTimeout:  60 * time.Second,
+		MaxResponseHeaderBytes: MaxHeaderBytes,
+	}
 }
 
 func stripHopByHop(h http.Header) {

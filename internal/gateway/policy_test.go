@@ -3,7 +3,11 @@ package gateway
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+
+	"github.com/rhobuild/runpool/internal/egress"
 	"time"
 )
 
@@ -94,5 +98,177 @@ func TestRelayNoticesAPolicyChangeWithoutDialing(t *testing.T) {
 	r.expireStaleConnections()
 	if got := r.policyGen.Load(); got == baseline {
 		t.Error("the relay did not notice a new policy without dialing; pooled connections would keep the old one")
+	}
+}
+
+// TestAWideningAllowIsRefusedOnTheReloadChannel: the rule that an allow
+// may not be broader than a range the baseline withholds is a property
+// of the policy, not of the configuration file.
+//
+// Allow is consulted before deny, so such an entry reopens the whole
+// withheld range. A gateway takes a policy from this channel as well as
+// from configuration, and a check that lived only at the configuration
+// entry point left this one open.
+func TestAWideningAllowIsRefusedOnTheReloadChannel(t *testing.T) {
+	dir := t.TempDir()
+	path := PolicyPath(dir)
+	inForce := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+		`"allow":[],"deny":["10.0.0.0/8"]}`
+	if err := os.WriteFile(path, []byte(inForce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	incoming := `{"allow":["0.0.0.0/0"],"deny":["10.0.0.0/8"]}`
+	err := Reload(dir, strings.NewReader(incoming))
+	if err == nil {
+		t.Fatal("the reload channel accepted an allow that reopens the whole space")
+	}
+	// The reason matters, not just the refusal: this host has no legs
+	// and no NET_ADMIN, so the kernel step refuses everything that
+	// reaches it. A test satisfied by any error would pass with the rule
+	// removed.
+	if !strings.Contains(err.Error(), "broader than a range") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != inForce {
+		t.Errorf("the refused policy was written anyway:\n%s", got)
+	}
+}
+
+// TestConcurrentInstallsDoNotLoseTheStricterPolicy: the two installers
+// are separate exec processes into the same container, so what
+// serializes them has to be a lock the kernel holds.
+//
+// Without one they read the same policy in force, build two successors
+// and race the write: an emergency close is overwritten by a reload that
+// was already in flight, or the file is two documents spliced together —
+// which the reader refuses, after which every dial fails.
+func TestConcurrentInstallsDoNotLoseTheStricterPolicy(t *testing.T) {
+	dir := t.TempDir()
+	path := PolicyPath(dir)
+	inForce := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+		`"allow":[],"deny":["10.0.0.0/8"]}`
+	if err := os.WriteFile(path, []byte(inForce), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A reader racing the writers: every intermediate state it observes
+	// must be a policy, never a splice.
+	stop := make(chan struct{})
+	bad := make(chan string, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				continue // the rename is atomic; a missing file is not
+			}
+			if _, err := ParsePolicy(string(raw)); err != nil {
+				select {
+				case bad <- string(raw):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	// The kernel step is stubbed: this host has neither leg nor
+	// NET_ADMIN, and with the real one every install would refuse before
+	// writing anything — leaving the test passing over a file nobody
+	// ever touched.
+	noKernel := func(egress.Policy) error { return nil }
+	reload := func() error {
+		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+			next := current
+			next.Deny = []string{"10.0.0.0/8", "192.168.0.0/16"}
+			return next, next.Validate()
+		}, noKernel)
+	}
+	denyAll := func() error {
+		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+			next := current
+			next.Allow, next.Deny = nil, []string{"0.0.0.0/0"}
+			return next, nil
+		}, noKernel)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				_ = reload()
+				return
+			}
+			_ = denyAll()
+		}()
+	}
+	wg.Wait()
+	close(stop)
+
+	select {
+	case raw := <-bad:
+		t.Fatalf("a reader observed a policy it could not parse:\n%s", raw)
+	default:
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParsePolicy(string(raw)); err != nil {
+		t.Fatalf("the policy left in force does not parse: %v\n%s", err, raw)
+	}
+}
+
+// TestAPolicyMoveRetiresTheTransport: when the policy moves, the pool
+// that was authorised under the old one must stop being reachable.
+//
+// Closing the idle connections is not that. By contract it leaves a
+// connection carrying a request alone, and that connection goes back
+// into the pool afterwards, where the next request reuses it without
+// reaching the dialer — which is where the address is checked. The
+// kernel does not catch it either: the ruleset accepts established
+// traffic ahead of every reject. Replacing the transport is what makes
+// the old pool unreachable whatever state its connections are in.
+func TestAPolicyMoveRetiresTheTransport(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.json")
+	write := func(deny string) {
+		body := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+			`"allow":[],"deny":["` + deny + `"]}`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("10.0.0.0/8")
+
+	r := &Relay{Policy: &PolicyStore{Path: path}, Log: discardLogger()}
+	first := r.roundTripper()
+
+	// Two observations settle the baseline; neither is a policy move.
+	r.expireStaleConnections()
+	r.expireStaleConnections()
+	if got := r.roundTripper(); got != first {
+		t.Fatal("the transport was replaced without the policy moving; every request would start a new pool")
+	}
+
+	time.Sleep(10 * time.Millisecond) // distinct mtime
+	write("192.168.0.0/16")
+	r.expireStaleConnections()
+	if got := r.roundTripper(); got == first {
+		t.Error("the transport survived a policy move; a connection pooled under the old one " +
+			"still carries the next request past the dialer, where the address is checked")
 	}
 }

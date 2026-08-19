@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/rhobuild/runpool/internal/egress"
 )
@@ -14,6 +16,11 @@ import (
 // MaxPolicyBytes bounds a policy document. The real one is a few
 // kilobytes of CIDRs; anything larger is a mistake or an attempt.
 const MaxPolicyBytes = 1 << 20
+
+// policyLockFile serializes the installers against each other. It lives
+// beside the policy on the same tmpfs, so it is created with the control
+// surface and dies with the container.
+const policyLockFile = "policy.lock"
 
 // ParsePolicy decodes and validates a policy document.
 func ParsePolicy(raw string) (egress.Policy, error) {
@@ -123,10 +130,11 @@ func Reload(controlDir string, r io.Reader) error {
 			Allow:          incoming.Allow,
 			Deny:           incoming.Deny,
 		}
-		// Validated here, not in installPolicy: these prefixes arrived
-		// from outside this process, and this is the trust boundary they
-		// cross. DenyAll's do not, so hoisting the check into the shared
-		// path would misread why it is here.
+		// Validated here because these prefixes arrived from outside
+		// this process, and this is the boundary they cross. What
+		// counts as valid — including that no allow may be broader than
+		// a range the baseline withholds — belongs to the policy, so
+		// this channel and the configuration file are held to one rule.
 		return next, next.Validate()
 	})
 }
@@ -161,6 +169,50 @@ func DenyAll(controlDir string) error {
 // gateway bridges is a fact of its own creation, not something a later
 // discovery pass may redefine.
 func installPolicy(controlDir string, build func(current egress.Policy) (egress.Policy, error)) error {
+	return installPolicyWith(controlDir, build, applyToKernel)
+}
+
+// applyToKernel identifies this container's two legs and installs the
+// ruleset for the policy about to take effect.
+//
+// It is a parameter of the install rather than a step inside it because
+// what the install owns — the lock, the read-modify-write, the order of
+// kernel before file — is only observable on a host that has both legs
+// and NET_ADMIN. Named here, those properties can be exercised
+// anywhere, and the step that genuinely needs a gateway container is
+// the one the live contract covers.
+func applyToKernel(next egress.Policy) error {
+	legs, err := ClassifyLegs(next)
+	if err != nil {
+		return err
+	}
+	return ApplyFirewall(next, legs)
+}
+
+func installPolicyWith(controlDir string,
+	build func(current egress.Policy) (egress.Policy, error),
+	apply func(next egress.Policy) error) error {
+
+	// The two callers reach this from separate `docker exec` processes
+	// into the same container, so the lock has to be one the kernel
+	// holds. Without it both read the same policy in force, build two
+	// successors from it and race the write: the stricter one is lost —
+	// a deny-all overwritten by a reload that was already in flight —
+	// or the file the relay reads is two documents spliced together,
+	// which ParsePolicy refuses and which then fails every dial.
+	//
+	// It blocks rather than trying: an emergency close must wait its
+	// turn and then win, not give up because a reload held the lock.
+	lock, err := os.OpenFile(filepath.Join(controlDir, policyLockFile), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("policy lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("policy lock: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
 	path := PolicyPath(controlDir)
 	inForce, err := os.ReadFile(path)
 	if err != nil {
@@ -174,11 +226,7 @@ func installPolicy(controlDir string, build func(current egress.Policy) (egress.
 	if err != nil {
 		return err
 	}
-	legs, err := ClassifyLegs(next)
-	if err != nil {
-		return err
-	}
-	if err := ApplyFirewall(next, legs); err != nil {
+	if err := apply(next); err != nil {
 		return err
 	}
 	encoded, err := json.Marshal(next)

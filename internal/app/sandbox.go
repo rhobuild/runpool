@@ -297,8 +297,7 @@ func (n *networkSandbox) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	n.applyPolicy(ctx, next)
-	return nil
+	return n.applyPolicy(ctx, next)
 }
 
 // rediscover is one pass, separated so a test can drive it directly.
@@ -320,30 +319,44 @@ func (n *networkSandbox) rediscover(ctx context.Context) {
 
 // applyPolicy installs a rediscovered set, and decides what a failure
 // costs from what the change was.
-func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox) {
+//
+// It reports whether the install could be attempted at all, because the
+// caller's fail-closed paths turn on exactly that: a discovery pass that
+// cannot say what is installed anywhere closes every gateway, and a
+// launch under an unprovable policy is refused.
+func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox) error {
 	previous := n.state.snapshot()
 	change := ClassifyPolicy(previous.Deny, next.Deny)
 	uplinkChanged := previous.UplinkNetworkID != next.UplinkNetworkID
 	if change == PolicyUnchanged && !uplinkChanged {
-		return
+		return nil
 	}
 	n.log.Info("egress policy changed", "change", change.String(),
 		"was", len(previous.Deny), "now", len(next.Deny), "uplink_recreated", uplinkChanged)
-	n.state.replace(next)
 
 	failed, err := n.reloadGateways(ctx, next.Allow, next.Deny)
 	if err != nil {
-		n.log.Error("could not enumerate gateways to reload", "error", err)
+		// Nothing can be said about what is installed anywhere, so the
+		// snapshot stays where it was and the next pass sees this change
+		// again. Recorded first, that pass would compare the new set
+		// against itself, report it unchanged, and a restriction that
+		// landed nowhere would never be attempted again.
+		return fmt.Errorf("enumerate gateways: %w", err)
 	}
+	// Recorded only now: the set has reached every gateway that could be
+	// named, so this is what is in force rather than what was intended.
+	// The refresh lock is held across both, so no launch can observe the
+	// window between them.
+	n.state.replace(next)
 	if len(failed) == 0 {
-		return
+		return nil
 	}
 	if !change.restricts() {
 		// A relaxation that did not land leaves the capsule with the
 		// stricter policy it started under. Its work continues.
 		n.log.Warn("some gateways kept the previous, stricter policy",
 			"gateways", len(failed), "change", change.String())
-		return
+		return nil
 	}
 	// A restriction that did not land leaves a capsule able to reach
 	// something the policy now denies. Close those gateways.
@@ -355,6 +368,7 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 				"container", id, "error", err)
 		}
 	}
+	return nil
 }
 
 // reloadGateways hands the new sets to every running gateway this

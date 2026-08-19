@@ -51,7 +51,21 @@ by its public and operational effects.
 - **Policy changes are classified.** A restriction that cannot be
   installed closes the affected gateway; discovery failing at all
   closes every gateway. The previous policy is never treated as a safe
-  fallback.
+  fallback. A policy counts as in force only once it has reached every
+  gateway that could be named, so a pass that could not name one leaves
+  the books where they were and the next pass installs the change
+  instead of comparing it against itself.
+- **A revoked address stops being reachable.** A destination the policy
+  no longer allows is checked when a connection is dialled, and the pool
+  a job keeps warm never dials again — the kernel does not intervene
+  either, since the ruleset accepts established traffic ahead of every
+  reject. A policy that moves therefore retires the pool it authorised
+  rather than closing the connections that happen to be idle in it.
+- **The two policy installers cannot overwrite each other.** A reload
+  and an emergency close arrive as separate processes into the same
+  container, so the install is serialized by a lock the kernel holds and
+  publishes through a private temporary file: neither a lost close nor a
+  spliced document the relay would refuse to read.
 - The relay's CONNECT port set, header handling, parser strictness and
   every concurrency and size bound are explicit, tested and fuzzed.
 - **Containers a job starts take the same relay.** A daemon does not pass
@@ -64,7 +78,9 @@ by its public and operational effects.
 - **An operator allowance is bounded by what it reopens.**
   `network.allowPrivateCIDRs` punches holes through the built-in deny
   set, so an entry *broader* than a withheld range would reopen that
-  whole range as a side effect; the validator refuses exactly those.
+  whole range as a side effect; a policy carrying one is refused. The
+  rule belongs to the policy rather than to the configuration file, so
+  the live reload channel is held to it too.
   Public prefixes are accepted because the profile already permits the
   public internet — which is how a capsule reaches a service on the
   host's own public address, an address the runtime deny set withholds
