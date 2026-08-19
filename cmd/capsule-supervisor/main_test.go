@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -233,5 +234,91 @@ func TestTheReadinessProbeIsBounded(t *testing.T) {
 	if elapsed > dockerdProbeTimeout+5*time.Second {
 		t.Errorf("one probe took %s against a %s bound; the readiness budget is spent inside a single call",
 			elapsed.Round(time.Second), dockerdProbeTimeout)
+	}
+}
+
+// TestAControlFileIsNeverReadHalfWritten: a reader racing a writer of the
+// control surface sees the previous contents or the next, never nothing.
+//
+// The launcher reads these files from outside the container while the
+// supervisor writes them from inside, with no lock and no handshake
+// between them — it `cat`s the protocol declaration during boot and
+// execs `supervisor state` on every poll of a running capsule. A write
+// that truncates first gives that reader an empty file that reads as a
+// successful answer, and an empty answer is not "not yet": an empty
+// protocol declaration is a version this controller does not speak, and
+// an empty state is a state nothing recognizes. Both park a healthy
+// capsule.
+//
+// It is fixed in the writer rather than by retrying in the reader. The
+// reader cannot tell a file caught mid-write from one with the wrong
+// contents, and a retry would leave the same window for every other
+// reader of the control surface.
+func TestAControlFileIsNeverReadHalfWritten(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "protocol")
+	// Two payloads of very different lengths: a torn read between two
+	// equal ones can look intact, and it is the tail of the longer that
+	// makes a partial write visible.
+	payloads := [][]byte{[]byte("2"), []byte(strings.Repeat("9", 4096))}
+	if err := writeControlFile(path, payloads[0], 0o644, -1, -1); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	bad := make(chan string, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				// A rename never leaves the target absent, so a missing
+				// file is a finding rather than something to poll past.
+				select {
+				case bad <- "unreadable: " + err.Error():
+				default:
+				}
+				return
+			}
+			whole := false
+			for _, want := range payloads {
+				if string(raw) == string(want) {
+					whole = true
+				}
+			}
+			if !whole {
+				select {
+				case bad <- fmt.Sprintf("%d bytes: %.32q", len(raw), raw):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 40 {
+				if err := writeControlFile(path, payloads[i%len(payloads)], 0o644, -1, -1); err != nil {
+					t.Errorf("write: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+
+	select {
+	case raw := <-bad:
+		t.Fatalf("a reader observed a control file that is neither payload — %s", raw)
+	default:
 	}
 }

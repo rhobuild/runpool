@@ -107,17 +107,13 @@ func runSubcommand(args []string) int {
 			fmt.Fprintln(os.Stderr, "deliver: no credential on stdin")
 			return 1
 		}
-		if err := os.WriteFile(jitFile, payload, 0o600); err != nil {
-			fmt.Fprintln(os.Stderr, "deliver:", err)
-			return 1
-		}
-		if err := os.Chown(jitFile, runnerUID, runnerGID); err != nil {
+		if err := writeControlFile(jitFile, payload, 0o600, runnerUID, runnerGID); err != nil {
 			fmt.Fprintln(os.Stderr, "deliver:", err)
 			return 1
 		}
 		return 0
 	case "start":
-		if err := os.WriteFile(startFile, []byte(protocolVersion), 0o600); err != nil {
+		if err := writeControlFile(startFile, []byte(protocolVersion), 0o600, -1, -1); err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)
 			return 1
 		}
@@ -196,7 +192,7 @@ func boot(log *slog.Logger) error {
 			return err
 		}
 	}
-	if err := os.WriteFile(protocolFile, []byte(protocolVersion), 0o644); err != nil {
+	if err := writeControlFile(protocolFile, []byte(protocolVersion), 0o644, -1, -1); err != nil {
 		return err
 	}
 	// Booting, not waiting: the control surface answers from here, but
@@ -597,8 +593,56 @@ func prepareRunnerConfig(encoded, runnerRoot, volatileRoot string, uid, gid int)
 	return cleanup, nil
 }
 
+// writeControlFile replaces one file of the control surface so that no
+// reader can observe it partly written.
+//
+// Every file here is read by a separate process on its own schedule,
+// with nothing between them: the launcher `cat`s the protocol
+// declaration while boot is writing it, and execs `supervisor state`
+// while the run loop is moving the state along. os.WriteFile creates and
+// truncates before it writes, so a read landing in that window succeeds
+// and returns nothing — and nothing is not "not yet", it is a different
+// answer. An empty protocol declaration reads as a version this
+// controller does not speak, which parks a healthy capsule for an
+// operator to look at; an empty state reads as a state nothing
+// recognizes, which makes a running capsule unobservable and sends its
+// attempt to review.
+//
+// A rename is atomic: a reader sees the file before or the file after,
+// never a file mid-write. The temporary name is unique because two
+// writers sharing one would put the same window back a level down.
+//
+// uid and gid are passed to Chown before the rename, so a file that
+// needs an owner never appears with the wrong one. -1 leaves it alone,
+// as os.Chown does.
+func writeControlFile(path string, data []byte, perm os.FileMode, uid, gid int) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if uid >= 0 || gid >= 0 {
+		if err := tmp.Chown(uid, gid); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func setState(s string) {
-	_ = os.WriteFile(stateFile, []byte(s), 0o644)
+	_ = writeControlFile(stateFile, []byte(s), 0o644, -1, -1)
 }
 
 // terminalFailure names a failure by whether the runner ever started, which
