@@ -175,6 +175,28 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	s.advanceAttempt(ctx, attemptID, "preparing", "prepared")
+	// This one edge is authoritative, unlike every other in the walk. It
+	// is the last point before an effect that can begin execution, and
+	// by here the attempt has been out of this goroutine's sight for the
+	// whole preparation: a redelivery of the same workload can have
+	// superseded it, and nothing between `prepared` and the start
+	// consults it again. A compare-and-swap that matches no row means
+	// something else resolved this attempt, and no start may be
+	// authorized against it.
+	//
+	// It runs before the authorization is recorded rather than after,
+	// which narrows the ambiguous window instead of widening it: a
+	// compare-and-swap is not an effect, and an authorization recorded
+	// for a start that will not be attempted is a claim that never
+	// became true.
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		return tx.Advance(attemptID, "prepared", "starting")
+	}); err != nil {
+		log.Warn("the attempt moved before the start was authorized; nothing is started",
+			"attempt", attemptID, "error", err)
+		s.recoverCapsuleFailure(b, lease.ID, assignment.ObservedCreated)
+		return
+	}
 	// The authorization is durable immediately before the one effect
 	// that can begin execution, so the ambiguous window is exactly one
 	// Docker request wide and a crash inside it is classified by
@@ -184,7 +206,6 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		s.recoverCapsuleFailure(b, lease.ID, startObs)
 		return
 	}
-	s.advanceAttempt(ctx, attemptID, "prepared", "starting")
 	if startErr := s.caps.Start(prepCtx, prepared); startErr != nil {
 		// A failed Start call does not prove no start: the request may
 		// have taken effect before the error. Classify from the daemon

@@ -29,10 +29,19 @@ type fakeCapsule struct {
 	// spec is what the controller asked for, which is the only place the
 	// image decisions are observable.
 	spec capsule.Spec
+	// onPrepare runs inside the preparation, which is the window a real
+	// redelivery lands in: preparing a capsule takes minutes and the
+	// attempt is out of the launching goroutine's sight for all of it.
+	onPrepare func()
+	// starts counts the one effect that can begin execution.
+	starts int
 }
 
 func (f *fakeCapsule) Prepare(_ context.Context, spec capsule.Spec, rec capsule.ResourceRecorder) (capsule.PreparedRuntime, error) {
 	f.spec = spec
+	if f.onPrepare != nil {
+		f.onPrepare()
+	}
 	if f.prepareErr != nil {
 		return capsule.PreparedRuntime{}, f.prepareErr
 	}
@@ -52,7 +61,10 @@ func (f *fakeCapsule) Prepare(_ context.Context, spec capsule.Spec, rec capsule.
 	return capsule.PreparedRuntime{RuntimeID: "fake-runner"}, nil
 }
 
-func (f *fakeCapsule) Start(context.Context, capsule.PreparedRuntime) error { return f.startErr }
+func (f *fakeCapsule) Start(context.Context, capsule.PreparedRuntime) error {
+	f.starts++
+	return f.startErr
+}
 
 func (f *fakeCapsule) InspectExecution(context.Context, capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
 	return f.obs, f.obsErr
@@ -558,4 +570,117 @@ func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
 func ptrDuration(d time.Duration) *config.Duration {
 	cd := config.Duration(d)
 	return &cd
+}
+
+// TestARedeliveryNeverSupersedesItsOwnAttempts: resolving an
+// open-attempt conflict must not close the attempts the same delivery
+// just inserted.
+//
+// RecordDelivery inserts the workloads it reaches before the conflicting
+// one, so a caller that sweeps every workload the delivery carries finds
+// those first. Superseding one and retrying leaves the retry reporting
+// it as already inserted — the row is there, superseded — and the
+// workload is never served, under a delivery that did land and a
+// message that is acknowledged.
+func TestARedeliveryNeverSupersedesItsOwnAttempts(t *testing.T) {
+	h := newHarness(t, 2)
+
+	// A predecessor for the second workload only. The order is the
+	// point: the new delivery inserts job-a, then conflicts on job-b,
+	// so by the time the conflict is resolved this delivery already owns
+	// an open attempt of its own for a workload the sweep will visit.
+	if err := h.deliver(demand("job-b", "app", 2)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.deliver(demand("job-a", "app", 3), demand("job-b", "app", 4)); err != nil {
+		t.Fatalf("the redelivery did not persist: %v", err)
+	}
+
+	ready := h.ready()
+	if len(ready) != 2 {
+		var got []string
+		for _, a := range ready {
+			got = append(got, a.SourceWorkloadKey)
+		}
+		t.Fatalf("servable workloads = %v; want both job-a and job-b under the new delivery", got)
+	}
+	seen := map[string]bool{}
+	for _, a := range ready {
+		seen[a.SourceWorkloadKey] = true
+	}
+	if !seen["job-a"] || !seen["job-b"] {
+		t.Errorf("servable workloads = %v; want both", seen)
+	}
+}
+
+// TestAFreshLeaseIsNotStranded closes the window the in-memory claim
+// cannot cover. The claim is taken just after the lease row commits, so
+// a pass landing in between finds the lease unclaimed — and tearing down
+// a capsule that is starting ends with both owners releasing the same
+// admission credit.
+func TestAFreshLeaseIsNotStranded(t *testing.T) {
+	h := newHarness(t, 1)
+	// The production grace, against a lease this test just created: the
+	// harness shortens it, and shortening it is what would make this
+	// assert nothing.
+	h.srv.strandedGrace = defaultStrandedGrace
+	if err := h.deliver(demand("job-fresh", "app", 90)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-fresh")
+	h.srv.alloc.Adopt(h.bind.key)
+
+	before := reloadLease(t, h, lease.ID).State
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID).State; got != before {
+		t.Errorf("a lease committed moments ago moved %s -> %s; its owner had not registered yet", before, got)
+	}
+	if h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the pass released the credit of a lease whose owner was still starting")
+	}
+}
+
+// TestASupersededAttemptIsNeverStarted: superseding an attempt that a
+// goroutine is already preparing must stop that goroutine before the
+// start, not after it.
+//
+// Preparing a capsule takes minutes, and the attempt is out of the
+// launching goroutine's sight for all of them: the walk logs a lost
+// transition and carries on. So the edge into `starting` is made
+// authoritative — a compare-and-swap that matches no row means something
+// else resolved this attempt, and the successor is already serving the
+// workload. Starting anyway runs it twice.
+func TestASupersededAttemptIsNeverStarted(t *testing.T) {
+	h := newHarness(t, 1)
+	caps := &fakeCapsule{}
+	h.srv.caps = caps
+	h.srv.wait = &fakeWaiter{}
+	h.bind.gh = &fakeRegistry{}
+	if err := h.deliver(demand("job-raced", "app", 42)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-raced")
+
+	// The redelivery lands while the capsule is being prepared.
+	caps.onPrepare = func() {
+		h.inStore(func(tx *store.Tx) error {
+			return tx.SupersedeOpenAttempt(h.bind.bindingID, "job-raced",
+				assignment.ResolutionSuperseded, 0)
+		})
+	}
+
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, lease)
+
+	if caps.starts != 0 {
+		t.Errorf("the capsule was started %d time(s) for an attempt its successor owns", caps.starts)
+	}
+	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReleased {
+		t.Errorf("lease = %s; want released — a superseded attempt must not pin the lease serving it", got)
+	}
+	if !h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the lease's admission credit was never returned")
+	}
 }

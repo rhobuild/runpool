@@ -493,6 +493,21 @@ type Controller struct {
 	// default. Held for the same reason as pollBackoff: a minute is not
 	// something a test waits.
 	drainWindow time.Duration
+
+	// strandedGrace overrides defaultStrandedGrace in tests; zero means
+	// the default. A test that fabricates a stranded lease writes it in
+	// the same instant it sweeps for one, and the production window is
+	// two minutes.
+	strandedGrace time.Duration
+}
+
+// strandedAfter is how long a live lease must have gone untouched
+// before the periodic pass may claim it as ownerless.
+func (s *Controller) strandedAfter() time.Duration {
+	if s.strandedGrace > 0 {
+		return s.strandedGrace
+	}
+	return defaultStrandedGrace
 }
 
 func (s *Controller) drain() error {

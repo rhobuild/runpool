@@ -148,10 +148,37 @@ SET state = 'settled', resolution = @resolution, settled_at = unixepoch()
 WHERE id = @attempt_id AND state = @current;
 
 -- name: SupersedeAttempt :execrows
+-- Every open state that provably consumed nothing, and no other.
+--
+-- `starting` and `running` are absent and must stay absent: a start was
+-- authorized there, and replacing such an attempt is how one workload
+-- comes to run twice. A redelivery that meets one leaves its message
+-- unacknowledged and waits for the predecessor's own lifecycle to end
+-- it, which is the correct stall.
+--
+-- `preparing` belongs here for the opposite reason - it precedes the
+-- authorization exactly as `leased` and `prepared` do - and leaving it
+-- out stalled a binding's whole ordered queue on an attempt that had
+-- consumed nothing.
+--
+-- `manual_review` belongs here too. It is an open state, so an attempt
+-- held in it blocks every redelivery of that workload, and the provider
+-- reassigning the work is precisely what makes a pending human decision
+-- moot. The superseded resolution keeps the trail.
+--
+-- But a review is reachable from `starting` and `running`, and
+-- `start_outcome_unknown` is exactly the review of an attempt whose
+-- start was authorized and whose outcome nobody could prove. Replacing
+-- that one is a second execution of work that may have run. So the
+-- evidence has to agree with the state: nothing beyond a prepared
+-- runtime was ever consumed. It also closes the same question for the
+-- pre-authorization states, none of which can be trusted to imply their
+-- own evidence forever.
 UPDATE assignment_attempts
 SET state = 'superseded', resolution = @resolution, settled_at = unixepoch()
 WHERE id = @attempt_id
-  AND state IN ('ready', 'leased', 'prepared');
+  AND state IN ('ready', 'leased', 'preparing', 'prepared', 'manual_review')
+  AND execution_evidence IN ('not_started', 'runtime_prepared');
 
 -- name: MarkAttemptManualReview :execrows
 UPDATE assignment_attempts

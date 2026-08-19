@@ -12,6 +12,18 @@ import (
 	"github.com/rhobuild/runpool/internal/store"
 )
 
+// strandedGrace is how long a live lease is left alone before the
+// periodic pass may consider it ownerless.
+//
+// It is keyed on the last transition rather than on creation, so it also
+// keeps the pass off a lease a goroutine is actively moving: every
+// transition is a sign of an owner, and a lease that stops moving for
+// this long has genuinely lost one. Long enough to cover the gap between
+// a lease row committing and its owner registering in memory; short
+// enough that a lease a crash really did strand is still recovered
+// within one pass of noticing.
+const defaultStrandedGrace = 2 * time.Minute
+
 // reconcile aligns the books with the daemon at startup, across every
 // binding. A lease whose capsule still runs is adopted, awaited
 // and cleaned; every other live lease is released, and the resource
@@ -489,6 +501,17 @@ func (s *Controller) retryStranded(ctx context.Context) {
 	for _, lease := range live {
 		if retried >= perPass {
 			break
+		}
+		if time.Since(lease.UpdatedAt) < s.strandedAfter() {
+			// Recently touched, so its owner is either running or about
+			// to register. The claim that marks a lease owned is taken
+			// in memory just after the row commits, and a pass that ran
+			// inside that gap would find the lease unclaimed, call it
+			// stranded, and tear down a capsule that is starting — after
+			// which both owners conclude the lease is done and release
+			// its credit twice. Elapsed time is the only evidence of the
+			// gap that exists here, so it is what the pass waits on.
+			continue
 		}
 		if !s.claimLease(lease.ID) {
 			continue // a goroutine is driving it; not this pass's business

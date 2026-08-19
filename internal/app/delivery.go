@@ -323,29 +323,36 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 
 	var deliveryID int64
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		delivery, err := tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
+		id, err := tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
 		if errors.Is(err, store.ErrOpenAttemptExists) {
-			// Supersede a ready predecessor and record again, in this
-			// same transaction. Anything beyond ready is left to resolve
-			// itself; the error propagates and the message waits as a
-			// redelivery.
+			// Supersede the predecessor and record again, in this same
+			// transaction. Only a predecessor that provably consumed
+			// nothing gives way; anything further along refuses, the
+			// error propagates, and the message waits as a redelivery.
+			//
+			// The sweep covers every workload the delivery carries
+			// because any of them may hold the conflict, and the ones
+			// that do not are no-ops. It cannot include this delivery's
+			// own attempts: those were inserted moments ago, above,
+			// before the conflicting workload was reached.
 			for _, a := range admitted {
-				serr := tx.SupersedeOpenAttempt(b.bindingID, a.SourceWorkloadKey, assignment.ResolutionSuperseded)
+				serr := tx.SupersedeOpenAttempt(b.bindingID, a.SourceWorkloadKey,
+					assignment.ResolutionSuperseded, id)
 				if serr != nil && !errors.Is(serr, store.ErrNotFound) {
 					return serr
 				}
 			}
-			delivery, err = tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
+			id, err = tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
 		}
 		if err != nil {
 			return err
 		}
-		deliveryID = delivery.ID
+		deliveryID = id
 
 		// The provider's identifiers ride along per attempt, in the
 		// adapter-owned metadata table. Zero request ids are stored as
 		// observed — they are diagnostics, never identity.
-		attempts, err := tx.AttemptsOfDelivery(delivery.ID)
+		attempts, err := tx.AttemptsOfDelivery(id)
 		if err != nil {
 			return err
 		}

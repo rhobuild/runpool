@@ -161,6 +161,18 @@ by its public and operational effects.
   evidence rung and the provider's own identifiers for the run, so the
   external check the command's help prescribes can be carried out from
   the tool that prescribes it.
+- **A workload the provider reassigns is served under its new
+  delivery.** The redelivery replaces the predecessor's attempt when that
+  attempt provably consumed nothing — including one held for review,
+  which is an open state and would otherwise stall the binding's whole
+  ordered queue — and refuses when a start was authorized, where the
+  redelivery waits for the predecessor's own lifecycle instead. A
+  replacement never reaches the attempts the same delivery just
+  recorded.
+- **An attempt replaced mid-preparation is not started.** The edge
+  before the one effect that can begin execution is a compare-and-swap,
+  so a launch whose attempt was resolved while its capsule was being
+  prepared stops there, and the capsule is torn down without a job.
 - **A capsule that never handed the job over returns it to the queue.**
   The supervisor exits with a status it reserves for stopping before the
   start was authorized — the ordinary end of an idle capsule when a

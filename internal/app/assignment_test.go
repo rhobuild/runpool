@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -93,6 +94,11 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		alloc:     allocator.New(),
 		bindings:  []*binding{b},
 		byBinding: map[int64]*binding{bindingID: b},
+		// A lease this harness calls stranded was written moments ago,
+		// because no test here simulates the passage of time. The grace
+		// exists for a real gap between a lease committing and its owner
+		// registering, and a test whose subject is that gap sets its own.
+		strandedGrace: time.Nanosecond,
 	}
 	if err := h.srv.alloc.Register(b.tier.ID, b.key, parallelism); err != nil {
 		t.Fatal(err)

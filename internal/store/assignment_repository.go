@@ -50,14 +50,14 @@ type WorkloadRow struct {
 //     delivery returns ErrOpenAttemptExists: the caller supersedes or
 //     resolves the predecessor first, in the same transaction, and
 //     retries.
-func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (sqlitedb.BrokerDelivery, error) {
+func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (int64, error) {
 	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
 		BindingID: bindingID, SourceDeliveryKey: sourceDeliveryKey,
 	})
 	switch {
 	case err == nil:
 		if !bytes.Equal(delivery.PayloadSha256, fingerprint[:]) {
-			return sqlitedb.BrokerDelivery{}, fmt.Errorf("%w: delivery %s of binding %d",
+			return 0, fmt.Errorf("%w: delivery %s of binding %d",
 				ErrContractDrift, sourceDeliveryKey, bindingID)
 		}
 		// Exact redelivery. The attempts are ensured below rather than
@@ -72,21 +72,27 @@ func (t *Tx) RecordDelivery(bindingID int64, sourceDeliveryKey string, fingerpri
 			PayloadSha256:     fingerprint[:],
 		})
 		if err != nil {
-			return sqlitedb.BrokerDelivery{}, err
+			return 0, err
 		}
 	default:
-		return sqlitedb.BrokerDelivery{}, err
+		return 0, err
 	}
 
 	for _, w := range workloads {
 		if w.SourceWorkloadKey == "" {
-			return sqlitedb.BrokerDelivery{}, fmt.Errorf("workload with no key in delivery %s cannot be made durable", sourceDeliveryKey)
+			return delivery.ID, fmt.Errorf("workload with no key in delivery %s cannot be made durable", sourceDeliveryKey)
 		}
 		if err := t.insertAttempt(delivery, w); err != nil {
-			return sqlitedb.BrokerDelivery{}, err
+			// The id travels with the error on purpose. The delivery row
+			// exists in this transaction by now, and a caller resolving
+			// an open-attempt conflict needs to know which delivery is
+			// asking - without it, the only way to resolve the conflict
+			// is to supersede blindly, including the attempts this very
+			// delivery just inserted.
+			return delivery.ID, err
 		}
 	}
-	return delivery, nil
+	return delivery.ID, nil
 }
 
 func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) error {
@@ -129,9 +135,10 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 // SupersedeOpenAttempt resolves the open predecessor of a workload so a
 // new delivery's attempt can be recorded — in the caller's transaction,
 // so old-to-superseded and new-to-ready commit together or not at all.
-// Only an attempt that never had a start authorized may be superseded;
-// anything further along is settled or reviewed through its own path.
-func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution string) error {
+// Only an attempt that provably consumed nothing may be superseded;
+// anything further along is settled or reviewed through its own path,
+// and the redelivery waits for that to happen.
+func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution string, exceptDelivery int64) error {
 	open, err := t.q.GetOpenAttemptByWorkload(t.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
 		BindingID: bindingID, SourceWorkloadKey: sourceWorkloadKey,
 	})
@@ -140,6 +147,17 @@ func (t *Tx) SupersedeOpenAttempt(bindingID int64, sourceWorkloadKey, resolution
 	}
 	if err != nil {
 		return err
+	}
+	// A delivery never supersedes its own attempts. RecordDelivery
+	// inserts the workloads it reaches before the conflicting one, so a
+	// caller resolving that conflict by looping over the delivery's
+	// workloads finds those first: superseding one and retrying leaves
+	// the retry's ON CONFLICT DO NOTHING reporting it as already
+	// inserted, and the workload stays superseded, unserved, with its
+	// message acknowledged. Nothing afterwards notices, because the
+	// delivery did land.
+	if open.DeliveryID == exceptDelivery {
+		return ErrNotFound
 	}
 	affected, err := t.q.SupersedeAttempt(t.ctx, sqlitedb.SupersedeAttemptParams{
 		Resolution: resolution, AttemptID: open.ID,
