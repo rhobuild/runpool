@@ -236,6 +236,12 @@ by its public and operational effects.
   carries its own bound. Inside a capsule the readiness probe is bounded
   the same way, so a daemon that never answers cannot spend the whole
   readiness budget in one call.
+- **One rule decides what becomes of an attempt.** The two paths that end
+  a serving — the finalizing transaction and the sweep that finds a lease
+  nobody is driving — reach the same decision through the same function,
+  so a workload cannot return to the queue on one and settle as a job
+  that ran on the other. An attempt somebody else already resolved is
+  left alone: the lease still releases and its capacity comes back.
 - **A capsule that never handed the job over returns it to the queue.**
   The supervisor exits with a status it reserves for stopping before the
   start was authorized — the ordinary end of an idle capsule when a
