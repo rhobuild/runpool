@@ -1699,24 +1699,47 @@ func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
 // when they disagree: a column added to one is a scan error at best and
 // a shifted value at worst, and two columns of the same type swapped in
 // one list is silent in both.
+//
+// Every column below holds a value unique among the columns it could be
+// confused with, so any swap changes the result. A row driven there by
+// the state machine instead would leave several columns equal, and the
+// swaps between those are exactly the ones no compiler can catch.
 func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-parity", "job-parity")
 
-	// Every nullable column filled, so a projection that shifts two of
-	// them cannot pass by both being empty.
 	var lease Lease
 	inTx(t, s, func(tx *Tx) error {
 		l, err := tx.LeaseAttempt(id, binding, "tier-a")
-		if err != nil {
-			return err
-		}
 		lease = l
-		if err := tx.RecordEvidence(id, EvidenceStartAuthorized); err != nil {
-			return err
-		}
-		return tx.HoldForReview(id, ReviewReasonStartOutcomeUnknown)
+		return err
+	})
+
+	// A distinct value in every column, written directly. Driving the
+	// row there through the state machine leaves columns that cannot be
+	// told apart: resolution and reviewed_by are both the empty string
+	// until an operator resolves a review, reviewed_at and settled_at
+	// are both null until one happens, and reviewed_at and received_at
+	// are both unixepoch() in the same second when one does. Any of
+	// those pairs could be swapped in one list and not the other, and
+	// nothing would notice — which is the whole of what this test is
+	// for.
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.tx.Exec(`UPDATE assignment_attempts SET
+			source_workload_key = 'workload-value',
+			tenant_key          = 'tenant-value',
+			project_key         = 'project-value',
+			state               = 'manual_review',
+			execution_evidence  = 'running_observed',
+			resolution          = 'resolution-value',
+			review_reason       = 'review-reason-value',
+			reviewed_by         = 'reviewed-by-value',
+			reviewed_at         = 111,
+			received_at         = 222,
+			settled_at          = 333
+			WHERE id = ?`, string(id))
+		return err
 	})
 
 	var generated, set Attempt

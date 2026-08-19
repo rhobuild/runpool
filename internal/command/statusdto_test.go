@@ -365,7 +365,7 @@ func TestAnUnresolvableImageStillReportsWhatTheBuildShips(t *testing.T) {
 
 	// A quick-start configuration, so the document carries a tier to
 	// report an image for.
-	t.Setenv(config.EnvHostTopology, "single")
+	t.Setenv(config.EnvHostTopology, config.HostTopologySharedDaemon)
 
 	const release = "ghcr.io/rhobuild/runpool/capsule@sha256:" +
 		"2222222222222222222222222222222222222222222222222222222222222222"

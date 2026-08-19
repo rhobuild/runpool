@@ -1,7 +1,6 @@
 package command
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -102,7 +101,11 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 		// build ships. Without this every tier reported an empty image,
 		// which reads as "none configured" rather than "this one could
 		// not be resolved" — and those call for different actions.
-		shippedCapsule = cmp.Or(buildCapsule, app.DefaultCapsuleImage)
+		//
+		// buildCapsule is never empty here: an empty one is substituted
+		// for the development default, which resolves without error, so
+		// reaching this line at all means the build stamped a reference.
+		shippedCapsule = buildCapsule
 	}
 	doc := statusDocument(snap, cfg, review, obs, shippedCapsule)
 	if imageErr != nil {

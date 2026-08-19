@@ -23,12 +23,11 @@ type imageLock struct {
 	} `json:"images"`
 }
 
-// DefaultCapsuleImage is what a development build runs when nothing
-// overrides it. It is exported because a reader of `runpool status` has
-// to be able to tell "this image could not be resolved" from "no image
-// is configured", and those are the same answer if an unresolvable one
-// reports as empty.
-const DefaultCapsuleImage = "runpool-capsule:dev"
+// defaultCapsuleImage is what a development build runs when nothing
+// overrides it, and the reason an unstamped build cannot fail to
+// resolve: it is substituted before any check, and it passes all of
+// them.
+const defaultCapsuleImage = "runpool-capsule:dev"
 
 // CapsuleImage resolves the outer capsule image the controller creates.
 // Exported because two surfaces must give the same answer: serve, which
@@ -43,7 +42,7 @@ const DefaultCapsuleImage = "runpool-capsule:dev"
 // digests — so the lock still reviews everything privileged that runs.
 func CapsuleImage(environ func(string) string, buildDefault string) (string, error) {
 	if buildDefault == "" {
-		buildDefault = DefaultCapsuleImage
+		buildDefault = defaultCapsuleImage
 	}
 	override := environ("RUNPOOL_CAPSULE_IMAGE")
 	if config.IsDigestQualifiedImage(buildDefault) {
@@ -52,7 +51,7 @@ func CapsuleImage(environ func(string) string, buildDefault string) (string, err
 		}
 		return buildDefault, nil
 	}
-	if buildDefault != DefaultCapsuleImage {
+	if buildDefault != defaultCapsuleImage {
 		return "", fmt.Errorf("release capsule image %q is not digest-qualified", buildDefault)
 	}
 	if override != "" {
