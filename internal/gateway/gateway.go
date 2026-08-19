@@ -165,9 +165,25 @@ func ClassifyLegs(p egress.Policy) (Legs, error) {
 // writeFileAtomic replaces a control file by rename, so a reader never
 // observes a half-written policy.
 func writeFileAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// A unique temp name, not a fixed one. The rename is atomic, but the
+	// write into a shared name is not: two writers truncate and fill the
+	// same file, and the rename then publishes whatever interleaving
+	// won — a document the reader refuses, after which every dial fails.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

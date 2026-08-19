@@ -61,9 +61,25 @@ func (p Policy) Validate() error {
 	if len(p.Deny) == 0 {
 		return fmt.Errorf("deny set is empty; a policy that denies nothing is not a policy")
 	}
-	for _, c := range append(append([]string{}, p.Allow...), p.Deny...) {
+	for _, c := range p.Deny {
 		if _, err := netip.ParsePrefix(c); err != nil {
 			return fmt.Errorf("cidr %q: %w", c, err)
+		}
+	}
+	for _, c := range p.Allow {
+		prefix, err := netip.ParsePrefix(c)
+		if err != nil {
+			return fmt.Errorf("cidr %q: %w", c, err)
+		}
+		// Allow is consulted before deny, so an allow broader than a
+		// range the baseline withholds reopens that whole range as a
+		// side effect. The rule belongs to the policy rather than to any
+		// one of the paths that produce one: a gateway takes a policy
+		// from its reload channel as well as from configuration, and a
+		// check at a single entry point is not a rule.
+		if WidensBaselineDeny(prefix) {
+			return fmt.Errorf("allow %s is broader than a range the restricted profile withholds, "+
+				"so allowing it would reopen that whole range", prefix)
 		}
 	}
 	return nil

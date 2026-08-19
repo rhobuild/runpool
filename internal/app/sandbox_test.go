@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"reflect"
@@ -89,6 +90,9 @@ type fakeSandboxDaemon struct {
 	probeErr     error
 
 	containers []docker.OwnedContainer
+	// listErr is the daemon refusing to say which gateways exist, which
+	// is the one failure that makes the whole install unaccountable.
+	listErr error
 	// refuse names the containers whose exec fails, which is how a
 	// gateway that will not take a new policy is expressed.
 	refuse   map[string]bool
@@ -110,6 +114,9 @@ func (f *fakeSandboxDaemon) RunTask(context.Context, docker.ContainerSpec) (int6
 	return 0, f.probeOut, f.probeErr
 }
 func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, string) ([]docker.OwnedContainer, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.containers, nil
 }
 func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, _ []string) (int, string, error) {
@@ -331,5 +338,53 @@ func TestNewNetworkSandboxFailsServeClosed(t *testing.T) {
 	}
 	if sb == nil || sb.UplinkNetworkID != "up-1" {
 		t.Errorf("the first launch would get %+v; want the policy just built", sb)
+	}
+}
+
+// TestARestrictionThatCouldNotBeEnumeratedIsRetried: a policy is
+// recorded as in force only once it has reached every gateway that
+// could be named.
+//
+// The snapshot is what the next pass compares against. Recorded before
+// the install, a pass whose enumeration failed leaves the new set in the
+// books while no gateway ever received it — and the pass after that
+// compares the new set against itself, reports it unchanged, and returns
+// without trying. A restriction that landed nowhere is then never
+// attempted again.
+func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
+	inForce := &capsule.Sandbox{
+		UplinkNetworkID: "uplink-1",
+		UplinkSubnet:    "172.30.0.0/24",
+		Deny:            []string{"10.0.0.0/8"},
+	}
+	daemon := &fakeSandboxDaemon{
+		refuse:  map[string]bool{},
+		listErr: errors.New("daemon unreachable"),
+		containers: []docker.OwnedContainer{
+			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
+		},
+	}
+	n := newTestSandbox(t, daemon, inForce)
+
+	tightened := &capsule.Sandbox{
+		UplinkNetworkID: "uplink-1",
+		UplinkSubnet:    "172.30.0.0/24",
+		Deny:            []string{"10.0.0.0/8", "192.168.0.0/16"},
+	}
+	if err := n.applyPolicy(t.Context(), tightened); err == nil {
+		t.Fatal("an install that could not name a single gateway reported success")
+	}
+	if got := n.state.snapshot().Deny; len(got) != 1 {
+		t.Fatalf("the books record %v as in force; nothing was installed anywhere", got)
+	}
+
+	// The daemon recovers, and the pass that follows must see the change
+	// again rather than compare the new set against itself.
+	daemon.listErr = nil
+	if err := n.applyPolicy(t.Context(), tightened); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	if len(daemon.reloaded) != 1 || daemon.reloaded[0] != "gw-1" {
+		t.Errorf("gateways reloaded on the retry = %v; want the restriction to reach gw-1", daemon.reloaded)
 	}
 }
