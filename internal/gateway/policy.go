@@ -63,15 +63,24 @@ type PolicyStore struct {
 
 // Current returns the compiled policy in force, reloading it if the
 // file changed since the last read.
+//
+// The stat is inside the lock, with the read it decides. Outside it, two
+// readers crossing an install can stat different files and finish in the
+// other order, so the one that stat'd first stores what the other read
+// under the stamp of what it did not: the decider is never stale, since
+// the read is under the lock, but the stamp no longer describes it. The
+// next call then reloads a file that has not changed and advances the
+// generation for it, which retires the pooled transport and every idle
+// connection in it for nothing.
 func (s *PolicyStore) Current() (*egress.Decider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	info, err := os.Stat(s.Path)
 	if err != nil {
 		return nil, err
 	}
 	stamp := fmt.Sprintf("%d/%d", info.ModTime().UnixNano(), info.Size())
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.decider != nil && s.stamp == stamp {
 		return s.decider, nil
 	}

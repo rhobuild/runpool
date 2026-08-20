@@ -172,9 +172,10 @@ func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID assignment.In
 // its lease in the same label map as the rest of its identity, so there
 // is no window in which one exists without it; the instance's own
 // objects are created without that label on purpose. Naming the
-// persistent roles instead only looked equivalent: a fourth persistent
-// role added later would be swept away as garbage by everything that
-// spelled the rule that way.
+// persistent roles instead only looked equivalent: there are two of them
+// — the uplink network and a cache lane volume — and a third added later
+// would be swept away as garbage by everything that spelled the rule
+// that way.
 func (r OwnedResource) InstanceInfrastructure() bool { return r.LeaseID == "" }
 
 // ShortID trims an object id to the width daemon tooling displays,

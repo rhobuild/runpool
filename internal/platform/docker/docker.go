@@ -50,7 +50,20 @@ func (c *Client) OnCleanupError(fn func(name string, err error)) { c.onCleanupEr
 
 // New connects to the local daemon and proves liveness immediately: a
 // controller that cannot reach its daemon must fail at startup, not at
-// first lease. API version negotiation is the client's default.
+// first lease.
+//
+// The ping negotiates the API version rather than leaving it to the
+// first real request. Not for speed — serve reads the daemon's facts on
+// the next line, so the lazy negotiation was already settled on the
+// startup goroutine long before anything ran concurrently. What it buys
+// is a failure with somewhere to appear: the lazy path runs inside
+// getAPIPath, which discards the error, so a version this client cannot
+// use surfaces as whatever the first request happens to fail with. Here
+// it surfaces as a refusal to start, next to the reason.
+//
+// A daemon whose version this client cannot use is one it should not
+// start against, and saying so is not the same as saying the daemon is
+// unreachable — the daemon answered.
 func New(ctx context.Context) (*Client, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
@@ -59,6 +72,10 @@ func New(ctx context.Context) (*Client, error) {
 	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("docker daemon unreachable: %w", err)
+	}
+	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		cli.Close()
+		return nil, fmt.Errorf("docker daemon answered but its API version is unusable: %w", err)
 	}
 	return &Client{cli: cli, onCleanupError: func(string, error) {}}, nil
 }
