@@ -76,3 +76,44 @@ at organization and repository scope.
 - A typo in a host no longer fails at configuration validation. It fails
   at `runpool doctor`, one step later, against the real service — which
   is where a wrong-but-well-formed host was always going to fail.
+
+## Amendment
+
+**Date:** 2026-08-19
+
+One sentence above is no longer true. "The lifecycle core keys on opaque
+provider identity and is unaffected" described the binding key as it was
+when this was written. It is now built from the configured target id, the
+runner group and the scale set name — the scope and the URL are not in
+it, and the target id is.
+
+What that changes for an operator: **renaming a `targets[].id` produces a
+different binding, and the old one is forgotten on the same startup.**
+
+The new key matches no row, so a row is written for it. The old row is
+then unclaimed, and `ForgetUnclaimedBindings` deletes it along with the
+adapter metadata holding the scale set id registered under the old name.
+The one exception is a binding that still holds deliveries: forgetting it
+would orphan the attempts hanging off them, so it is kept.
+
+The visible consequence is a refusal, not a silent duplicate. The new
+binding has no record of the scale set, which still exists at the
+provider under the unchanged name, so the first pass refuses to adopt it:
+
+> scale set %q already exists in runner group %q (id %d) and this
+> instance has no record of creating it
+
+That pass writes its intention, so the next one adopts and the binding
+serves. What does not come back is that binding's contact history, and a
+`scaleSetName` rename is worse than a `targets[].id` one: `runpool
+uninstall --delete-scale-sets` names the sets to remove from the binding
+rows, so the set under the old name is orphaned at the provider and the
+only local record of it is gone.
+
+A target id is therefore part of the binding's identity rather than a
+label on it, and renaming one is a migration.
+
+The decision this ADR records is unchanged: enterprise is a scope, the
+host is not the unit of refusal, and the rules that branch on scope are
+still runner groups and cache lanes. Only the claim about what the
+lifecycle keys on was wrong.

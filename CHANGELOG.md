@@ -158,7 +158,11 @@ by its public and operational effects.
   serve loops are waited out, the drain is spent, then every message
   session closes concurrently under one shared budget, so the bound does
   not grow with the binding count and the sessions are closed rather than
-  left for the next start to wait out. The periodic reconciler's recovery
+  left for the next start to wait out. An operator running their own
+  compose file rather than the one shipped here sizes the stop grace
+  period against that whole budget and not against the drain window: a
+  value between the two ends mid-shutdown, and the platform kills the
+  process with its message sessions still open. The periodic reconciler's recovery
   ends with that shutdown instead of running a budget of its own, because
   its work is resumable — the next start finds each lease where the
   shutdown left it. A

@@ -124,6 +124,12 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 	// What configuration no longer claims is forgotten. A renamed scale
 	// set or a removed tier leaves a row nothing serves, and the report
 	// carries it forever with no command that removes it.
+	//
+	// A binding that still holds deliveries is kept: forgetting it would
+	// orphan the attempts hanging off those rows. Everything else goes,
+	// including the recorded scale set id — which is why a rename is a
+	// migration rather than an edit, and why sourceBindingKey's own
+	// documentation says what a moved key costs.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		forgotten, err := tx.ForgetUnclaimedBindings(claimed)
 		if err != nil {
@@ -145,10 +151,13 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 // It is built from what an operator configured and never from a parsed
 // form of the target's URL. A key carrying the parsed scope and the
 // canonical URL moves whenever the parser changes how it reads an
-// address a deployment did not touch — and a moved key is a second row
-// beside the first, with the original left in `status` for good and
-// nothing that removes it. Scope and canonical URL still travel, in the
-// adapter's own metadata, which is where provider identity belongs.
+// address a deployment did not touch, and a key that moves is a rename:
+// the new one matches no row, so a row is written for it, and the old
+// one is forgotten by ForgetUnclaimedBindings on the same startup —
+// taking the scale set id recorded against it. The next pass then has to
+// adopt a set it has no record of creating, which is a refusal before it
+// is an adoption. Scope and canonical URL still travel, in the adapter's
+// own metadata, which is where provider identity belongs.
 func sourceBindingKey(target config.Target, scaleSetName string) string {
 	return fmt.Sprintf("v2|%s|%s|%s", target.ID, target.RunnerGroup, scaleSetName)
 }

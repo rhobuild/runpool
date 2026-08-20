@@ -66,8 +66,10 @@ type statusDoc struct {
 	Discrepancies []string `json:"discrepancies"`
 	DockerError   string   `json:"docker_error,omitempty"`
 	// CapsuleImageError explains a capsule image this command could not
-	// resolve. The tier entries then carry whatever the build ships, so
-	// this is what tells a reader those are not the images a launch would
+	// resolve. It is about the shipped default only: a tier naming its
+	// own capsule_image reports that one, and a launch would run it. The
+	// tiers that name none carry the build's reference instead, so this
+	// is what tells a reader those are not the images a launch would
 	// run — the alternative, refusing to answer at all, took every other
 	// fact in this document down with one unset environment variable.
 	CapsuleImageError string `json:"capsule_image_error,omitempty"`

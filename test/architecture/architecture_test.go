@@ -90,6 +90,18 @@ var narrowDeps = map[string][]string{
 		module + "/internal/egress",
 		module + "/internal/platform/docker",
 	},
+	// The gateway is the one process a capsule's traffic passes through,
+	// and it runs from the capsule image rather than the controller
+	// binary. What it may know is the policy vocabulary it enforces, the
+	// control protocol it answers on, and the file replacement its
+	// installs need — never the store, the lease machine or an adapter.
+	// A relay that could reach the books is a relay that can be made to
+	// answer a question instead of forwarding a packet.
+	module + "/internal/gateway": {
+		module + "/internal/capsule/protocol",
+		module + "/internal/egress",
+		module + "/internal/platform/atomicfile",
+	},
 }
 
 func deps(t *testing.T, pkg string) map[string]bool {

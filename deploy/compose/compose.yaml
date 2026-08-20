@@ -59,10 +59,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    # Must exceed the controller's drain window, so the drain ends and the
-    # message sessions close before the platform kills the container. A
-    # session left open is one the next start waits out as a conflict.
-    # Anything still running is adopted on the next start.
+    # Must exceed the controller's ShutdownBudget, which is the whole of
+    # what a stop needs: stopping the loops, draining the capsules, and
+    # closing the message sessions. Sizing against the drain alone leaves
+    # a period that ends mid-shutdown, and the platform kills the
+    # container with sessions still open — which the next start waits out
+    # as a conflict, one per binding. Anything still running when the
+    # process goes is adopted on the next start.
     stop_grace_period: 150s
 
 volumes:
