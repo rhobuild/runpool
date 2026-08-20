@@ -415,8 +415,10 @@ saying why.
 Link-local is not in that group. It is denied by default — a cloud instance
 keeps its own credentials there, and a job that wanders into it should not
 arrive — and a deployment with a reason to reach one address in it names that
-address. The range itself cannot be reopened, because an entry broader than a
-withheld range is refused by the rule above.
+address, as a single `/32`. Anything wider is refused: not by the rule above,
+which only catches an entry *broader* than a withheld range, but by a rule of
+its own, because the baseline withholds link-local as a `/16` and an entry of
+exactly that would be broader than nothing.
 
 Narrower entries are the intended use, and public prefixes are accepted
 because they change nothing: the profile already permits the public internet.

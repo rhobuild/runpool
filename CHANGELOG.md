@@ -128,7 +128,14 @@ by its public and operational effects.
   through it. Link-local is not in that group: it stays denied by
   default, because a cloud instance keeps its own credentials there, and
   an allowance naming one address in it now reaches that address rather
-  than being accepted and quietly ignored.
+  than being accepted and quietly ignored. One address is the whole of
+  what it can reach: an entry covering more of the range is refused,
+  which the rule above does not do for it, since the baseline withholds
+  link-local as a single range and an entry of exactly that is broader
+  than nothing.
+  Both lists are also held to being written as IPv4. An address in the
+  v4-in-v6 form renders into the ruleset and matches nothing at decision
+  time, which is the same split arrived at through notation.
   Public prefixes are accepted because the profile already permits the
   public internet — which is how a capsule reaches a service on the
   host's own public address, an address the runtime deny set withholds

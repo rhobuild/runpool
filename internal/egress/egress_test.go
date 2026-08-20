@@ -220,9 +220,71 @@ func TestLinkLocalIsRefusedUntilItIsNamed(t *testing.T) {
 		t.Error("an allow naming one link-local address does not take effect, so the entry is " +
 			"accepted, rendered into the ruleset, and refused on every request")
 	}
-	// One address, not the range it sits in.
-	if named.Allowed(netip.MustParseAddr("169.254.1.1")) {
+	// One address, not the range it sits in -- and against the thin deny
+	// set, so the refusal is the decider's rather than the list's.
+	thin.Allow = append(thin.Allow, "169.254.169.254/32")
+	one, err := thin.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !one.Allowed(metadata) {
+		t.Fatal("the named address is not reachable; nothing below means anything")
+	}
+	if one.Allowed(netip.MustParseAddr("169.254.1.1")) {
 		t.Error("naming one link-local address reopened the rest of the range")
+	}
+}
+
+// TestLinkLocalCannotBeReopenedWholesale: the widening rule does not
+// reach this one, and without it the range is one line away.
+//
+// The baseline withholds link-local as a /16, and an allow of exactly
+// that is broader than nothing, so it passes the rule that refuses an
+// allow for what it would take with it. While the decider refused
+// link-local before consulting the allow list such an entry was inert
+// and costing nothing; consulted first, it hands a job the whole range
+// its instance keeps its own credentials in.
+func TestLinkLocalCannotBeReopenedWholesale(t *testing.T) {
+	for _, allow := range []string{
+		"169.254.0.0/16",   // exactly the withheld range: not broader than anything
+		"169.254.0.0/17",   // half of it
+		"169.254.169.0/24", // the neighbourhood of the metadata address
+		"169.254.169.254/31",
+	} {
+		p := policy()
+		p.Allow = append(p.Allow, allow)
+		if err := p.Validate(); err == nil {
+			t.Errorf("allow %s was accepted; it reaches link-local addresses nobody named", allow)
+		}
+	}
+	// And the one shape that is the point of the field.
+	p := policy()
+	p.Allow = append(p.Allow, "169.254.169.254/32")
+	if err := p.Validate(); err != nil {
+		t.Errorf("naming one link-local address was refused: %v", err)
+	}
+}
+
+// TestAnAllowInTheV4InV6FormIsRefused: it renders into the ruleset and
+// never matches at decision time, because a 128-bit prefix contains no
+// 32-bit address. That is the firewall agreeing with the file while the
+// relay refuses everything, reached through notation rather than order.
+func TestAnAllowInTheV4InV6FormIsRefused(t *testing.T) {
+	mapped := "::ffff:198.18.5.0/120"
+	p := policy()
+	p.Allow = append(p.Allow, mapped)
+	if err := p.Validate(); err == nil {
+		d, cerr := p.Compile()
+		if cerr != nil {
+			t.Fatal(cerr)
+		}
+		t.Errorf("allow %s was accepted; the ruleset carries its accept and the relay "+
+			"reaches 198.18.5.7 = %v", mapped, d.Allowed(netip.MustParseAddr("198.18.5.7")))
+	}
+	q := policy()
+	q.Deny = append(q.Deny, mapped)
+	if err := q.Validate(); err == nil {
+		t.Errorf("deny %s was accepted; it renders into an IPv4 ruleset and matches nothing", mapped)
 	}
 }
 
@@ -245,6 +307,17 @@ func TestWhatNoConnectionReachesCannotBeAllowed(t *testing.T) {
 		if !RefusedOutright(netip.MustParsePrefix(allow)) {
 			t.Errorf("%s is not reported as unreachable, so the configuration validator "+
 				"would accept it too", allow)
+		}
+	}
+
+	// A prefix that begins at one of those addresses and holds ordinary
+	// ones is not the same thing. 0.0.0.0/8 starts at an address no
+	// connection reaches and covers sixteen million that do, so deciding
+	// from the first address would refuse a range an operator may name.
+	for _, allow := range []string{"0.0.0.0/8", "0.0.0.0/31", "224.0.0.0/3"} {
+		if RefusedOutright(netip.MustParsePrefix(allow)) {
+			t.Errorf("%s is reported as unreachable, but it holds addresses a relay reaches; "+
+				"an operator naming it would be refused with a reason that is not true of it", allow)
 		}
 	}
 }

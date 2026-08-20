@@ -347,19 +347,27 @@ func Validate(c *Config) error {
 	for i, p := range c.Network.AllowPrivateCIDRs {
 		path := fmt.Sprintf("network.allowPrivateCIDRs[%d]", i)
 		switch {
-		case !p.Addr().Unmap().Is4():
-			v.errf(path, "must be IPv4: the capsule egress ruleset is IPv4 only")
+		case !p.Addr().Is4():
+			// Not Unmap: the v4-in-v6 form unmaps to IPv4 and then never
+			// matches an address at decision time, because a 128-bit
+			// prefix contains no 32-bit one. It renders into the ruleset
+			// all the same.
+			v.errf(path, "must be IPv4: the capsule egress ruleset is IPv4 only, and an "+
+				"address written in the v4-in-v6 form is not one the relay matches")
 		case egress.WidensBaselineDeny(p.Prefix):
 			v.errf(path, "%s is broader than a range the restricted profile withholds, "+
 				"so allowing it would reopen that whole range; name the specific addresses instead", p)
 		case egress.RefusedOutright(p.Prefix):
 			v.errf(path, "%s names addresses no relay reaches, so it cannot take effect: "+
-				"loopback is the gateway itself, and link-local, multicast, broadcast and the "+
-				"unspecified range are not destinations a connection can have", p)
+				"loopback is the gateway itself, and multicast, broadcast and the unspecified "+
+				"address are not destinations a connection can have", p)
+		case egress.ReopensLinkLocal(p.Prefix):
+			v.errf(path, "%s reaches more of link-local than one address, which would hand a "+
+				"job the range its instance keeps its own credentials in; name the address", p)
 		}
 	}
 	for i, p := range c.Network.DenyCIDRs {
-		if !p.Addr().Unmap().Is4() {
+		if !p.Addr().Is4() {
 			v.errf(fmt.Sprintf("network.denyCIDRs[%d]", i), "must be IPv4: the capsule egress ruleset is IPv4 only")
 		}
 	}

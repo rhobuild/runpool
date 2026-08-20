@@ -120,7 +120,8 @@ capsule has **no route to anything**. Its bridge is internal in Engine
 capsule addresses beyond that bridge — public destinations included.
 Egress happens through the capsule's own gateway container, which
 resolves names and opens connections on its behalf, refusing any
-address in the deny set (private ranges, link-local metadata, the host's
+address in the deny set that no allowance names (private ranges,
+link-local metadata, the host's
 own networks, every Docker subnet, the uplink itself).
 
 The capsule is created with `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
