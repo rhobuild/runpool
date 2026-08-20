@@ -32,7 +32,9 @@ func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 		{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"},
 	}
 
-	if err := h.srv.sweepOrphans(t.Context(), map[assignment.LeaseID]bool{"lse-adopted": true}); err != nil {
+	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
+		return map[assignment.LeaseID]bool{"lse-adopted": true}, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,7 +57,7 @@ func TestSweepOrphansSurvivesAnObjectThatWillNotDie(t *testing.T) {
 	h.objects.volumes = []docker.OwnedResource{{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"}}
 	h.objects.wedged["wedged"] = true
 
-	if err := h.srv.sweepOrphans(t.Context(), nil); err != nil {
+	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err != nil {
 		t.Fatalf("one object that would not die failed the whole pass: %v", err)
 	}
 	if !slices.Equal(h.objects.removed, []string{"net-gone", "vol-gone"}) {
@@ -70,7 +72,55 @@ func TestSweepOrphansFailsOnAnUnreadableInventory(t *testing.T) {
 	h := newHarness(t, 1)
 	h.objects.listErr = errors.New("daemon unreachable")
 
-	if err := h.srv.sweepOrphans(t.Context(), nil); err == nil {
+	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err == nil {
 		t.Error("an unreadable inventory was reported as nothing to sweep")
+	}
+}
+
+// TestALeaseCommittedDuringTheSweepKeepsItsObjects: the daemon is
+// enumerated before the live set is read.
+//
+// An object exists only after the lease that owns it committed, so an
+// object seen now whose lease is absent in the later read is genuinely
+// ownerless. Read the other way round, a lease that commits between the
+// two reads owns a container the sweep cannot account for, and the sweep
+// force-removes a capsule whose job is running, then deletes the records
+// that would have cleaned up after it.
+//
+// The commit is modelled where it actually falls: the fake daemon
+// registers the lease as it answers, so the lease exists only for a
+// reader that runs after the enumeration.
+func TestALeaseCommittedDuringTheSweepKeepsItsObjects(t *testing.T) {
+	h := newHarness(t, 1)
+	h.objects.containers = []docker.OwnedContainer{
+		{ID: "runner-committing", Role: "capsule", LeaseID: "lse-committing", Running: true},
+	}
+	h.objects.networks = []docker.OwnedResource{
+		{ID: "net-committing", Role: "capsule-net", LeaseID: "lse-committing"},
+	}
+	h.objects.volumes = []docker.OwnedResource{
+		{ID: "vol-committing", Role: "dind-data", LeaseID: "lse-committing"},
+	}
+
+	// The lease is visible only once every kind has been listed, so a
+	// read that runs after the containers but before the volumes is as
+	// much a failure as one that runs first: an object listed after the
+	// read is an object the read could not account for, whichever kind
+	// it is.
+	listed := 0
+	h.objects.onList = func() { listed++ }
+
+	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
+		if listed < 3 {
+			return nil, nil
+		}
+		return map[assignment.LeaseID]bool{"lse-committing": true}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.objects.removed) != 0 {
+		t.Errorf("swept %v; the lease committed before every kind had been listed, so the sweep "+
+			"tore down a capsule whose job is running and deleted the records that clean up after it",
+			h.objects.removed)
 	}
 }

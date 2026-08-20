@@ -255,11 +255,28 @@ by its public and operational effects.
   for an exec is handed over once and stops consulting the caller's
   context, so a container that accepts a command and answers nothing
   held the call open indefinitely — including the gateway control calls
-  a policy refresh makes while holding the lock every launch waits on.
+  a policy refresh makes while every launch waits for it.
   The connection now ends with the context, and each gateway call
   carries its own bound. Inside a capsule the readiness probe is bounded
   the same way, so a daemon that never answers cannot spend the whole
   readiness budget in one call.
+- **Shutdown is never held up by a launch it cannot see.** A launch runs
+  on a context that deliberately outlives the serve loop, so its cleanup
+  still completes once a shutdown has begun; the pass that maintains the
+  egress policy waits for the same thing that launch holds. Waiting for
+  it can now be given up, because the wait for the serve loops has no
+  bound of its own — the budget is a claim about what they cost, not a
+  timer — and past the deployment's grace period the difference is a
+  kill, which leaves every message session open for the next start to
+  wait out as a conflict.
+- **A lease that starts while the sweep is looking keeps its capsule.**
+  The sweep enumerates the daemon before it reads which leases are live,
+  because an object exists only after the lease that owns it committed.
+  Read the other way round, a lease committing between the two reads owns
+  a container the sweep cannot account for: it would force-remove a
+  capsule whose job is running and delete the records that clean up after
+  it. Cache lane collection already stated that order for the same
+  reason.
 - **One rule decides what becomes of an attempt.** The two paths that end
   a serving — the finalizing transaction and the sweep that finds a lease
   nobody is driving — reach the same decision through the same function,
