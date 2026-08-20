@@ -1,10 +1,10 @@
 package command
 
 import (
-	"github.com/rhobuild/runpool/internal/assignment"
 	"strings"
 	"testing"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
 )

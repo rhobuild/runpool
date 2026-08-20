@@ -77,7 +77,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 
 	adopted := make(map[assignment.LeaseID]bool)
 	for _, lease := range live {
-		b := s.byBinding[int64(lease.BindingID)] // may be nil if the target was removed
+		b := s.byBinding[lease.BindingID] // may be nil if the target was removed
 		// Adoption means "this lease is still executing; wait it out".
 		// A lease already past draining is not executing — it is being
 		// unwound, and adopting it would run WalkToRunning and then a
@@ -562,7 +562,7 @@ func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, ret
 		return // its backoff has not elapsed; let it breathe
 	}
 	*retried++
-	b := s.byBinding[int64(lease.BindingID)] // may be nil if the target was removed
+	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
 	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
 		s.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)

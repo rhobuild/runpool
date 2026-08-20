@@ -324,7 +324,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		leaseHistory:        cfg.Retention.Window(),
 		netSandbox:          netSandbox,
 		cgroupDriver:        hostInfo.CgroupDriver,
-		byBinding:           map[int64]*binding{},
+		byBinding:           map[assignment.BindingID]*binding{},
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: resuming an emergency is what holds the
@@ -526,7 +526,7 @@ type Controller struct {
 	cgroupDriver string
 
 	bindings  []*binding
-	byBinding map[int64]*binding // store binding id -> binding
+	byBinding map[assignment.BindingID]*binding
 
 	// launch runs one served attempt. Production points it at
 	// runCapsule; tests replace it to drive the assignment machine

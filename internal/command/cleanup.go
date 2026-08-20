@@ -297,17 +297,17 @@ func (p ownedPlan) describe(verb string, applying bool) string {
 // held open.
 func (p ownedPlan) remove(ctx context.Context, dock *docker.Client) error {
 	for _, c := range p.containers {
-		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(c.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), c.LeaseID); err != nil {
 			return fmt.Errorf("remove container %s: %w", c.Name, err)
 		}
 	}
 	for _, n := range p.networks {
-		if err := dock.RemoveOwnedNetwork(ctx, n.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(n.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedNetwork(ctx, n.ID, assignment.InstanceID(p.instanceID), n.LeaseID); err != nil {
 			return fmt.Errorf("remove network %.12s: %w", n.ID, err)
 		}
 	}
 	for _, v := range p.volumes {
-		if err := dock.RemoveOwnedVolume(ctx, v.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(v.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedVolume(ctx, v.ID, assignment.InstanceID(p.instanceID), v.LeaseID); err != nil {
 			return fmt.Errorf("remove volume %s: %w", v.ID, err)
 		}
 	}

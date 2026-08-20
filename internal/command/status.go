@@ -182,7 +182,7 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	for _, c := range snap.CacheLanes {
 		holder := "free"
 		if c.LeasedBy != "" {
-			holder = "leased by " + c.LeasedBy
+			holder = "leased by " + string(c.LeasedBy)
 		}
 		fmt.Fprintf(streams.Out, "  %-16s %-12s %-40s %s\n", c.ID, c.Generation, c.SourceProjectKey, holder)
 	}

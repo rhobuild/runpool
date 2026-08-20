@@ -2,10 +2,10 @@ package app
 
 import (
 	"errors"
-	"github.com/rhobuild/runpool/internal/assignment"
 	"slices"
 	"testing"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 

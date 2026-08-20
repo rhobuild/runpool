@@ -84,7 +84,7 @@ type CacheLaneInfo struct {
 	ID               string
 	SourceProjectKey string
 	Generation       string
-	LeasedBy         string
+	LeasedBy         assignment.LeaseID
 	LastUsed         int64
 }
 

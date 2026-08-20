@@ -236,7 +236,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	for _, c := range snap.CacheLanes {
 		doc.CacheLanes = append(doc.CacheLanes, laneDTO{
 			ID: c.ID, SourceProjectKey: c.SourceProjectKey, Generation: c.Generation,
-			LeasedBy: c.LeasedBy, LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
+			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
 		})
 	}
 	doc.ManualReview = append(doc.ManualReview, review...)
@@ -260,14 +260,14 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 }
 
 func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64]int, shippedCapsule string) *schedulingDTO {
-	activeByTier := make(map[string]int, len(cfg.Tiers))
+	activeByTier := make(map[assignment.TierID]int, len(cfg.Tiers))
 	active := 0
 	for _, lease := range leases {
 		if lease.State.Terminal() {
 			continue
 		}
 		active++
-		activeByTier[string(lease.TierID)]++
+		activeByTier[lease.TierID]++
 	}
 
 	mode := "independent-tiers"
@@ -290,7 +290,7 @@ func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64
 		dto.Available = 0
 	}
 	for _, tier := range cfg.Tiers {
-		tierActive := activeByTier[tier.ID]
+		tierActive := activeByTier[assignment.TierID(tier.ID)]
 		available := tier.Parallelism - tierActive
 		if available < 0 {
 			available = 0

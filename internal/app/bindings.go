@@ -114,7 +114,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				return err
 			}
 			s.bindings = append(s.bindings, b)
-			s.byBinding[int64(bindingID)] = b
+			s.byBinding[bindingID] = b
 			claimed = append(claimed, bindingID)
 		}
 	}

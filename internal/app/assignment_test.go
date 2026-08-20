@@ -93,7 +93,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		cache:     cacheMgr,
 		alloc:     allocator.New(),
 		bindings:  []*binding{b},
-		byBinding: map[int64]*binding{int64(bindingID): b},
+		byBinding: map[assignment.BindingID]*binding{bindingID: b},
 		// A lease this harness calls stranded was written moments ago,
 		// because no test here simulates the passage of time. The grace
 		// exists for a real gap between a lease committing and its owner
