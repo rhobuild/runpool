@@ -17,8 +17,9 @@ import (
 // it — a job GitHub handed over, that never ran, and that nobody retries.
 func TestClassifySupervisorStateSeparatesAbortFromExit(t *testing.T) {
 	for state, want := range map[string]assignment.ExecutionObservation{
-		"waiting": assignment.ObservedCreated,
-		"running": assignment.ObservedRunning,
+		"waiting":  assignment.ObservedCreated,
+		"starting": assignment.ObservedUnavailable,
+		"running":  assignment.ObservedRunning,
 		"aborted:start authorized but no credential": assignment.ObservedCreated,
 		"aborted:prepare volatile runner config":     assignment.ObservedCreated,
 		"exited:0":                                   assignment.ObservedExited,
@@ -152,5 +153,39 @@ func TestAwaitStateGivesUpOnEveryTerminalState(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestOnlyWaitingProvesTheRunnerNeverStarted: the launcher requeues an
+// assignment on exactly one answer, so no other state may reach it.
+//
+// `starting` is the near miss. It sits between an authorization landing
+// and fork/exec returning, and for that stretch the capsule genuinely
+// cannot say whether the job was handed over. Classifying it with
+// `waiting` reads "not yet" as "never", and the assignment is served a
+// second time while the first capsule starts its runner.
+func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
+	requeues := map[string]bool{}
+	for _, state := range []string{
+		protocol.StateBooting, protocol.StateWaiting, protocol.StateStarting,
+		protocol.StateRunning, protocol.AbortedPrefix + "no credential",
+		protocol.ExitedPrefix + "0", protocol.FailedPrefix + "drained",
+	} {
+		obs, err := classifySupervisorState(state)
+		if err != nil {
+			t.Fatalf("state %q: %v", state, err)
+		}
+		requeues[state] = obs == assignment.ObservedCreated
+	}
+	if requeues[protocol.StateStarting] {
+		t.Error("a capsule that has accepted a start authorization is classified as one that " +
+			"never started; the assignment is requeued while the runner is being forked")
+	}
+	for _, proves := range []string{protocol.StateBooting, protocol.StateWaiting,
+		protocol.AbortedPrefix + "no credential"} {
+		if !requeues[proves] {
+			t.Errorf("state %q no longer requeues; a job that was never handed over is left "+
+				"for a person or settled as though it ran", proves)
+		}
 	}
 }

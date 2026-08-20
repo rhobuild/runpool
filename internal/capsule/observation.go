@@ -60,10 +60,22 @@ func ClassifyExit(code int) assignment.ExecutionObservation {
 // writes `running` once fork/exec has returned, so `aborted` means the job was
 // never handed over and `failed` means it was. Collapsing the two settles an
 // attempt that never ran as complete, and nothing requeues it.
+//
+// `waiting` and `starting` are the same distinction one step earlier. Only
+// `waiting` proves an authorization never took effect; `starting` says one
+// did and its outcome is not yet knowable, which is not something to guess
+// at when guessing wrong runs a job twice.
 func classifySupervisorState(state string) (assignment.ExecutionObservation, error) {
 	switch {
 	case state == protocol.StateBooting, state == protocol.StateWaiting:
 		return assignment.ObservedCreated, nil
+	case state == protocol.StateStarting:
+		// The authorization landed and the runner is not yet forked, so
+		// neither answer is available: it did not never start, and it has
+		// not started. Reporting it as unavailable is what holds the
+		// assignment for a person instead of requeueing one the capsule
+		// is at that moment handing to a runner.
+		return assignment.ObservedUnavailable, nil
 	case state == protocol.StateRunning:
 		return assignment.ObservedRunning, nil
 	case strings.HasPrefix(state, protocol.AbortedPrefix):

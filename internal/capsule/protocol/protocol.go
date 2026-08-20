@@ -26,10 +26,17 @@ import "strings"
 // Version 2 moved when StateWaiting is written. A version 1 supervisor
 // wrote it at boot, ahead of its daemon, so a launcher that treats the
 // state as readiness would deliver a credential and authorize a start
-// against a capsule whose daemon may never come up. The two builds are
-// not interchangeable in either direction, which is what the equality
-// check enforces.
-const Version = "2"
+// against a capsule whose daemon may never come up.
+//
+// Version 3 separates StateStarting from StateWaiting. A version 2
+// supervisor answers `waiting` for the whole start preamble, which a
+// launcher reads as proof the runner never started, so an authorization
+// whose exec landed but whose call failed would requeue an assignment
+// the capsule was already forking a runner for.
+//
+// The builds are not interchangeable in either direction, which is what
+// the equality check enforces.
+const Version = "3"
 
 // The states a supervisor-family container writes to its control
 // directory. The capsule's supervisor and the gateway are the same
@@ -54,6 +61,22 @@ const (
 	// it. The distinction this state carries is the difference between
 	// a job retried and a job silently gone.
 	StateRunning = "running"
+	// StateStarting is the start authorization accepted and the runner
+	// not yet forked: the bundle is being read, its files materialized,
+	// the credential removed, and fork/exec attempted.
+	//
+	// Without it that whole stretch reads as `waiting`, and `waiting` is
+	// the proof a launcher uses to say the runner never started. An
+	// authorization whose exec landed but whose call returned an error
+	// would be answered with `waiting` while the supervisor was forking
+	// the runner, so the assignment would be requeued and served a second
+	// time while the first one ran. It is written by the authorization
+	// itself, before the file that carries it, so an authorization that
+	// never landed still leaves `waiting` behind and is still retried.
+	//
+	// It settles on its own: the next state is `running` if fork/exec
+	// returned, and an abort if it did not.
+	StateStarting = "starting"
 	// StateReady is the gateway's: ruleset installed and relay listening.
 	StateReady = "ready"
 )

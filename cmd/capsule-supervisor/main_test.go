@@ -345,3 +345,68 @@ func TestEveryFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
 		t.Error("no file-creating call found at all; this test asserted nothing")
 	}
 }
+
+// TestTheStartAuthorizationRecordsItselfBeforeItLands: the state is
+// written before the file that carries the authorization.
+//
+// PID 1 learns of an authorization only by polling for that file, and it
+// writes nothing of its own until fork/exec has returned. Between those
+// two moments the capsule answers with whatever state was last written,
+// and if that is still `waiting` a launcher reads it as proof no runner
+// ever started: an authorization whose exec landed but whose call
+// returned an error requeues an assignment this capsule is at that
+// moment starting a runner for.
+//
+// The order is what carries it, so the order is what is checked. It
+// cannot be reached without the control directory this runs against, so
+// it is read out of the source instead.
+func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clause *ast.CaseClause
+	ast.Inspect(file, func(n ast.Node) bool {
+		c, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		for _, expr := range c.List {
+			if lit, ok := expr.(*ast.BasicLit); ok && lit.Value == `"start"` {
+				clause = c
+			}
+		}
+		return true
+	})
+	if clause == nil {
+		t.Fatal("no `start` subcommand found; this checks the order of something that is not there")
+	}
+
+	recorded, landed := -1, -1
+	for i, stmt := range clause.Body {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "setState" && recorded < 0 {
+					recorded = i
+				}
+			case *ast.Ident:
+				if node.Name == "startFile" && landed < 0 {
+					landed = i
+				}
+			}
+			return true
+		})
+	}
+	switch {
+	case recorded < 0:
+		t.Error("the start authorization records no state of its own, so the capsule answers " +
+			"`waiting` for the whole preamble and an assignment already being started is requeued")
+	case landed < 0:
+		t.Error("the start authorization writes no start file; nothing would ever launch a runner")
+	case recorded > landed:
+		t.Errorf("the start authorization writes its file at statement %d and records its state "+
+			"at %d; between the two the capsule answers `waiting`, which is read as proof that "+
+			"no runner ever started", landed, recorded)
+	}
+}

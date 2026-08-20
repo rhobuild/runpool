@@ -114,6 +114,18 @@ func runSubcommand(args []string) int {
 		}
 		return 0
 	case "start":
+		// The state goes first. PID 1 does not learn of an authorization
+		// until it polls for the file below, and it writes nothing of its
+		// own until fork/exec has returned, so between those two moments
+		// the capsule would answer `waiting` -- which a launcher reads as
+		// proof that no runner ever started. An authorization whose exec
+		// landed but whose call returned an error would then requeue an
+		// assignment this capsule is already starting a runner for.
+		//
+		// Writing it here rather than in PID 1 is what keeps the other
+		// direction true: an authorization that never landed leaves
+		// `waiting` behind, and that assignment is still retried.
+		setState(protocol.StateStarting)
 		if err := atomicfile.Replace(startFile, []byte(protocolVersion), 0o600, -1, -1); err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)
 			return 1
