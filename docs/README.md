@@ -8,8 +8,8 @@ Documentation is organized by the question it answers.
   compatibility surfaces.
 - [Architecture](architecture.md): component boundaries, durable identity,
   recovery, capacity, and storage.
-- [Threat model](security/threat-model.md): trust boundary, defences, and
-  accepted exposure.
+- [Threat model](security/threat-model.md): trust boundary, defences, one
+  known weakness, and accepted exposure.
 - [Architecture decision records](adrs/README.md): decisions that constrain
   implementation and operations.
 

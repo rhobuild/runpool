@@ -182,3 +182,19 @@ const (
 	// ObservedUnavailable means the runtime could not establish an outcome.
 	ObservedUnavailable ExecutionObservation = "unavailable"
 )
+
+// AllExecutionObservations is every observation that exists.
+//
+// Anything deciding what to do with one has to decide for all of them,
+// and a switch says nothing when a value is added: it falls into
+// whatever branch is last, which reads as a decision and is not one. A
+// value added here without a home elsewhere is what a totality check
+// has to fail on.
+var AllExecutionObservations = []ExecutionObservation{
+	ObservedCreated,
+	ObservedNeverStarted,
+	ObservedRunning,
+	ObservedExited,
+	ObservedAbsent,
+	ObservedUnavailable,
+}

@@ -201,7 +201,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
 			"attempt", attemptID, "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedCreated)
+		// This controller's own knowledge, not the capsule's: no start
+		// was ever issued, so the capsule has said nothing about one.
+		// Spelling it as the capsule's account would put a report of
+		// what the capsule said where the capsule was never asked, and
+		// hand the provider's answer something to overrule that is not
+		// the account it is allowed to overrule.
+		s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedNeverStarted)
 		return
 	}
 	// The authorization is durable immediately before the one effect
@@ -232,16 +238,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 			}
 			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
-		case assignment.ObservedCreated:
-			log.Info("the runtime was never started; the assignment stays servable", "error", startErr)
-			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
-			return
 		default:
-			// Absent or unavailable: neither retry nor settlement can be
-			// justified, so the finalizing transaction holds the
-			// assignment for a person.
-			log.Error("start outcome is unobservable; the assignment needs an operator",
-				"observation", string(obs), "error", startErr)
+			report, unproven := startFailureReport(obs)
+			if unproven {
+				log.Error(report, "observation", string(obs), "error", startErr)
+			} else {
+				log.Info(report, "observation", string(obs), "error", startErr)
+			}
 			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
 		}
@@ -459,6 +462,36 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		return err
 	}
 	return nil
+}
+
+// startFailureReport says what a failed start's observation means for
+// the assignment, and whether the outcome is one nobody established.
+//
+// It is a function rather than the last branch of the switch above
+// because a branch that catches everything left over says the same
+// thing about a value nobody thought about as it does about the values
+// it was written for. That is how the daemon's own account of a
+// container it never started came to be reported as an outcome needing
+// an operator, at the level an operator is paged on, for the ordinary
+// case of a start that failed and left nothing behind.
+//
+// An observation with no report here is a value nobody has decided
+// about, which TestEveryObservationHasAStartFailureReport fails on.
+func startFailureReport(obs assignment.ExecutionObservation) (report string, unproven bool) {
+	switch obs {
+	case assignment.ObservedNeverStarted:
+		return "the daemon reports the container was never started; the assignment stays servable", false
+	case assignment.ObservedCreated:
+		return "the capsule reports the runner never started; the attempt returns to the " +
+			"queue unless the provider says otherwise", false
+	case assignment.ObservedAbsent, assignment.ObservedUnavailable:
+		return "start outcome is unobservable; the assignment needs an operator", true
+	case assignment.ObservedRunning, assignment.ObservedExited:
+		// Decided before this is reached, and named here so the totality
+		// check is about every observation rather than the leftovers.
+		return "the runtime outlived the start that reported an error", false
+	}
+	return "", true
 }
 
 // remainingCeiling is what is left of a lease's tier ceiling.

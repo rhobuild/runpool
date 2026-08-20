@@ -996,3 +996,33 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 			left, recoveryBudget)
 	}
 }
+
+// TestEveryObservationHasAStartFailureReport: a failed start reports
+// what its observation means, and every observation means something.
+//
+// A switch says nothing about a value nobody added a case for. It falls
+// into whatever branch is last, which reads as a decision and is not
+// one — that is how the daemon's own account of a container it never
+// started came to be reported as an outcome needing an operator, at the
+// level an operator is paged on, for the ordinary case of a start that
+// failed and left nothing behind.
+func TestEveryObservationHasAStartFailureReport(t *testing.T) {
+	for _, obs := range assignment.AllExecutionObservations {
+		report, unproven := startFailureReport(obs)
+		if report == "" {
+			t.Errorf("observation %q has no report, so a failed start carrying it is logged "+
+				"as an outcome nobody could establish and paged on", obs)
+			continue
+		}
+		// The daemon's own account is the one this exists to keep apart
+		// from an outcome nobody established.
+		if obs == assignment.ObservedNeverStarted && unproven {
+			t.Error("the daemon reporting a container it never started is not an unprovable " +
+				"outcome; it is the clearest answer there is")
+		}
+	}
+	if report, unproven := startFailureReport("something-nobody-declared"); report != "" || !unproven {
+		t.Errorf("an observation this package does not know reported %q, unproven=%v; "+
+			"want no report and no claim", report, unproven)
+	}
+}
