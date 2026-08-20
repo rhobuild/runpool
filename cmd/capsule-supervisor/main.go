@@ -27,9 +27,18 @@
 //
 // Subcommands `deliver` and `start` run via docker exec in the same
 // container and speak to PID 1 through those files, so the protocol
-// needs no network listener and nothing a job inside dind can reach —
-// the control directory is outside the runner's uid and the daemon
-// socket's group.
+// needs no network listener. The control directory is outside the
+// runner's uid, which is what keeps the job's own processes off it.
+//
+// It is not outside the job's reach, and the difference matters. The
+// runner holds the inner daemon's socket by design — that is what a CI
+// job is for — and a container started through it runs as real root
+// with no user namespace remapping, so it can bind mount this directory
+// and write what it likes. Nothing inside a capsule is a boundary
+// against a job that holds that socket, which is why the one decision
+// that could run a job twice is not settled by what the capsule says
+// alone: the controller asks the provider, which is not a party the job
+// can be.
 package main
 
 import (

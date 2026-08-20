@@ -355,6 +355,10 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID)
 // by definition — the next pass, or the next start, finds the lease
 // exactly where this left it — and a recovery that outlived the
 // shutdown budget would have the platform kill the process inside one.
+// startObs is what the capsule said, and it may be replaced here by
+// what the provider says: the deregistration below is the one question
+// asked of a party that is not the capsule, and its answer outranks the
+// capsule's own on the only decision that can run a job twice.
 func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID assignment.LeaseID,
 	startObs assignment.ExecutionObservation) error {
 
@@ -414,6 +418,31 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 			log.Warn("the provider refuses to deregister a runner it still considers busy; "+
 				"the registration is leaked until it expires there",
 				"runner", runnerGitHubID, "error", err)
+			// And it says something nothing else here can say. Every
+			// other account of whether the job was handed over comes
+			// from inside the capsule -- the state file, the exit code
+			// -- and the capsule is the thing running the job. This
+			// comes from the party that assigned it, which considers
+			// the runner busy with it, so the runner had it. Requeueing
+			// on the capsule's own word against that is how one job runs
+			// twice.
+			// Only upwards. An observed exit is the stronger answer and
+			// the later one -- the job ran and finished, where the
+			// provider has only got as far as calling it busy.
+			//
+			// Nothing observes that half today: an exit is recorded on
+			// the evidence ladder before this runs, and a disposition
+			// reads exit_observed ahead of any observation, so the ladder
+			// decides it whichever way this goes. The case is here for a
+			// caller that reaches this with an exit and without the
+			// rung.
+			switch startObs {
+			case assignment.ObservedRunning, assignment.ObservedExited:
+			default:
+				log.Warn("the provider says the job was handed over; the capsule's account is "+
+					"not what settles this", "observation", string(startObs))
+				startObs = assignment.ObservedRunning
+			}
 		default:
 			log.Warn("removing registered runner", "runner", runnerGitHubID, "error", err)
 		}

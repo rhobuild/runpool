@@ -305,6 +305,14 @@ by its public and operational effects.
   capsule whose job is running and delete the records that clean up after
   it. Cache lane collection already stated that order for the same
   reason.
+- **The provider's own answer outranks the capsule's.** Every other
+  account of whether a job was handed over comes from inside the capsule
+  — the state it reports, the code it exits with — and the capsule is
+  the thing running the job, whose own daemon socket the job holds by
+  design. When deregistering the runner is refused because the provider
+  still considers it busy with the job, that is a party which did not
+  run the job saying it was handed over, and the attempt settles as
+  started rather than returning to the queue on the capsule's word.
 - **One rule decides what becomes of an attempt.** The two paths that end
   a serving — the finalizing transaction and the sweep that finds a lease
   nobody is driving — reach the same decision through the same function,

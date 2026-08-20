@@ -99,6 +99,10 @@ func (nullProvider) OpenSession(context.Context, int, string) (*githubactions.Se
 type fakeRegistry struct {
 	nullProvider
 	jitErr error
+	// removeErr is what the provider answers when asked to deregister
+	// the runner, which is the one question in this machine put to a
+	// party that did not run the job.
+	removeErr error
 }
 
 func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (githubactions.JITConfig, error) {
@@ -108,7 +112,7 @@ func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (
 	return githubactions.JITConfig{RunnerID: 5, RunnerName: "fake", Encoded: "fake-jit"}, nil
 }
 
-func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return nil }
+func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return f.removeErr }
 
 type fakeWaiter struct {
 	exit    int64
@@ -174,6 +178,16 @@ func TestStartFaultMatrix(t *testing.T) {
 			name: "start error, runtime proven inert",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
 			want: store.AttemptReady,
+		},
+		{
+			// The capsule says the runner never started; the provider
+			// says it is busy with the job. One of those two parties did
+			// not run the job, and it is not the capsule -- so requeueing
+			// on the capsule's word is how the same job runs twice.
+			name: "start error, runtime proven inert, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptSettled, wantRes: assignment.ResolutionStartedObserved,
 		},
 		{
 			// Start errored but the container ran and exited: the error

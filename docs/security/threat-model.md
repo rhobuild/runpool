@@ -98,6 +98,17 @@ These are consequences of the design, not oversights:
   socket. Nothing inside the container — read-only root, dropped
   capabilities, no shell — changes that; they raise the cost of using a
   foothold, not of having one.
+- **The capsule's control surface is not a boundary against its own
+  job.** The runner holds the inner daemon's socket, which is what a CI
+  job needs, and a container started through it runs as real root with
+  no user namespace remapping — so it can bind mount the control
+  directory and write the file the supervisor reports its state through.
+  Hardening that path inside the capsule raises the effort and does not
+  close it: the same socket reaches PID 1's namespaces. What the
+  controller does instead is not settle the decision that could run a
+  job twice on the capsule's own account: when the provider says it
+  still holds the runner busy with the job, that outranks what the
+  capsule said, and the provider is not a party the job can be.
 - **A privileged dind is not a VM.** A kernel escape from inside a
   capsule reaches the host. Runpool's isolation is namespace and
   policy, not hardware. On `shared-daemon`, the operator explicitly accepts
