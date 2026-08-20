@@ -27,6 +27,18 @@ DELETE FROM broker_deliveries;
 -- name: PurgeGitHubBindingMetadata :exec
 DELETE FROM github_actions_binding_metadata;
 
+-- Everything a binding owns goes before the binding. The contact row is
+-- written by the binding's own poll loop, so every instance that ever
+-- reached its provider has one, and the foreign key is enforced: leaving
+-- it behind fails the delete of its parent and aborts uninstall partway
+-- through, after the Docker objects are already gone.
+--
+-- Keep these comments ASCII. See the note further down about byte
+-- offsets.
+
+-- name: PurgeBindingContact :exec
+DELETE FROM provider_binding_contact;
+
 -- name: PurgeBindings :exec
 DELETE FROM provider_bindings;
 

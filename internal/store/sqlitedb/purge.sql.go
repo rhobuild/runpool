@@ -27,6 +27,24 @@ func (q *Queries) PurgeAttempts(ctx context.Context) error {
 	return err
 }
 
+const purgeBindingContact = `-- name: PurgeBindingContact :exec
+
+DELETE FROM provider_binding_contact
+`
+
+// Everything a binding owns goes before the binding. The contact row is
+// written by the binding's own poll loop, so every instance that ever
+// reached its provider has one, and the foreign key is enforced: leaving
+// it behind fails the delete of its parent and aborts uninstall partway
+// through, after the Docker objects are already gone.
+//
+// Keep these comments ASCII. See the note further down about byte
+// offsets.
+func (q *Queries) PurgeBindingContact(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, purgeBindingContact)
+	return err
+}
+
 const purgeBindings = `-- name: PurgeBindings :exec
 DELETE FROM provider_bindings
 `

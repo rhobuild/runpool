@@ -116,7 +116,7 @@ func openRaw(t *testing.T, dir string) *Store {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", dsn(filepath.Join(dir, DatabaseFile)))
+	db, err := sql.Open("sqlite", DSN(filepath.Join(dir, DatabaseFile)))
 	if err != nil {
 		t.Fatal(err)
 	}

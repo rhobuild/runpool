@@ -3,9 +3,12 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1857,5 +1860,144 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 		if !strings.Contains(joined, actor) {
 			t.Errorf("the record does not name %s: %v", actor, resolves)
 		}
+	}
+}
+
+// TestUninstallClearsABindingThatReachedItsProvider: uninstall runs once
+// and has to finish.
+//
+// The contact row is written by a binding's own poll loop, so every
+// instance that ever reached its provider has one. It is a child of
+// provider_bindings with the foreign key enforced, so leaving it behind
+// fails the delete of its parent and aborts the whole transaction. By
+// then the Docker objects are gone and the scale sets are deleted, and
+// the operator is left with a half-removed instance and a state database
+// no supported command will clear.
+func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		return tx.RecordProviderContact(binding, time.Now())
+	})
+
+	if err := s.Tx(t.Context(), func(tx *Tx) error { return tx.PurgeEverything() }); err != nil {
+		t.Fatalf("uninstall failed on a binding that had reached its provider: %v", err)
+	}
+	for _, table := range []string{"provider_binding_contact", "provider_bindings"} {
+		var n int
+		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d row(s) after uninstall", table, n)
+		}
+	}
+}
+
+// TestUninstallReachesEveryChildOfWhatItDeletes states the rule the case
+// above is one instance of.
+//
+// A table whose parent uninstall deletes must be deleted too, and first.
+// Neither half is optional: a child left behind fails its parent's
+// delete, and a child deleted after its parent never runs, because the
+// transaction has already aborted. Both are silent until an operator
+// runs uninstall on an instance that did some work, which is the one
+// moment when nothing can be retried.
+//
+// The relationships come from the database rather than from a list kept
+// by hand, so a table added later is covered without anyone remembering
+// to add it here.
+func TestUninstallReachesEveryChildOfWhatItDeletes(t *testing.T) {
+	s := newStore(t)
+
+	raw, err := os.ReadFile(filepath.Join("query", "purge.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := map[string]int{}
+	for _, m := range regexp.MustCompile(`(?m)^DELETE FROM (\w+);`).FindAllStringSubmatch(string(raw), -1) {
+		order[m[1]] = len(order)
+	}
+	if len(order) < 2 {
+		t.Fatalf("read %d deletes from query/purge.sql; the rule below would hold vacuously", len(order))
+	}
+
+	// Declaring a delete is not running one, and the rule below is about
+	// what uninstall does. Every query the file declares has to appear in
+	// the list PurgeEverything walks, or this test would be reasoning
+	// about statements nothing executes.
+	body, err := os.ReadFile("purge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range regexp.MustCompile(`(?m)^-- name: (\w+) :exec`).FindAllStringSubmatch(string(raw), -1) {
+		if !strings.Contains(string(body), "t.q."+m[1]+",") {
+			t.Errorf("query/purge.sql declares %s and PurgeEverything never runs it; "+
+				"the statement exists and the table it clears does not get cleared", m[1])
+		}
+	}
+
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	checked := 0
+	for _, child := range tables {
+		parents, err := s.db.Query("PRAGMA foreign_key_list(" + child + ")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var refers []string
+		for parents.Next() {
+			// The pragma's shape is fixed: id, seq, table, from, to,
+			// on_update, on_delete, match.
+			var id, seq int
+			var parent, from, to, onUpdate, onDelete, match sql.NullString
+			if err := parents.Scan(&id, &seq, &parent, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+				t.Fatal(err)
+			}
+			refers = append(refers, parent.String)
+		}
+		if err := parents.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := parents.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, parent := range refers {
+			parentAt, purged := order[parent]
+			if !purged {
+				continue // uninstall leaves the parent alone, so the child may stay too
+			}
+			checked++
+			childAt, ok := order[child]
+			switch {
+			case !ok:
+				t.Errorf("uninstall deletes %s but never deletes %s, which references it; "+
+					"the foreign key fails the delete and the whole uninstall aborts", parent, child)
+			case childAt > parentAt:
+				t.Errorf("uninstall deletes %s before %s, which references it; the parent's "+
+					"delete fails and nothing after it runs", parent, child)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no child of a purged table was found; the rule proved nothing")
 	}
 }

@@ -36,12 +36,18 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
-// dsn is the connection contract the durability suite in
+// DSN is the connection contract the durability suite in
 // test/contract/sqlite qualifies (see
 // docs/adrs/2026-08-11-sqlite-driver.md): WAL with synchronous=FULL so a
 // committed transition survives abrupt termination, enforced foreign
 // keys, immediate transactions, and a shared busy timeout.
-func dsn(path string) string {
+//
+// It is exported so that suite opens the same string this package does.
+// Qualifying a copy of it proves nothing about the product: every pragma
+// the suite asserts would still hold on its own connection after one was
+// dropped from here, which is the single change the suite exists to
+// refuse.
+func DSN(path string) string {
 	return "file:" + path +
 		"?_txlock=immediate" +
 		"&_pragma=journal_mode(wal)" +
@@ -160,7 +166,7 @@ func (s *Store) loadIdentityReadOnly() error {
 // smaller budget but no budget at all, reopening the unbounded retry the
 // counter exists to close.
 func Open(dir string, retryBudget int) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn(filepath.Join(dir, DatabaseFile)))
+	db, err := sql.Open("sqlite", DSN(filepath.Join(dir, DatabaseFile)))
 	if err != nil {
 		return nil, err
 	}
