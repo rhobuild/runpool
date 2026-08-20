@@ -436,10 +436,10 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error 
 // already carries what makes the write distinct — a lease id, a delivery
 // id — or where the thing can only happen once.
 //
-// One such event per transaction. The count that forms the key is read
-// inside the transaction, so two of the same kind in one would collide
-// and the second would be dropped; every caller here writes one, as the
-// terminal act of a disposition.
+// It carries no conflict clause, unlike RecordEvent, because it has no
+// reachable conflict to absorb — the query says why. A duplicate it
+// cannot construct would be an error rather than a silent drop, which is
+// the right answer for an append-only log.
 func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind string, detail map[string]string) error {
 	encoded, err := json.Marshal(detail)
 	if err != nil {

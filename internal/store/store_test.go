@@ -1817,8 +1817,11 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 			return tx.ResolveReviewToReady(id, why, actor)
 		})
 	}
+	// Distinct reasons as well as distinct actors, so the hold half of
+	// this proves the second hold was recorded rather than merely that
+	// two rows exist.
 	cycle(ReviewReasonStartOutcomeUnknown, "alice", "the runner never picked it up")
-	cycle(ReviewReasonStartOutcomeUnknown, "bob", "the daemon was replaced mid-flight")
+	cycle(ReviewReasonRetryBudgetExhausted, "bob", "the daemon was replaced mid-flight")
 
 	var events []Event
 	inTx(t, s, func(tx *Tx) error {
@@ -1838,6 +1841,12 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 	}
 	if len(holds) != 2 {
 		t.Errorf("%d hold(s) recorded for two reviews: %v", len(holds), holds)
+	}
+	held := strings.Join(holds, " ")
+	for _, reason := range []string{ReviewReasonStartOutcomeUnknown, ReviewReasonRetryBudgetExhausted} {
+		if !strings.Contains(held, reason) {
+			t.Errorf("the record does not carry the hold for %s: %v", reason, holds)
+		}
 	}
 	if len(resolves) != 2 {
 		t.Fatalf("%d resolution(s) recorded for two decisions: %v", len(resolves), resolves)

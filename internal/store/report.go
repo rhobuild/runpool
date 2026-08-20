@@ -271,9 +271,9 @@ func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, err
 // engine has no slice parameter, and the values are always ids the
 // caller already holds, never input.
 //
-// One copy, because three grew: two of them spelled it inline and one of
-// those named its local after this function, shadowing it in the file
-// that also calls it.
+// One copy, because three grew: two spelled it inline, and both named
+// their local after this function — in files that never called it, so
+// nothing broke and nothing said anything.
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
