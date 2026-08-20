@@ -270,6 +270,10 @@ func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, err
 // placeholders builds the `?,?,?` list a set read needs. sqlc's sqlite
 // engine has no slice parameter, and the values are always ids the
 // caller already holds, never input.
+//
+// One copy, because three grew: two spelled it inline, and both named
+// their local after this function — in files that never called it, so
+// nothing broke and nothing said anything.
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
