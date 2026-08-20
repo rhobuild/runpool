@@ -730,3 +730,44 @@ func TestEnumeratingGatewaysIsBounded(t *testing.T) {
 		})
 	}
 }
+
+// TestARefreshGivesUpWhenItsCallerIsDone: waiting to refresh has to be
+// abandonable, because the wait is on work that outlives the caller.
+//
+// A launch holds the refresh while it discovers the daemon and reloads
+// every gateway, on a context deliberately derived from no parent so its
+// cleanup still runs after a shutdown begins. The pass that maintains
+// the policy is a serve loop, and shutdown waits for the serve loops
+// without a bound — the budget is a claim about what they cost, not a
+// timer. Parked on a lock, that loop does not stop when its context is
+// cancelled: it stops when a launch it cannot see finishes, and past the
+// deployment's grace period the difference is a SIGKILL, which leaves
+// every message session open for the next start to wait out.
+func TestARefreshGivesUpWhenItsCallerIsDone(t *testing.T) {
+	n := newTestSandbox(t, &fakeSandboxDaemon{}, &capsule.Sandbox{})
+
+	// Stand in for the launch that is holding it.
+	n.state.refreshing <- struct{}{}
+	defer func() { <-n.state.refreshing }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	gaveUp := make(chan error, 1)
+	go func() { gaveUp <- n.refresh(ctx) }()
+
+	select {
+	case err := <-gaveUp:
+		t.Fatalf("the refresh did not wait for the one in flight: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-gaveUp:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("gave up with %v; want the caller's own cancellation", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the refresh never gave up; shutdown waits on a launch it cannot see, " +
+			"and the grace period ends in a kill with every session still open")
+	}
+}

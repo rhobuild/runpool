@@ -104,7 +104,10 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		s.resolveInterrupted(ctx, b, lease, runner, hasRunner)
 	}
 
-	return s.sweepOrphans(ctx, adopted)
+	// Nothing else runs yet at this point, so the set cannot move under
+	// the enumeration; it is passed as a reader so one sweep serves both
+	// callers.
+	return s.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) { return adopted, nil })
 }
 
 // reportAdoption says when a restart has left the instance holding more
@@ -332,7 +335,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 // released, and retention refuses a lease that still owns an intent —
 // deliberately, so the leak stays visible in `status` rather than being
 // quietly forgotten.
-func (s *Controller) sweepOrphans(ctx context.Context, keep map[assignment.LeaseID]bool) error {
+func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[assignment.LeaseID]bool, error)) error {
 	wedged := 0
 	fail := func(kind, name string, err error) {
 		wedged++
@@ -340,10 +343,32 @@ func (s *Controller) sweepOrphans(ctx context.Context, keep map[assignment.Lease
 			"kind", kind, "id", name, "error", err)
 	}
 
+	// The daemon is enumerated before the live set is read, and all of it
+	// before any of it is judged. An object exists only after the lease
+	// that owns it committed, so an object seen now whose lease is absent
+	// in the later read is genuinely ownerless. Read the other way round,
+	// every lease that commits between the two reads owns objects the
+	// sweep cannot account for: it force-removes a capsule whose job is
+	// running and deletes the records that would have cleaned up after
+	// it. Cache lane collection states the same order for the same
+	// reason.
 	containers, err := s.objects.ListOwnedContainers(ctx, s.store.InstanceID())
 	if err != nil {
 		return err
 	}
+	networks, err := s.objects.ListOwnedNetworks(ctx, s.store.InstanceID())
+	if err != nil {
+		return err
+	}
+	volumes, err := s.objects.ListOwnedVolumes(ctx, s.store.InstanceID())
+	if err != nil {
+		return err
+	}
+	keep, err := liveLeases()
+	if err != nil {
+		return err
+	}
+
 	for _, c := range containers {
 		if keep[c.LeaseID] {
 			continue
@@ -364,10 +389,6 @@ func (s *Controller) sweepOrphans(ctx context.Context, keep map[assignment.Lease
 			return err
 		}
 	}
-	networks, err := s.objects.ListOwnedNetworks(ctx, s.store.InstanceID())
-	if err != nil {
-		return err
-	}
 	for _, n := range networks {
 		if keep[n.LeaseID] {
 			continue
@@ -382,10 +403,6 @@ func (s *Controller) sweepOrphans(ctx context.Context, keep map[assignment.Lease
 		if err := s.leases.ForgetResource(ctx, n.LeaseID, n.ID); err != nil {
 			return err
 		}
-	}
-	volumes, err := s.objects.ListOwnedVolumes(ctx, s.store.InstanceID())
-	if err != nil {
-		return err
 	}
 	for _, v := range volumes {
 		if keep[v.LeaseID] {
@@ -482,20 +499,21 @@ func (s *Controller) prunePeriodically(ctx context.Context) {
 // What is left is a genuine orphan — an object whose lease is released or
 // gone entirely.
 func (s *Controller) sweepPeriodically(ctx context.Context) {
-	var live []store.Lease
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		live, err = tx.LeasesInStates(store.LiveLeaseStates...)
-		return err
+	if err := s.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) {
+		var live []store.Lease
+		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+			var err error
+			live, err = tx.LeasesInStates(store.LiveLeaseStates...)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+		keep := make(map[assignment.LeaseID]bool, len(live))
+		for _, lease := range live {
+			keep[lease.ID] = true
+		}
+		return keep, nil
 	}); err != nil {
-		s.log.Error("periodic sweep cannot list live leases", "error", err)
-		return
-	}
-	keep := make(map[assignment.LeaseID]bool, len(live))
-	for _, lease := range live {
-		keep[lease.ID] = true
-	}
-	if err := s.sweepOrphans(ctx, keep); err != nil {
 		s.log.Error("periodic sweep failed", "error", err)
 	}
 }

@@ -50,17 +50,26 @@ type sandboxDaemon interface {
 
 // sandboxState owns the current restricted-network snapshot. Capsule
 // launches receive deep copies, so a rediscovery cannot mutate policy while
-// a concurrent launch is serializing it. refreshMu also serializes the
+// a concurrent launch is serializing it. refreshing also serializes the
 // external discovery/reload operation: policy changes must be applied in the
 // same order in which they are observed.
+//
+// It is a channel rather than a mutex because waiting for it has to be
+// abandonable. A launch holds it for as long as a discovery and a
+// gateway fan-out take, on a context that deliberately outlives the
+// serve loop so cleanup can still run; a mutex would park the shutdown
+// pass on that launch with no way to give up, and the wait for the serve
+// loops is unbounded by design. Past the grace period that is a SIGKILL,
+// which leaves every message session open for the next start to wait out
+// as a conflict.
 type sandboxState struct {
-	mu        sync.RWMutex
-	refreshMu sync.Mutex
-	current   *capsule.Sandbox
+	mu         sync.RWMutex
+	refreshing chan struct{}
+	current    *capsule.Sandbox
 }
 
 func newSandboxState(initial *capsule.Sandbox) *sandboxState {
-	return &sandboxState{current: cloneSandbox(initial)}
+	return &sandboxState{current: cloneSandbox(initial), refreshing: make(chan struct{}, 1)}
 }
 
 func (s *sandboxState) snapshot() *capsule.Sandbox {
@@ -328,8 +337,16 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 }
 
 func (n *networkSandbox) refresh(ctx context.Context) error {
-	n.state.refreshMu.Lock()
-	defer n.state.refreshMu.Unlock()
+	select {
+	case n.state.refreshing <- struct{}{}:
+	case <-ctx.Done():
+		// Whoever holds it is a launch, running on a context of its own,
+		// and it will finish in its own time. This caller's context is
+		// what says the wait is over.
+		return ctx.Err()
+	}
+	defer func() { <-n.state.refreshing }()
+
 	next, err := n.build(ctx, sandboxRefreshBudget)
 	if err != nil {
 		return err
@@ -410,14 +427,15 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 
 // gatewayFanout is how many gateway control commands run at once.
 //
-// A refresh pass holds the refresh lock, and every launch waits on that
-// lock with a plain mutex that takes no context and cannot be given up.
-// So the pass's duration is a launch's worst-case wait — and walking the
+// A refresh pass holds the refresh slot and every launch waits for it, so
+// the pass's duration is a launch's worst-case wait — and walking the
 // gateways one at a time made that duration the number of gateways times
 // the exec bound. There is one gateway per running capsule, so it grew
 // with exactly the parallelism the host was configured for: at
 // thirty-two in flight, sixteen minutes with every launch stopped, for
-// one policy change.
+// one policy change. A launch waiting on its own context can give that
+// wait up; a launch that still needs the policy cannot, which is why the
+// duration is bounded here rather than only survivable.
 //
 // Bounded rather than unbounded. These are execs into containers on a
 // single daemon, and a pass that opens one per capsule trades a slow
