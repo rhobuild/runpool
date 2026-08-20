@@ -771,3 +771,44 @@ func TestARefreshGivesUpWhenItsCallerIsDone(t *testing.T) {
 			"and the grace period ends in a kill with every session still open")
 	}
 }
+
+// TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency: a pass that
+// is being stopped is not a pass that failed.
+//
+// A discovery that cannot say what is installed closes every gateway,
+// and says so at error level, because a capsule may be reaching
+// something the policy now denies. On the way down neither half holds.
+// Against a real daemon the attempt cannot even be made — the context it
+// would travel on is already done — so all that is left is an error line
+// announcing that every gateway was cut, on every ordinary shutdown that
+// lands inside a rediscovery, for something that provably did not
+// happen. The watch loop waits for the refresh slot for much of its
+// life, so that is not a rare landing.
+//
+// What is asserted here is therefore that the pass does not try. The
+// daemon answers, so a pass that reached it would close and remove the
+// gateway, and the announcement would be the one thing about the whole
+// sequence that was true.
+func TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency(t *testing.T) {
+	// A gateway to close, so "nothing was closed" is an observation
+	// rather than an empty daemon answering emptily.
+	daemon := &fakeSandboxDaemon{
+		containers: []docker.OwnedContainer{{ID: "gw-1", Role: capsule.RoleGateway, LeaseID: "lse-1", Running: true}},
+	}
+	n := newTestSandbox(t, daemon, &capsule.Sandbox{})
+
+	// Held by a launch, which is what leaves the pass waiting.
+	n.state.refreshing <- struct{}{}
+	defer func() { <-n.state.refreshing }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	n.rediscover(ctx)
+
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if len(daemon.events) != 0 || len(daemon.removed) != 0 {
+		t.Errorf("a stopped rediscovery reached the daemon: %v, removed %v",
+			daemon.events, daemon.removed)
+	}
+}

@@ -95,11 +95,23 @@ func TestALeaseCommittedDuringTheSweepKeepsItsObjects(t *testing.T) {
 	h.objects.containers = []docker.OwnedContainer{
 		{ID: "runner-committing", Role: "capsule", LeaseID: "lse-committing", Running: true},
 	}
-	committed := false
-	h.objects.onList = func() { committed = true }
+	h.objects.networks = []docker.OwnedResource{
+		{ID: "net-committing", Role: "capsule-net", LeaseID: "lse-committing"},
+	}
+	h.objects.volumes = []docker.OwnedResource{
+		{ID: "vol-committing", Role: "dind-data", LeaseID: "lse-committing"},
+	}
+
+	// The lease is visible only once every kind has been listed, so a
+	// read that runs after the containers but before the volumes is as
+	// much a failure as one that runs first: an object listed after the
+	// read is an object the read could not account for, whichever kind
+	// it is.
+	listed := 0
+	h.objects.onList = func() { listed++ }
 
 	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
-		if !committed {
+		if listed < 3 {
 			return nil, nil
 		}
 		return map[assignment.LeaseID]bool{"lse-committing": true}, nil
@@ -107,7 +119,7 @@ func TestALeaseCommittedDuringTheSweepKeepsItsObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(h.objects.removed) != 0 {
-		t.Errorf("swept %v; the lease committed before its container was listed, so the sweep "+
+		t.Errorf("swept %v; the lease committed before every kind had been listed, so the sweep "+
 			"tore down a capsule whose job is running and deleted the records that clean up after it",
 			h.objects.removed)
 	}

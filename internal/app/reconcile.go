@@ -307,7 +307,10 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 // object stranded by a crash between creation and recording — in
 // dependency order: containers, then networks, then volumes.
 //
-// Three kinds of failure, three answers.
+// Four kinds of failure, four answers. Reading which leases are live is
+// one of them, and it is fatal for the same reason an unreadable
+// inventory is: a pass that cannot say what is in use has proved nothing
+// about what is garbage.
 //
 // One object that will not die does not stop the controller. A single
 // wedged container — a dind in uninterruptible sleep, a volume held by a
@@ -506,7 +509,9 @@ func (s *Controller) sweepPeriodically(ctx context.Context) {
 			live, err = tx.LeasesInStates(store.LiveLeaseStates...)
 			return err
 		}); err != nil {
-			return nil, err
+			// Named, because the caller now has one message for every
+			// fatal cause and two of them are store failures.
+			return nil, fmt.Errorf("list live leases: %w", err)
 		}
 		keep := make(map[assignment.LeaseID]bool, len(live))
 		for _, lease := range live {
