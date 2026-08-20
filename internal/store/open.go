@@ -42,11 +42,15 @@ import (
 // committed transition survives abrupt termination, enforced foreign
 // keys, immediate transactions, and a shared busy timeout.
 //
-// It is exported so that suite opens the same string this package does.
-// Qualifying a copy of it proves nothing about the product: every pragma
-// the suite asserts would still hold on its own connection after one was
+// It is exported so that the suite opens the same string this package
+// does. Qualifying a copy of it proves nothing about the product: every
+// pragma the suite asserts would still hold on the copy after one was
 // dropped from here, which is the single change the suite exists to
 // refuse.
+//
+// It is not a way to open the store. Open is, and what it adds is not
+// optional: the single writer connection, the directory lock, and the
+// migrations. A connection made from this string alone has none of them.
 func DSN(path string) string {
 	return "file:" + path +
 		"?_txlock=immediate" +

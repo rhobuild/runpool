@@ -37,9 +37,6 @@ DELETE FROM provider_binding_contact
 // reached its provider has one, and the foreign key is enforced: leaving
 // it behind fails the delete of its parent and aborts uninstall partway
 // through, after the Docker objects are already gone.
-//
-// Keep these comments ASCII. See the note further down about byte
-// offsets.
 func (q *Queries) PurgeBindingContact(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, purgeBindingContact)
 	return err

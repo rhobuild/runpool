@@ -325,7 +325,9 @@ by its public and operational effects.
 - Install, backup, restore, upgrade and uninstall are **executed** by
   the lifecycle drills, not merely documented.
 - **Uninstall clears the whole machine, including what an instance
-  learned about its provider.** It runs once, after the containers and
+  recorded about reaching its provider** — a success and a failure write
+  the same row, so this is every instance that ever ran. It runs once,
+  after the containers and
   the scale sets are already gone, so a row left behind is not a
   cosmetic leftover: a child table its foreign key still points at fails
   the delete of its parent and aborts the rest, leaving a half-removed

@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1894,6 +1897,83 @@ func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
 	}
 }
 
+// executedPurgeOrder reads the sequence PurgeEverything actually runs and
+// pairs each step with the table it clears.
+//
+// The order comes from the slice literal the function walks, parsed from
+// the source, because that is what executes. Reading it from the query
+// file instead would check the order of a declaration: the two are
+// independent, and a step moved in the Go code alone would leave every
+// assertion below passing while uninstall aborts. Parsing also means a
+// step that has been commented out is a step that is not there, where
+// searching the text for its name would still find it.
+//
+// The query file supplies only the table each name clears. A name whose
+// table cannot be read is a failure rather than a skip, since a step
+// silently dropped here would take its whole subtree of foreign keys out
+// of the rule with it.
+func executedPurgeOrder(t *testing.T) map[string]int {
+	t.Helper()
+
+	body, err := parser.ParseFile(token.NewFileSet(), "purge.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, el := range lit.Elts {
+			if sel, ok := el.(*ast.SelectorExpr); ok {
+				steps = append(steps, sel.Sel.Name)
+			}
+		}
+		return true
+	})
+	if len(steps) < 2 {
+		t.Fatalf("read %d steps out of PurgeEverything; the rule below would hold vacuously", len(steps))
+	}
+
+	raw, err := os.ReadFile(filepath.Join("query", "purge.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Split on the name markers so a delete is read as belonging to the
+	// query above it, whatever comments or whitespace sit in between.
+	deletes := map[string]string{}
+	chunks := regexp.MustCompile(`(?m)^-- name: (\w+) :exec\b`).FindAllStringSubmatchIndex(string(raw), -1)
+	for i, at := range chunks {
+		end := len(raw)
+		if i+1 < len(chunks) {
+			end = chunks[i+1][0]
+		}
+		name := string(raw[at[2]:at[3]])
+		if m := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+"?(\w+)"?`).FindStringSubmatch(string(raw[at[1]:end])); m != nil {
+			deletes[name] = m[1]
+		}
+	}
+
+	order := map[string]int{}
+	for _, name := range steps {
+		table, ok := deletes[name]
+		if !ok {
+			t.Errorf("PurgeEverything runs %s and query/purge.sql does not show it deleting from any "+
+				"table; every child of whatever it clears is outside the rule below", name)
+			continue
+		}
+		order[table] = len(order)
+	}
+	for name := range deletes {
+		if !slices.Contains(steps, name) {
+			t.Errorf("query/purge.sql declares %s and PurgeEverything never runs it; the statement "+
+				"exists and the table it clears does not get cleared", name)
+		}
+	}
+	return order
+}
+
 // TestUninstallReachesEveryChildOfWhatItDeletes states the rule the case
 // above is one instance of.
 //
@@ -1909,78 +1989,11 @@ func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
 // to add it here.
 func TestUninstallReachesEveryChildOfWhatItDeletes(t *testing.T) {
 	s := newStore(t)
-
-	raw, err := os.ReadFile(filepath.Join("query", "purge.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	order := map[string]int{}
-	for _, m := range regexp.MustCompile(`(?m)^DELETE FROM (\w+);`).FindAllStringSubmatch(string(raw), -1) {
-		order[m[1]] = len(order)
-	}
-	if len(order) < 2 {
-		t.Fatalf("read %d deletes from query/purge.sql; the rule below would hold vacuously", len(order))
-	}
-
-	// Declaring a delete is not running one, and the rule below is about
-	// what uninstall does. Every query the file declares has to appear in
-	// the list PurgeEverything walks, or this test would be reasoning
-	// about statements nothing executes.
-	body, err := os.ReadFile("purge.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range regexp.MustCompile(`(?m)^-- name: (\w+) :exec`).FindAllStringSubmatch(string(raw), -1) {
-		if !strings.Contains(string(body), "t.q."+m[1]+",") {
-			t.Errorf("query/purge.sql declares %s and PurgeEverything never runs it; "+
-				"the statement exists and the table it clears does not get cleared", m[1])
-		}
-	}
-
-	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		tables = append(tables, name)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
+	order := executedPurgeOrder(t)
 
 	checked := 0
-	for _, child := range tables {
-		parents, err := s.db.Query("PRAGMA foreign_key_list(" + child + ")")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var refers []string
-		for parents.Next() {
-			// The pragma's shape is fixed: id, seq, table, from, to,
-			// on_update, on_delete, match.
-			var id, seq int
-			var parent, from, to, onUpdate, onDelete, match sql.NullString
-			if err := parents.Scan(&id, &seq, &parent, &from, &to, &onUpdate, &onDelete, &match); err != nil {
-				t.Fatal(err)
-			}
-			refers = append(refers, parent.String)
-		}
-		if err := parents.Err(); err != nil {
-			t.Fatal(err)
-		}
-		if err := parents.Close(); err != nil {
-			t.Fatal(err)
-		}
-
-		for _, parent := range refers {
+	for child, parents := range foreignKeys(t, s) {
+		for _, parent := range parents {
 			parentAt, purged := order[parent]
 			if !purged {
 				continue // uninstall leaves the parent alone, so the child may stay too
@@ -1999,5 +2012,119 @@ func TestUninstallReachesEveryChildOfWhatItDeletes(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no child of a purged table was found; the rule proved nothing")
+	}
+}
+
+// TestForgettingABindingReachesEveryChildOfIt: the startup pass that
+// drops bindings nobody claimed deletes the same parent uninstall does,
+// so it needs the same children — and it runs on every start rather than
+// once at the end of an instance's life.
+func TestForgettingABindingReachesEveryChildOfIt(t *testing.T) {
+	s := newStore(t)
+
+	// Two children are deliberately not cleared, because the pass cannot
+	// meet them: it selects only bindings with no deliveries, and a lease
+	// exists only for an attempt of a delivery. Naming them here rather
+	// than leaving them out is the point — a child that appears later and
+	// is neither cleared nor excluded for a stated reason fails this test,
+	// which is the moment someone has to decide which it is.
+	excluded := []string{"broker_deliveries", "capsule_leases"}
+
+	var children []string
+	for child, parents := range foreignKeys(t, s) {
+		if slices.Contains(parents, "provider_bindings") {
+			children = append(children, child)
+		}
+	}
+	if len(children) == 0 {
+		t.Fatal("provider_bindings has no children in the schema; the rule proved nothing")
+	}
+	slices.Sort(children)
+
+	for _, child := range children {
+		switch {
+		case slices.Contains(bindingChildren, child) && slices.Contains(excluded, child):
+			t.Errorf("%s is both cleared and excluded; one of the two is wrong", child)
+		case slices.Contains(bindingChildren, child), slices.Contains(excluded, child):
+		default:
+			t.Errorf("%s references provider_bindings and is neither cleared before a binding is "+
+				"forgotten nor excluded for a reason; if the pass can meet a row of it, the delete "+
+				"of the binding fails on every controller start", child)
+		}
+	}
+	for _, cleared := range bindingChildren {
+		if !slices.Contains(children, cleared) {
+			t.Errorf("a binding is forgotten by clearing %s, which does not reference "+
+				"provider_bindings; the statement deletes rows nothing required it to", cleared)
+		}
+	}
+}
+
+// foreignKeys maps each table to the tables it references, read from the
+// database so a table added later is covered without being named here.
+func foreignKeys(t *testing.T, s *Store) map[string][]string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// Closed before the pragma below: the pool is one connection, so a
+	// second query while these rows are open would deadlock.
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	graph := map[string][]string{}
+	for _, child := range tables {
+		parents, err := s.db.Query("PRAGMA foreign_key_list(" + child + ")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for parents.Next() {
+			// The pragma's shape is fixed: id, seq, table, from, to,
+			// on_update, on_delete, match.
+			var id, seq int
+			var parent, from, to, onUpdate, onDelete, match sql.NullString
+			if err := parents.Scan(&id, &seq, &parent, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+				t.Fatal(err)
+			}
+			graph[child] = append(graph[child], parent.String)
+		}
+		if err := parents.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := parents.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return graph
+}
+
+// TestTheConnectionStringStillAsksForFullSynchronous: the durability
+// suite cannot see this one.
+//
+// It reads PRAGMA synchronous from a live connection, and the pinned
+// driver already answers 2 with no pragma set at all, so deleting the
+// pragma passes every assertion there. Setting it to something else does
+// fail, which is the case the suite does cover. What it cannot cover is
+// the pragma quietly going away and the guarantee then resting on a
+// driver default that a later version is free to change. So the string
+// itself is what states it here.
+func TestTheConnectionStringStillAsksForFullSynchronous(t *testing.T) {
+	if got := DSN("/state/runpool.db"); !strings.Contains(got, "_pragma=synchronous(full)") {
+		t.Errorf("the connection string no longer asks for synchronous=FULL: %s\n"+
+			"A committed lease transition would survive a crash only for as long as the "+
+			"driver keeps defaulting to it, and no suite would notice the change.", got)
 	}
 }

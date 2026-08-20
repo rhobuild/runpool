@@ -32,9 +32,6 @@ DELETE FROM github_actions_binding_metadata;
 -- reached its provider has one, and the foreign key is enforced: leaving
 -- it behind fails the delete of its parent and aborts uninstall partway
 -- through, after the Docker objects are already gone.
---
--- Keep these comments ASCII. See the note further down about byte
--- offsets.
 
 -- name: PurgeBindingContact :exec
 DELETE FROM provider_binding_contact;
