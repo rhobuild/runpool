@@ -299,9 +299,19 @@ func TestNetworkCIDRValidation(t *testing.T) {
 		"everything":                  {allow: "0.0.0.0/0", wantErr: true},
 		"swallows a whole deny range": {allow: "10.0.0.0/7", wantErr: true},
 		"swallows link-local":         {allow: "169.254.0.0/15", wantErr: true},
-		"ipv6 allow":                  {allow: "fd00::/8", wantErr: true},
-		"ipv4 deny is fine":           {deny: "203.0.113.0/24"},
-		"ipv6 deny":                   {deny: "fd00::/8", wantErr: true},
+		// Exactly the withheld range is not broader than anything, so the
+		// rule above lets it through: link-local carries its own, and it
+		// has to be checked here as well as on the policy, because this
+		// is the file an operator edits.
+		"the whole of link-local": {allow: "169.254.0.0/16", wantErr: true},
+		"half of link-local":      {allow: "169.254.0.0/17", wantErr: true},
+		"ipv6 allow":              {allow: "fd00::/8", wantErr: true},
+		// The v4-in-v6 form unmaps to IPv4 and then matches no address at
+		// decision time, while rendering into the ruleset verbatim.
+		"mapped v4 allow":   {allow: "::ffff:198.18.5.0/120", wantErr: true},
+		"mapped v4 deny":    {deny: "::ffff:198.18.5.0/120", wantErr: true},
+		"ipv4 deny is fine": {deny: "203.0.113.0/24"},
+		"ipv6 deny":         {deny: "fd00::/8", wantErr: true},
 	} {
 		cfg := validConfig()
 		if tc.allow != "" {
