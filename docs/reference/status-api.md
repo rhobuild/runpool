@@ -62,6 +62,7 @@ absent state, because the attempt it was asked about cannot exist.
 | `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id` |
 | `discrepancies` | array or null | Where the books and the daemon disagree; `null` if the daemon could not be asked |
 | `docker_error` | string, optional | Why the daemon could not be asked |
+| `capsule_image_error` | string, optional | Why the capsule image could not be resolved. Present means the `capsule_image` on every tier is what this build ships, not what a launch would run |
 
 Each binding reports what its own loop last managed with its provider:
 `last_contact_at` when a provider call last succeeded, and `last_error`
@@ -111,10 +112,16 @@ whose length is what the document reports and not what exists.
 
 The document is provider neutral, and deliberately so: a consumer that
 parses `source_binding_key` is reading the wrong document. It is the
-provider's own identity, versioned and opaque here; for a GitHub Actions
-binding it reads as scope, URL, runner group and scale set name, which
-is enough to tell two bindings apart without knowing what any of it
-means.
+binding's own identity, versioned and opaque here; for a GitHub Actions
+binding it is built from the configured target id, the runner group and
+the scale set name, which is enough to tell two bindings apart without
+knowing what any of it means.
+
+One consequence an operator needs, because it is not visible from the
+key: renaming a `targets[].id` in configuration produces a different
+binding. The new key has no row, so a new one is written and the old row
+is left behind holding the scale set id that was registered under it. It
+is a rename of the binding, not of a label on it.
 
 Lease states are `reserved`, `provisioning`, `runtime_registered`,
 `workload_running`, `draining`, `cleaning`, `released`, `failed`,
