@@ -580,10 +580,11 @@ func providerContactFromRow(bindingID, contactMs int64, lastError string, errorM
 // delete, which the foreign key then refuses, so every one of them has
 // to go first.
 //
-// It is one declaration because two paths delete a binding and both need
-// the same list: the startup pass that forgets unclaimed bindings, and
-// uninstall. A table added later that names provider_bindings has to be
-// added here, or excluded with a reason.
+// It is named rather than written inline so there is one place to state
+// it and one place to check it against the schema. Uninstall clears the
+// same parent through its own sequence, which is wider: it runs when
+// nothing is left, so it takes the deliveries and leases this pass is
+// defined never to meet.
 var bindingChildren = []string{"github_actions_binding_metadata", "provider_binding_contact"}
 
 // ForgetUnclaimedBindings removes the binding rows configuration no

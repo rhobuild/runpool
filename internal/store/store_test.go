@@ -1915,23 +1915,37 @@ func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
 func executedPurgeOrder(t *testing.T) map[string]int {
 	t.Helper()
 
-	body, err := parser.ParseFile(token.NewFileSet(), "purge.go", nil, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), "purge.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var steps []string
-	ast.Inspect(body, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "PurgeEverything" {
+			continue
 		}
-		for _, el := range lit.Elts {
-			if sel, ok := el.(*ast.SelectorExpr); ok {
-				steps = append(steps, sel.Sel.Name)
+		// Scoped to this function, and to selectors on its query set. A
+		// walk of the whole file would collect any other slice of
+		// selectors as though it were part of the sequence, and one more
+		// mention of a step is enough to move it past its own child.
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
 			}
-		}
-		return true
-	})
+			for _, el := range lit.Elts {
+				sel, ok := el.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if on, ok := sel.X.(*ast.SelectorExpr); ok && on.Sel.Name == "q" {
+					steps = append(steps, sel.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
 	if len(steps) < 2 {
 		t.Fatalf("read %d steps out of PurgeEverything; the rule below would hold vacuously", len(steps))
 	}
@@ -1943,27 +1957,50 @@ func executedPurgeOrder(t *testing.T) map[string]int {
 	// Split on the name markers so a delete is read as belonging to the
 	// query above it, whatever comments or whitespace sit in between.
 	deletes := map[string]string{}
-	chunks := regexp.MustCompile(`(?m)^-- name: (\w+) :exec\b`).FindAllStringSubmatchIndex(string(raw), -1)
+	marker := regexp.MustCompile(`(?m)^-- name: (\w+) :exec\b`)
+	deleted := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+"?(\w+)"?`)
+	chunks := marker.FindAllStringSubmatchIndex(string(raw), -1)
 	for i, at := range chunks {
 		end := len(raw)
 		if i+1 < len(chunks) {
 			end = chunks[i+1][0]
 		}
-		name := string(raw[at[2]:at[3]])
-		if m := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+"?(\w+)"?`).FindStringSubmatch(string(raw[at[1]:end])); m != nil {
-			deletes[name] = m[1]
+		// Comment lines go first. This file explains itself at length,
+		// and a comment may legally sit between a name and its statement
+		// -- the generator turns one into the doc on what it emits -- so
+		// a scan that let a comment win would map a step to a table it
+		// does not clear and check the rule against that.
+		var stmt strings.Builder
+		for _, line := range strings.Split(string(raw[at[1]:end]), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+				stmt.WriteString(line)
+				stmt.WriteByte('\n')
+			}
+		}
+		if m := deleted.FindStringSubmatch(stmt.String()); m != nil {
+			deletes[string(raw[at[2]:at[3]])] = m[1]
 		}
 	}
 
+	// Position in the sequence, not a count of the tables seen. A table
+	// reached twice would otherwise take the later index, which is how a
+	// parent mentioned again ends up ranked after the child that has to
+	// precede it, with nothing to say so.
 	order := map[string]int{}
-	for _, name := range steps {
+	for i, name := range steps {
 		table, ok := deletes[name]
 		if !ok {
 			t.Errorf("PurgeEverything runs %s and query/purge.sql does not show it deleting from any "+
 				"table; every child of whatever it clears is outside the rule below", name)
 			continue
 		}
-		order[table] = len(order)
+		if at, twice := order[table]; twice {
+			t.Errorf("steps %d and %d both clear %s; which one the rule below is about is "+
+				"undecidable, and the later one outranks every child ordered against the earlier",
+				at, i, table)
+			continue
+		}
+		order[table] = i
 	}
 	for name := range deletes {
 		if !slices.Contains(steps, name) {
@@ -2022,12 +2059,23 @@ func TestUninstallReachesEveryChildOfWhatItDeletes(t *testing.T) {
 func TestForgettingABindingReachesEveryChildOfIt(t *testing.T) {
 	s := newStore(t)
 
-	// Two children are deliberately not cleared, because the pass cannot
-	// meet them: it selects only bindings with no deliveries, and a lease
-	// exists only for an attempt of a delivery. Naming them here rather
-	// than leaving them out is the point — a child that appears later and
-	// is neither cleared nor excluded for a stated reason fails this test,
-	// which is the moment someone has to decide which it is.
+	// Two children are deliberately not cleared. The pass selects only
+	// bindings with no deliveries, so broker_deliveries is excluded by
+	// its own query and needs no argument beyond that.
+	//
+	// capsule_leases is excluded on a narrower footing, worth stating
+	// because the schema does not hold it: a lease carries binding_id and
+	// attempt_id as two independent references, so a row naming a
+	// delivery-free binding is accepted, and the pass would then fail on
+	// every controller start. What keeps that from arising is the one
+	// call site — attempts are read for a binding and leased under that
+	// same binding — rather than a constraint. assignment_attempts, by
+	// contrast, carries a composite reference for exactly this reason.
+	//
+	// Naming both here rather than leaving them out is the point: a child
+	// that appears later and is neither cleared nor excluded for a stated
+	// reason fails this test, which is the moment someone has to decide
+	// which it is.
 	excluded := []string{"broker_deliveries", "capsule_leases"}
 
 	var children []string
@@ -2056,6 +2104,12 @@ func TestForgettingABindingReachesEveryChildOfIt(t *testing.T) {
 		if !slices.Contains(children, cleared) {
 			t.Errorf("a binding is forgotten by clearing %s, which does not reference "+
 				"provider_bindings; the statement deletes rows nothing required it to", cleared)
+		}
+	}
+	for _, skipped := range excluded {
+		if !slices.Contains(children, skipped) {
+			t.Errorf("%s is excused from being cleared and does not reference provider_bindings; "+
+				"the reason given above is about a table that is not in the way", skipped)
 		}
 	}
 }
