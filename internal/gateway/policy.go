@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,7 +53,7 @@ type PolicyStore struct {
 
 	mu      sync.Mutex
 	decider *egress.Decider
-	stamp   string
+	stamp   [sha256.Size]byte
 	// generation counts installed policies. A pooled HTTP connection was
 	// authorised by whichever policy was in force when it was dialled, and
 	// http.Transport reuses it without consulting the dialer again, so the
@@ -61,32 +62,34 @@ type PolicyStore struct {
 	generation uint64
 }
 
-// Current returns the compiled policy in force, reloading it if the
-// file changed since the last read.
+// Current returns the compiled policy in force, recompiling it when the
+// document's bytes have changed since the last read.
 //
-// The stat is inside the lock, with the read it decides. Outside it, two
-// readers crossing an install can stat different files and finish in the
-// other order, so the one that stat'd first stores what the other read
-// under the stamp of what it did not: the decider is never stale, since
-// the read is under the lock, but the stamp no longer describes it. The
-// next call then reloads a file that has not changed and advances the
-// generation for it, which retires the pooled transport and every idle
-// connection in it for nothing.
+// What counts as a change is the hash of the contents, not the pair of
+// modification time and size. Linux stamps mtime from the coarse clock,
+// which advances once per tick, so two documents of equal length
+// installed inside one tick carry the same pair — and the second install
+// would then never reach the relay at all: the decider would stay as it
+// was, the generation would not move, and the pooled transport would not
+// be retired either. A tightening would silently not take effect. The
+// document is a few kilobytes on tmpfs, so reading it every time costs
+// less than the case it rules out.
+//
+// The read is inside the lock, with the decision it feeds. Outside it,
+// two readers crossing an install can read different documents and
+// finish in the other order, so the one that read first would store what
+// the other read under the stamp of what it did not.
 func (s *PolicyStore) Current() (*egress.Decider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	info, err := os.Stat(s.Path)
-	if err != nil {
-		return nil, err
-	}
-	stamp := fmt.Sprintf("%d/%d", info.ModTime().UnixNano(), info.Size())
-	if s.decider != nil && s.stamp == stamp {
-		return s.decider, nil
-	}
 	raw, err := os.ReadFile(s.Path)
 	if err != nil {
 		return nil, err
+	}
+	stamp := sha256.Sum256(raw)
+	if s.decider != nil && s.stamp == stamp {
+		return s.decider, nil
 	}
 	policy, err := ParsePolicy(string(raw))
 	if err != nil {

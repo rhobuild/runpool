@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"os"
 	"strconv"
@@ -91,11 +92,34 @@ type Relay struct {
 	Policy *PolicyStore
 	Log    *slog.Logger
 
-	once      sync.Once
-	transport atomic.Pointer[http.Transport]
-	// policyGen is the policy generation the pooled connections were
-	// authorised under.
-	policyGen atomic.Uint64
+	pool atomic.Pointer[pool]
+
+	// pollInterval overrides how often a transfer already in flight
+	// re-checks its destination. Zero means tunnelPollInterval, which is
+	// what production runs; a test sets it so a revocation can be
+	// observed without waiting out the real interval.
+	pollInterval time.Duration
+}
+
+func (r *Relay) poll() time.Duration {
+	if r.pollInterval > 0 {
+		return r.pollInterval
+	}
+	return tunnelPollInterval
+}
+
+// pool is a connection pool together with the policy generation its
+// connections were authorised under.
+//
+// The two are one value because they are read as one. Held in separate
+// atomics, a caller that observed the new generation could still be
+// handed the pool that generation retired — it reads them in two steps,
+// and the install can land in between — so its request would travel on a
+// connection dialled under the policy that no longer applies, which the
+// kernel then accepts as established traffic.
+type pool struct {
+	gen       uint64
+	transport *http.Transport
 }
 
 // Listen starts the relay on the internal leg.
@@ -205,35 +229,44 @@ func (r *Relay) establishTunnel(w http.ResponseWriter, upstream net.Conn) {
 }
 
 // tunnelDestinationAllowed builds the check a running tunnel repeats
-// against the policy in force. It closes over the peer address the
-// tunnel is actually joined to rather than the name that was resolved:
-// a name can be made to resolve somewhere else between the dial and the
+// against the policy in force.
+func (r *Relay) tunnelDestinationAllowed(upstream net.Conn) func() bool {
+	remote := upstream.RemoteAddr().String()
+	return func() bool { return r.destinationAllowed(remote) }
+}
+
+// destinationAllowed reports whether the policy in force still allows a
+// destination that a transfer is already joined to. It reads the peer
+// address off the socket rather than the name that was resolved: a name
+// can be made to resolve somewhere else between the dial and the
 // re-check, and the address is what the policy decides about anyway.
+//
+// Both shapes the relay serves outlive the decision that authorised
+// them, so both repeat this one: a tunnel per poll interval, and a plain
+// HTTP transfer on the same period through stopOnRevocation.
 //
 // Anything it cannot answer is a denial. A policy that cannot be read is
 // not in force — the same rule dial applies — and an address that cannot
 // be parsed cannot be checked at all.
-func (r *Relay) tunnelDestinationAllowed(upstream net.Conn) func() bool {
-	peer, parseErr := netip.ParseAddrPort(upstream.RemoteAddr().String())
-	addr := peer.Addr().Unmap()
-	return func() bool {
-		if parseErr != nil {
-			r.Log.Warn("egress tunnel closed: peer address unreadable",
-				"peer", upstream.RemoteAddr().String(), "error", parseErr)
-			return false
-		}
-		policy, err := r.Policy.Current()
-		if err != nil {
-			r.Log.Warn("egress tunnel closed: policy unavailable",
-				"address", addr.String(), "error", err)
-			return false
-		}
-		if policy.Allowed(addr) {
-			return true
-		}
-		r.Log.Warn("egress tunnel closed: destination no longer allowed", "address", addr.String())
+func (r *Relay) destinationAllowed(remote string) bool {
+	peer, err := netip.ParseAddrPort(remote)
+	if err != nil {
+		r.Log.Warn("egress transfer stopped: peer address unreadable",
+			"peer", remote, "error", err)
 		return false
 	}
+	addr := peer.Addr().Unmap()
+	policy, err := r.Policy.Current()
+	if err != nil {
+		r.Log.Warn("egress transfer stopped: policy unavailable",
+			"address", addr.String(), "error", err)
+		return false
+	}
+	if policy.Allowed(addr) {
+		return true
+	}
+	r.Log.Warn("egress transfer stopped: destination no longer allowed", "address", addr.String())
+	return false
 }
 
 // closeWriter is the half-close a tunnel propagates. Every connection a
@@ -387,15 +420,12 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "runpool egress relay: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	outbound := req.Clone(req.Context())
+	outbound, stop := r.tracedRequest(req)
+	defer stop()
 	outbound.RequestURI = ""
 	stripHopByHop(outbound.Header)
 
-	// The check runs first and the transport is read after it: the check
-	// can replace the transport, and reading it beforehand sends this
-	// request through the pool that was just retired.
-	r.expireStaleConnections()
-	resp, err := r.roundTripper().RoundTrip(outbound)
+	resp, err := r.transportInForce().transport.RoundTrip(outbound)
 	if err != nil {
 		r.refuse(w, err)
 		return
@@ -411,7 +441,71 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// expireStaleConnections retires the pool once the policy moves.
+// tracedRequest clones a request onto a context that is cancelled as
+// soon as the destination it actually reaches stops being allowed.
+//
+// The trace is what makes the address knowable. The dial happens inside
+// the transport, so nothing here sees the connection until the transport
+// reports it, and the name the client asked for is not what the policy
+// decides about: it can be made to resolve elsewhere between the dial
+// and the re-check.
+//
+// The watch starts before the round trip rather than after it. A request
+// body the client streams is written during the round trip, so a body
+// that never ends is a round trip that never returns, and a watch hung
+// off its result would never start.
+func (r *Relay) tracedRequest(req *http.Request) (*http.Request, context.CancelFunc) {
+	ctx, stop := context.WithCancel(req.Context())
+	var peer atomic.Pointer[string]
+	traced := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			remote := info.Conn.RemoteAddr().String()
+			peer.Store(&remote)
+		},
+	})
+	go r.stopOnRevocation(ctx, stop, &peer)
+	return req.Clone(traced), stop
+}
+
+// stopOnRevocation cancels a transfer whose destination has stopped
+// being allowed.
+//
+// It is what the poll interval does for a tunnel, applied to the plain
+// HTTP shape. A request is authorised once, at dial, and http.Transport
+// then streams the request body and the response with no further
+// reference to the policy. Retiring the pool does not reach a transfer
+// already under way: CloseIdleConnections leaves a connection carrying a
+// request alone by contract, and a job can carry one for as long as it
+// likes. Neither does the kernel, whose ruleset accepts established
+// traffic ahead of every reject. Without this, a destination revoked
+// mid-download kept flowing until the job chose to stop.
+//
+// Cancelling the request context is what ends it, and that covers both
+// directions at once — the response body, and a request body the client
+// is still streaming.
+func (r *Relay) stopOnRevocation(ctx context.Context, stop context.CancelFunc, peer *atomic.Pointer[string]) {
+	if r.Policy == nil {
+		return
+	}
+	tick := time.NewTicker(r.poll())
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			// No connection yet is nothing to check: the dial has not
+			// happened, so no traffic is flowing to anywhere.
+			if remote := peer.Load(); remote != nil && !r.destinationAllowed(*remote) {
+				stop()
+				return
+			}
+		}
+	}
+}
+
+// transportInForce returns the pool authorised by the policy in force,
+// replacing it when the policy has moved.
 //
 // The address check lives in the transport's dialer, and http.Transport
 // only dials when it has no connection for the destination — so a
@@ -424,51 +518,55 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 // traffic ahead of every reject. A revoked address therefore stayed
 // reachable for as long as a job kept using it.
 //
-// Replacing the transport is what makes the old pool unreachable:
-// nothing routes through it again, whatever state its connections were
-// in. The ones already carrying a request finish it and go with it.
-func (r *Relay) expireStaleConnections() {
+// Replacing the pool is what makes the old one unreachable: nothing
+// routes through it again, whatever state its connections were in. The
+// ones already carrying a request are ended by stopOnRevocation.
+func (r *Relay) transportInForce() *pool {
 	if r.Policy == nil {
-		return
+		return r.poolAt(0)
 	}
-	// Current() is what notices the file changed, and it is otherwise only
-	// reached from dial() — which a pooled request never calls. Reading it
-	// here is the whole point: without it the generation could not move in
-	// exactly the case this function exists for. A cached hit is one stat.
+	// Current() is what notices the document changed, and it is otherwise
+	// only reached from dial() — which a pooled request never calls.
+	// Reading it here is the whole point: without it the generation could
+	// not move in exactly the case this function exists for.
 	if _, err := r.Policy.Current(); err != nil {
-		// An unreadable policy is not in force. Retire the pool so the
-		// next request must dial, where that error refuses it.
-		r.retireTransport()
-		return
+		// An unreadable policy is not in force, and generation zero is a
+		// pool nothing was authorised under: the next request has to dial,
+		// where that same error refuses it.
+		return r.poolAt(0)
 	}
-	gen := r.Policy.Generation()
-	// The first observation only records where the policy started; there is
-	// nothing pooled under an older one yet.
-	if prev := r.policyGen.Swap(gen); prev != 0 && prev != gen {
-		r.retireTransport()
-	}
+	return r.poolAt(r.Policy.Generation())
 }
 
-// retireTransport puts a fresh pool in place and releases what the old
-// one still holds idle.
-func (r *Relay) retireTransport() {
-	if old := r.transport.Swap(r.newTransport()); old != nil {
-		old.CloseIdleConnections()
+// poolAt returns the pool for a generation, installing a fresh one when
+// what is in force belongs to another. A transport per request — the
+// shape this replaces — leaks a connection pool and its idle goroutines
+// on every call, which is unbounded growth driven by the workload.
+func (r *Relay) poolAt(gen uint64) *pool {
+	for {
+		cur := r.pool.Load()
+		// Equal is the ordinary case. Greater means this caller read the
+		// policy late — generations only ever advance — so what is in
+		// force already supersedes the pool it would install, and
+		// installing it would retire a newer pool for nothing and hand
+		// the next caller an older tag than the one it observed.
+		// Generation zero is the document being unreadable, which is
+		// ordered against nothing: it replaces, and is replaced, on any
+		// difference.
+		if cur != nil && (cur.gen == gen || (gen > 0 && cur.gen > gen)) {
+			return cur
+		}
+		next := &pool{gen: gen, transport: r.newTransport()}
+		if r.pool.CompareAndSwap(cur, next) {
+			if cur != nil {
+				cur.transport.CloseIdleConnections()
+			}
+			return next
+		}
+		// Another caller installed one first. Ours never carried a
+		// connection; take the winner's on the next turn.
+		next.transport.CloseIdleConnections()
 	}
-}
-
-// roundTripper returns the transport in force, building the first one on
-// demand. A transport per request — the shape this replaces — leaks a
-// connection pool and its idle goroutines on every call, which is
-// unbounded growth driven by the workload.
-func (r *Relay) roundTripper() http.RoundTripper {
-	// CompareAndSwap rather than Store: a policy that moved before the
-	// first request has already installed one through retireTransport,
-	// and storing over it would discard the pool in force.
-	r.once.Do(func() {
-		r.transport.CompareAndSwap(nil, r.newTransport())
-	})
-	return r.transport.Load()
 }
 
 func (r *Relay) newTransport() *http.Transport {
