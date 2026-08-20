@@ -163,14 +163,26 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 		h.srv.loop(ctx, h.bind)
 	}()
 	<-tried
-	// Long enough for many passes: the defect spent a serving per pass.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the second pass rather than sleeping a window and hoping
+	// one fits. The backoff is a millisecond, but a loop under the race
+	// detector and coverage instrumentation on a loaded machine can take
+	// far longer than that, and this asked for two passes inside fifty —
+	// so the failure it reported was the machine's, not the loop's. A
+	// window wide enough for the slowest machine would be dead time on
+	// every other run; waiting for the thing itself is neither.
+	retried := time.After(10 * time.Second)
+	for attempts.Load() < 2 {
+		select {
+		case <-retried:
+			cancel()
+			<-stopped
+			t.Fatalf("the loop tried the provider %d time(s) in ten seconds; "+
+				"the outage has to keep it retrying", attempts.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
 	cancel()
 	<-stopped
-
-	if attempts.Load() < 2 {
-		t.Fatalf("the loop tried the provider %d times; the test needs it to keep retrying", attempts.Load())
-	}
 	if got := len(h.ready()); got != 2 {
 		t.Errorf("%d attempts still queued, want 2: the outage spent them", got)
 	}
