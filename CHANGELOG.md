@@ -324,6 +324,19 @@ by its public and operational effects.
   an unknown build is refused with instructions rather than repaired.
 - Install, backup, restore, upgrade and uninstall are **executed** by
   the lifecycle drills, not merely documented.
+- **Uninstall clears the whole machine, including what an instance
+  recorded about reaching its provider** — a success and a failure write
+  the same row, so this is every instance that ever ran. It runs once,
+  after the containers and the scale sets are already gone, so a row left
+  behind is not a cosmetic leftover: a child table its foreign key still
+  points at fails the delete of its parent and aborts the rest, leaving a
+  half-removed instance and a database no supported command will clear.
+  A table added later that references something uninstall deletes has to
+  be cleared before it, and the build refuses a release where one is not.
+- **The durability configuration the release qualifies is the one the
+  product opens with.** The suite and the store share a single
+  connection string rather than each holding a copy, so a pragma changed
+  in the product is a pragma the qualification sees.
 - The lease machine, the cleanup saga and disposition-by-evidence live
   in **`internal/lease`**, with their own tests. They know nothing about
   providers, which is what keeps cleanup working when one is

@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/rhobuild/runpool/internal/store"
 )
 
 const (
@@ -44,19 +46,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// dsn configures every connection identically: WAL for crash-safe
-// concurrency, synchronous=FULL so a committed state transition survives
-// power loss, enforced foreign keys, a shared busy timeout, and immediate
-// transactions so writers never hit the deferred-upgrade deadlock.
-func dsn(path string) string {
-	return "file:" + path +
-		"?_txlock=immediate" +
-		"&_pragma=journal_mode(wal)" +
-		"&_pragma=synchronous(full)" +
-		"&_pragma=foreign_keys(1)" +
-		"&_pragma=busy_timeout(10000)"
-}
-
 func contractDir(t *testing.T) string {
 	dir := os.Getenv(envContractDir)
 	if dir == "" {
@@ -67,7 +56,7 @@ func contractDir(t *testing.T) string {
 
 func open(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", dsn(path))
+	db, err := sql.Open("sqlite", store.DSN(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +86,7 @@ func runWriter() {
 		fmt.Fprintln(os.Stderr, "writer:", err)
 		os.Exit(1)
 	}
-	db, err := sql.Open("sqlite", dsn(os.Getenv(envWriterDB)))
+	db, err := sql.Open("sqlite", store.DSN(os.Getenv(envWriterDB)))
 	if err != nil {
 		fail(err)
 	}
@@ -146,7 +135,7 @@ func runWriter() {
 // torn rows, the meta counter matches the last entry (multi-statement
 // atomicity), and it contains at least every commit the log confirmed.
 func verifyDB(dbPath, logPath string) error {
-	db, err := sql.Open("sqlite", dsn(dbPath))
+	db, err := sql.Open("sqlite", store.DSN(dbPath))
 	if err != nil {
 		return err
 	}

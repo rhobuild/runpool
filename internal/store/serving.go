@@ -575,6 +575,18 @@ func providerContactFromRow(bindingID, contactMs int64, lastError string, errorM
 	return c
 }
 
+// bindingChildren are the tables that reference provider_bindings. A row
+// in any of them outlives its binding only until the binding's own
+// delete, which the foreign key then refuses, so every one of them has
+// to go first.
+//
+// It is named rather than written inline so there is one place to state
+// it and one place to check it against the schema. Uninstall clears the
+// same parent through its own sequence, which is wider: it runs when
+// nothing is left, so it also takes the deliveries this pass is defined
+// never to meet, and the leases that follow from them.
+var bindingChildren = []string{"github_actions_binding_metadata", "provider_binding_contact"}
+
 // ForgetUnclaimedBindings removes the binding rows configuration no
 // longer claims, with the adapter metadata and reach records that hang
 // off them, and reports how many went.
@@ -606,9 +618,9 @@ func (t *Tx) ForgetUnclaimedBindings(claimed []assignment.BindingID) (int, error
 		WHERE id NOT IN (` + held + `)
 		  AND NOT EXISTS (SELECT 1 FROM broker_deliveries d WHERE d.binding_id = provider_bindings.id)`
 
-	// The dependents first: both reference the binding row, so the
+	// The dependents first: each references the binding row, so the
 	// delete order is what the foreign keys allow.
-	for _, table := range []string{"github_actions_binding_metadata", "provider_binding_contact"} {
+	for _, table := range bindingChildren {
 		if _, err := t.tx.Exec(
 			`DELETE FROM `+table+` WHERE binding_id IN (`+unclaimed+`)`, args...); err != nil {
 			return 0, err

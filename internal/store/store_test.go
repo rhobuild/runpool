@@ -3,9 +3,12 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1857,5 +1860,332 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 		if !strings.Contains(joined, actor) {
 			t.Errorf("the record does not name %s: %v", actor, resolves)
 		}
+	}
+}
+
+// TestUninstallClearsABindingThatReachedItsProvider: uninstall runs once
+// and has to finish.
+//
+// The contact row is written by a binding's own poll loop, so every
+// instance that ever reached its provider has one. It is a child of
+// provider_bindings with the foreign key enforced, so leaving it behind
+// fails the delete of its parent and aborts the whole transaction. By
+// then the Docker objects are gone and the scale sets are deleted, and
+// the operator is left with a half-removed instance and a state database
+// no supported command will clear.
+func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	inTx(t, s, func(tx *Tx) error {
+		return tx.RecordProviderContact(binding, time.Now())
+	})
+
+	if err := s.Tx(t.Context(), func(tx *Tx) error { return tx.PurgeEverything() }); err != nil {
+		t.Fatalf("uninstall failed on a binding that had reached its provider: %v", err)
+	}
+	for _, table := range []string{"provider_binding_contact", "provider_bindings"} {
+		var n int
+		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d row(s) after uninstall", table, n)
+		}
+	}
+}
+
+// seedEverything writes one row into every table an instance fills, so
+// what uninstall does can be observed instead of read.
+func seedEverything(t *testing.T, s *Store) {
+	t.Helper()
+	binding := seedBinding(t, s)
+	attempt := seedAttempt(t, s, binding, "msg-seed", "job-seed")
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.RecordProviderContact(binding, time.Now()); err != nil {
+			return err
+		}
+		if err := tx.RecordGitHubBindingMetadata(binding, "repository",
+			"https://github.com/acme/app", "default", "runpool-standard", 41); err != nil {
+			return err
+		}
+		// A second binding recorded before its scale set was ensured, so
+		// its metadata row carries no scale set id. A statement narrowed
+		// to the rows an instance provisioned would pass over exactly
+		// this one, and pass over it in every real deployment too.
+		unprovisioned, err := tx.EnsureBinding("default", "github_actions",
+			"v1|repository|https://github.com/acme/other||runpool-standard")
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordGitHubBindingMetadata(unprovisioned, "repository",
+			"https://github.com/acme/other", "default", "runpool-standard", 0); err != nil {
+			return err
+		}
+		if err := tx.RecordGitHubAttemptMetadata(attempt, "job-seed", 7, 9); err != nil {
+			return err
+		}
+		if err := tx.RecordRepeatableEvent(attempt, "runtime_observation_failed", map[string]string{"why": "seeding"}); err != nil {
+			return err
+		}
+		lease, err := tx.LeaseAttempt(attempt, binding, "standard")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.PlanResource(lease.ID, ResourceContainer, "capsule", "runpool-seed"); err != nil {
+			return err
+		}
+		project, err := tx.EnsureCacheProject("acme/app")
+		if err != nil {
+			return err
+		}
+		_, err = tx.LeaseCacheLane(project, "default", lease.ID, 2)
+		return err
+	})
+}
+
+// tablesOf is every table the schema declares.
+func tablesOf(t *testing.T, s *Store) []string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+func rowsIn(t *testing.T, s *Store, table string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestUninstallClearsEveryTableItOwns runs the purge against a database
+// holding a row everywhere an instance writes one, and requires it to
+// finish and to leave nothing of itself behind.
+//
+// It watches the database rather than reading the statements, which is
+// what makes it total. Every way of getting this wrong arrives at the
+// same two observations: a step that clears only some of its rows, one
+// that names its table in a spelling the schema does not use, one
+// declared in a form the generator emits differently, or a sequence
+// that runs in an order the source does not show. Either a foreign key
+// refuses a parent whose child is still present, or a table asserted
+// empty is not.
+func TestUninstallClearsEveryTableItOwns(t *testing.T) {
+	s := newStore(t)
+
+	// What uninstall deliberately leaves. meta carries the schema
+	// fingerprint, and a database whose meta was cleared is refused on
+	// every later open; pressure is one row whose retention keeps the
+	// disk hysteresis across a restart; audit_log is a record of what an
+	// operator did, which outlives the machine it describes.
+	kept := []string{"audit_log", "meta", "pressure"}
+
+	seedEverything(t, s)
+
+	// The seed has to keep up with the schema, so an unseeded table is a
+	// failure here rather than a silent gap: uninstall would be neither
+	// observed against it nor observed to skip it.
+	for _, table := range tablesOf(t, s) {
+		if slices.Contains(kept, table) {
+			continue
+		}
+		if rowsIn(t, s, table) == 0 {
+			t.Errorf("nothing seeded %s, so what uninstall does to it is not observed; "+
+				"seed it above, or say why uninstall leaves it", table)
+		}
+	}
+
+	if err := s.Tx(t.Context(), func(tx *Tx) error { return tx.PurgeEverything() }); err != nil {
+		t.Fatalf("uninstall did not finish: %v\nThe containers and the scale sets are already "+
+			"gone by the time this runs, so what is left is a half-removed instance and a "+
+			"state database no supported command will clear.", err)
+	}
+
+	for _, table := range tablesOf(t, s) {
+		if slices.Contains(kept, table) {
+			continue
+		}
+		if n := rowsIn(t, s, table); n != 0 {
+			t.Errorf("%s still holds %d row(s) after uninstall; a reinstall onto a retained "+
+				"state volume inherits them", table, n)
+		}
+	}
+}
+
+// TestEveryPurgeStatementIsTotal: uninstall names the whole instance, so
+// each of its deletes takes a whole table.
+//
+// It reads the generated statements rather than the queries they came
+// from, because those are what run: a document that reaches the
+// generator damaged produces a statement nobody wrote, and comparing
+// the two sources would not show it. A narrowed delete is the natural
+// mistake here -- clearing only the rows an instance provisioned reads
+// as caution -- and it leaves the rest behind for the foreign key of
+// whatever they hang from to refuse.
+func TestEveryPurgeStatementIsTotal(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("sqlitedb", "purge.sql.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := regexp.MustCompile(`(?is)DELETE\s+FROM\s+([^\n`+"`"+`]*)`).FindAllStringSubmatch(string(raw), -1)
+	if len(statements) < 2 {
+		t.Fatalf("read %d delete statements out of the generated layer; "+
+			"the rule below would hold vacuously", len(statements))
+	}
+	for _, stmt := range statements {
+		rest := strings.TrimSpace(stmt[1])
+		if fields := strings.Fields(rest); len(fields) != 1 {
+			t.Errorf("uninstall runs `DELETE FROM %s`, which does not clear a whole table. "+
+				"Every row it passes over stays behind for the foreign key of whatever "+
+				"references it to refuse, and the delete of that parent is what aborts "+
+				"the rest of the uninstall.", rest)
+		}
+	}
+}
+
+// TestForgettingABindingReachesEveryChildOfIt: the startup pass that
+// drops bindings nobody claimed deletes the same parent uninstall does,
+// so it needs the same children — and it runs on every start rather than
+// once at the end of an instance's life.
+func TestForgettingABindingReachesEveryChildOfIt(t *testing.T) {
+	s := newStore(t)
+
+	// Two children are deliberately not cleared. The pass selects only
+	// bindings with no deliveries, so broker_deliveries is excluded by
+	// its own query and needs no argument beyond that.
+	//
+	// capsule_leases is excluded on a narrower footing, worth stating
+	// because the schema does not hold it: a lease carries binding_id and
+	// attempt_id as two independent references, so a row naming a
+	// delivery-free binding is accepted, and the pass would then fail on
+	// every controller start. What keeps that from arising is the one
+	// call site — attempts are read for a binding and leased under that
+	// same binding — rather than a constraint. assignment_attempts, by
+	// contrast, carries a composite reference for exactly this reason.
+	//
+	// Naming both here rather than leaving them out is the point: a child
+	// that appears later and is neither cleared nor excluded for a stated
+	// reason fails this test, which is the moment someone has to decide
+	// which it is.
+	excluded := []string{"broker_deliveries", "capsule_leases"}
+
+	var children []string
+	for child, parents := range foreignKeys(t, s) {
+		if slices.Contains(parents, "provider_bindings") {
+			children = append(children, child)
+		}
+	}
+	if len(children) == 0 {
+		t.Fatal("provider_bindings has no children in the schema; the rule proved nothing")
+	}
+	slices.Sort(children)
+
+	for _, child := range children {
+		switch {
+		case slices.Contains(bindingChildren, child) && slices.Contains(excluded, child):
+			t.Errorf("%s is both cleared and excluded; one of the two is wrong", child)
+		case slices.Contains(bindingChildren, child), slices.Contains(excluded, child):
+		default:
+			t.Errorf("%s references provider_bindings and is neither cleared before a binding is "+
+				"forgotten nor excluded for a reason; if the pass can meet a row of it, the delete "+
+				"of the binding fails on every controller start", child)
+		}
+	}
+	for _, cleared := range bindingChildren {
+		if !slices.Contains(children, cleared) {
+			t.Errorf("a binding is forgotten by clearing %s, which does not reference "+
+				"provider_bindings; the statement deletes rows nothing required it to", cleared)
+		}
+	}
+	for _, skipped := range excluded {
+		if !slices.Contains(children, skipped) {
+			t.Errorf("%s is excused from being cleared and does not reference provider_bindings; "+
+				"the reason given above is about a table that is not in the way", skipped)
+		}
+	}
+}
+
+// foreignKeys maps each table to the tables it references, read from the
+// database so a table added later is covered without being named here.
+func foreignKeys(t *testing.T, s *Store) map[string][]string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// Closed before the pragma below: the pool is one connection, so a
+	// second query while these rows are open would deadlock.
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	graph := map[string][]string{}
+	for _, child := range tables {
+		parents, err := s.db.Query("PRAGMA foreign_key_list(" + child + ")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for parents.Next() {
+			// The pragma's shape is fixed: id, seq, table, from, to,
+			// on_update, on_delete, match.
+			var id, seq int
+			var parent, from, to, onUpdate, onDelete, match sql.NullString
+			if err := parents.Scan(&id, &seq, &parent, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+				t.Fatal(err)
+			}
+			graph[child] = append(graph[child], parent.String)
+		}
+		if err := parents.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := parents.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return graph
+}
+
+// TestTheConnectionStringStillAsksForFullSynchronous: the durability
+// suite cannot see this one.
+//
+// It reads PRAGMA synchronous from a live connection, and the pinned
+// driver already answers 2 with no pragma set at all, so deleting the
+// pragma passes every assertion there. Setting it to something else does
+// fail, which is the case the suite does cover. What it cannot cover is
+// the pragma quietly going away and the guarantee then resting on a
+// driver default that a later version is free to change. So the string
+// itself is what states it here.
+func TestTheConnectionStringStillAsksForFullSynchronous(t *testing.T) {
+	if got := DSN("/state/runpool.db"); !strings.Contains(got, "_pragma=synchronous(full)") {
+		t.Errorf("the connection string no longer asks for synchronous=FULL: %s\n"+
+			"A committed lease transition would survive a crash only for as long as the "+
+			"driver keeps defaulting to it, and no suite would notice the change.", got)
 	}
 }

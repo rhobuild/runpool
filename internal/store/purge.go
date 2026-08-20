@@ -13,6 +13,7 @@ func (t *Tx) PurgeEverything() error {
 		t.q.PurgeAttempts,
 		t.q.PurgeDeliveries,
 		t.q.PurgeGitHubBindingMetadata,
+		t.q.PurgeBindingContact,
 		t.q.PurgeBindings,
 		// Uninstall deletes the lane volumes, so the rows must go with
 		// them. A lane row whose volume is gone still counts against the
