@@ -121,8 +121,8 @@ capsule addresses beyond that bridge — public destinations included.
 Egress happens through the capsule's own gateway container, which
 resolves names and opens connections on its behalf, refusing any
 address in the deny set that no allowance names (private ranges,
-link-local metadata, the host's
-own networks, every Docker subnet, the uplink itself).
+link-local metadata, the host's own networks, every Docker subnet, the
+uplink itself).
 
 The capsule is created with `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`
 pointing at that gateway, inherited by the runner, the job and the inner

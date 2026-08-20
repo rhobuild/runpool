@@ -82,6 +82,14 @@ func (p Policy) Validate() error {
 		// one of the paths that produce one: a gateway takes a policy
 		// from its reload channel as well as from configuration, and a
 		// check at a single entry point is not a rule.
+		// The family first, as the configuration validator asks it. The
+		// rules below reason about IPv4 ranges, and a prefix in the
+		// v4-in-v6 form compares its 128-bit width against their 32-bit
+		// one -- so it would be refused, but for a reason untrue of it.
+		if !prefix.Addr().Is4() {
+			return fmt.Errorf("allow %s is not IPv4: the capsule egress ruleset is IPv4 only, "+
+				"and an address written in the v4-in-v6 form is not one the relay matches", prefix)
+		}
 		if WidensBaselineDeny(prefix) {
 			return fmt.Errorf("allow %s is broader than a range the restricted profile withholds, "+
 				"so allowing it would reopen that whole range", prefix)
@@ -103,15 +111,6 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("allow %s reaches more of link-local than one address, which "+
 				"would hand a job the range its instance keeps its own credentials in; "+
 				"name the address", prefix)
-		}
-		// The ruleset is IPv4. A prefix written in the v4-in-v6 form
-		// renders into it verbatim and never matches at decision time,
-		// because a 128-bit prefix contains no 32-bit address -- the same
-		// firewall-agrees, relay-refuses split, arrived at through
-		// notation.
-		if !prefix.Addr().Is4() {
-			return fmt.Errorf("allow %s is not IPv4: the capsule egress ruleset is IPv4 only, "+
-				"and an address written in the v4-in-v6 form is not one the relay matches", prefix)
 		}
 	}
 	return nil
@@ -289,14 +288,26 @@ var baselineDeny = []string{
 // BuildDeny composes the deny set: the baseline, the host's own
 // interface networks, every Docker network subnet the daemon knows,
 // and the uplink subnet. Duplicates are dropped, order is stable.
+//
+// IPv4 only, and dropped rather than refused. The set renders into an
+// IPv4 ruleset, so a v6 subnet in it is a line no filter accepts -- and
+// what supplies these is a daemon, not an operator: a host with one
+// IPv6-enabled network would otherwise fail every capsule launch over
+// something nobody in the deployment chose. Nothing is left reachable by
+// leaving one out, because a capsule has no IPv6 at all: the sandbox
+// denies the protocol and the v6 ruleset drops everything.
 func BuildDeny(uplinkSubnet string, hostCIDRs, dockerSubnets []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(c string) {
-		if c != "" && !seen[c] {
-			seen[c] = true
-			out = append(out, c)
+		if c == "" || seen[c] {
+			return
 		}
+		if prefix, err := netip.ParsePrefix(c); err != nil || !prefix.Addr().Is4() {
+			return
+		}
+		seen[c] = true
+		out = append(out, c)
 	}
 	for _, c := range baselineDeny {
 		add(c)

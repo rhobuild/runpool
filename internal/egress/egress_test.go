@@ -2,6 +2,7 @@ package egress
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -278,13 +279,29 @@ func TestAnAllowInTheV4InV6FormIsRefused(t *testing.T) {
 		if cerr != nil {
 			t.Fatal(cerr)
 		}
-		t.Errorf("allow %s was accepted; the ruleset carries its accept and the relay "+
-			"reaches 198.18.5.7 = %v", mapped, d.Allowed(netip.MustParseAddr("198.18.5.7")))
+		t.Errorf("allow %s was accepted; it renders into the ruleset verbatim while the "+
+			"relay reaches 198.18.5.7 = %v", mapped, d.Allowed(netip.MustParseAddr("198.18.5.7")))
 	}
 	q := policy()
 	q.Deny = append(q.Deny, mapped)
 	if err := q.Validate(); err == nil {
 		t.Errorf("deny %s was accepted; it renders into an IPv4 ruleset and matches nothing", mapped)
+	}
+
+	// The reason has to be the true one. The rules about ranges compare a
+	// prefix's width against IPv4 widths, so a mapped prefix reaches them
+	// as something 128 bits wide and is refused for covering ranges it
+	// does not cover: ::ffff:127.0.0.0/97 spans two billion addresses a
+	// relay would reach, and being told it is loopback helps nobody.
+	wide := policy()
+	wide.Allow = append(wide.Allow, "::ffff:127.0.0.0/97")
+	err := wide.Validate()
+	if err == nil {
+		t.Fatal("a mapped prefix spanning most of IPv4 was accepted")
+	}
+	if !strings.Contains(err.Error(), "IPv4") {
+		t.Errorf("refused with %q; the prefix is refused for its notation, and any other "+
+			"reason is one that is not true of it", err)
 	}
 }
 
@@ -319,5 +336,43 @@ func TestWhatNoConnectionReachesCannotBeAllowed(t *testing.T) {
 			t.Errorf("%s is reported as unreachable, but it holds addresses a relay reaches; "+
 				"an operator naming it would be refused with a reason that is not true of it", allow)
 		}
+	}
+}
+
+// TestTheDenySetIsIPv4Whatever TheDaemonReports: what fills this set is
+// a daemon, not an operator.
+//
+// A deny set renders into an IPv4 ruleset, and the policy refuses one
+// carrying an address that is not IPv4 — so a host with a single
+// IPv6-enabled Docker network would fail every capsule launch over
+// something nobody in the deployment chose. Nothing is left reachable by
+// dropping it: a capsule has no IPv6 at all.
+func TestTheDenySetIsIPv4WhateverTheDaemonReports(t *testing.T) {
+	deny := BuildDeny("172.21.0.0/24",
+		[]string{"203.0.113.0/24", "2001:db8::/32"},
+		[]string{"172.17.0.0/16", "fd00::/64"})
+
+	for _, c := range deny {
+		p, err := netip.ParsePrefix(c)
+		if err != nil {
+			t.Errorf("deny set carries %q, which is not a prefix at all", c)
+			continue
+		}
+		if !p.Addr().Is4() {
+			t.Errorf("deny set carries %s; the ruleset it renders into is IPv4, and the "+
+				"policy refuses a set carrying it, so every launch on this host fails", c)
+		}
+	}
+	// And the v4 ones it was given are still there.
+	for _, want := range []string{"172.21.0.0/24", "203.0.113.0/24", "172.17.0.0/16"} {
+		if !slices.Contains(deny, want) {
+			t.Errorf("deny set lost %s; another network on this daemon is never a legitimate "+
+				"capsule destination", want)
+		}
+	}
+	if err := (Policy{
+		InternalSubnet: "172.20.0.0/24", UplinkSubnet: "172.21.0.0/24", Deny: deny,
+	}).Validate(); err != nil {
+		t.Errorf("the policy built from what the daemon reported does not validate: %v", err)
 	}
 }
