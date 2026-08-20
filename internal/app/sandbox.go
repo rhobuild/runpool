@@ -137,7 +137,25 @@ func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
 // interface networks discovered through a short-lived host-namespace
 // probe, every Docker subnet the daemon knows, the baseline ranges, and
 // the uplink itself.
+// sandboxBuildBudget bounds discovering the environment: the uplink
+// network, its subnet, the host's own addresses and the daemon's other
+// subnets.
+//
+// It is one budget over the whole of build rather than one per step,
+// because what it protects is the refresh lock and not any particular
+// call. Every launch waits on that lock with a plain mutex that takes no
+// context, so a step that never returns is a host on which nothing new
+// can start, and which step it was does not change that.
+//
+// Generous enough for the probe image to be pulled, which is the slow
+// step on a cold host, and shorter than rediscoverInterval so a build
+// that hangs cannot leave two passes overlapping.
+const sandboxBuildBudget = 2 * time.Minute
+
 func (n *networkSandbox) build(ctx context.Context) (*capsule.Sandbox, error) {
+	ctx, cancel := context.WithTimeout(ctx, sandboxBuildBudget)
+	defer cancel()
+
 	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, docker.NetworkSpec{
 		Name: "runpool-uplink-" + string(n.instanceID)[:8],
 		Labels: map[string]string{

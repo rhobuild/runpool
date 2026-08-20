@@ -116,8 +116,18 @@ type fakeSandboxDaemon struct {
 	// is where an unbounded one would otherwise be invisible.
 	removeDeadline time.Time
 	removeBounded  bool
-	reloaded       []string
-	removed        []string
+	// buildDeadline is the bound the environment discovery ran under.
+	// The probe waits on a process rather than on a request, so an
+	// unbounded one there is unbounded for every launch on the host.
+	buildDeadline time.Time
+	buildBounded  bool
+	reloaded      []string
+	removed       []string
+	// denied names the gateways asked to revoke their own policy.
+	// Removing one is not the same as trying to revoke it first: the
+	// removal is the fallback, and a close that skipped straight to it
+	// would leave the gateway relaying until the daemon answered.
+	denied []string
 }
 
 // serve models one gateway control command occupying the daemon for as
@@ -168,6 +178,7 @@ func (f *fakeSandboxDaemon) sorted(from *[]string) []string {
 	return out
 }
 
+func (f *fakeSandboxDaemon) denies() []string  { return f.sorted(&f.denied) }
 func (f *fakeSandboxDaemon) reloads() []string { return f.sorted(&f.reloaded) }
 func (f *fakeSandboxDaemon) removes() []string { return f.sorted(&f.removed) }
 
@@ -180,7 +191,10 @@ func (f *fakeSandboxDaemon) NetworkSubnet(context.Context, string) (string, erro
 func (f *fakeSandboxDaemon) AllNetworkSubnets(context.Context) ([]string, error) {
 	return f.subnets, nil
 }
-func (f *fakeSandboxDaemon) RunTask(context.Context, docker.ContainerSpec) (int64, string, error) {
+func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ docker.ContainerSpec) (int64, string, error) {
+	f.mu.Lock()
+	f.buildDeadline, f.buildBounded = ctx.Deadline()
+	f.mu.Unlock()
 	return 0, f.probeOut, f.probeErr
 }
 func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
@@ -191,6 +205,7 @@ func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, assignment.Inst
 }
 func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, _ []string) (int, string, error) {
 	f.serve()
+	f.note(&f.denied, id)
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
@@ -351,9 +366,16 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	})
 }
 
-// TestCloseGatewaysRemovesEvenWhatWillNotDeny: an established tunnel is
-// already past the relay's check, so closing the policy from inside is
-// not enough on its own. The container goes either way.
+// TestCloseGatewaysRemovesEvenWhatWillNotDeny: closing a gateway asks it
+// to revoke its own policy first, and removes the container either way.
+//
+// Both halves matter and only one was held. An established tunnel is
+// already past the relay's check, so revoking from inside is not enough
+// on its own and the container goes regardless — that is the half this
+// test had. The other is that the revocation is attempted at all: going
+// straight to the removal leaves the gateway relaying for as long as the
+// daemon takes to answer, which is exactly the window the deny-all is
+// there to close.
 func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	d := &fakeSandboxDaemon{
 		containers: []docker.OwnedContainer{
@@ -369,6 +391,10 @@ func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	}
 	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
 		t.Errorf("removed %v; a gateway that refuses deny-all still has to stop relaying", d.removes())
+	}
+	if !slices.Equal(d.denies(), []string{"gw-1", "gw-2"}) {
+		t.Errorf("asked %v to revoke their own policy; want both, before either was removed. "+
+			"A close that skips it relays until the daemon answers the removal", d.denies())
 	}
 }
 
@@ -576,5 +602,50 @@ func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
 	if left := time.Until(deadline); left <= 0 || left > gatewayControlTimeout {
 		t.Errorf("the removal had %v left; want a positive bound no larger than %v",
 			left, gatewayControlTimeout)
+	}
+}
+
+// TestDiscoveringTheEnvironmentIsBounded: building the sandbox runs
+// under a deadline, because the refresh lock is held across it.
+//
+// The host probe is a container: created, started, waited on, and read.
+// Waiting on a process that never exits is not a request that times out
+// on its own, and the three daemon calls around it are no better against
+// a daemon that has stopped answering. Every launch takes the refresh
+// lock through forLaunch with a plain mutex — no context, no way out —
+// so anything unbounded here is a host on which nothing new can start
+// for as long as the controller runs.
+//
+// The bound is asserted rather than waited out: a test that waits two
+// minutes to prove a two-minute budget is a test nobody runs.
+func TestDiscoveringTheEnvironmentIsBounded(t *testing.T) {
+	d := &fakeSandboxDaemon{
+		uplinkID:     "up-1",
+		uplinkSubnet: "172.30.0.0/24",
+		subnets:      []string{"172.18.0.0/16"},
+		probeOut:     "2: eth0    inet 192.0.2.10/24 scope global eth0",
+	}
+	n := newTestSandbox(t, d, nil)
+
+	// A context with no deadline of its own, which is what the watch
+	// loop and a launch both hand this path.
+	if _, err := n.build(context.Background()); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	d.mu.Lock()
+	bounded, deadline := d.buildBounded, d.buildDeadline
+	d.mu.Unlock()
+	if !bounded {
+		t.Fatal("the host probe ran on a context with no deadline; a probe that never exits " +
+			"holds the refresh lock, and every launch waits on it uninterruptibly")
+	}
+	if left := time.Until(deadline); left <= 0 || left > sandboxBuildBudget {
+		t.Errorf("the probe had %v left; want a positive bound no larger than %v",
+			left, sandboxBuildBudget)
+	}
+	if sandboxBuildBudget >= rediscoverInterval {
+		t.Errorf("the build budget is %v against a %v rediscovery interval; a build that "+
+			"hangs would leave two passes overlapping", sandboxBuildBudget, rediscoverInterval)
 	}
 }

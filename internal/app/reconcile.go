@@ -12,8 +12,9 @@ import (
 	"github.com/rhobuild/runpool/internal/store"
 )
 
-// strandedGrace is how long a live lease is left alone before the
-// periodic pass may consider it ownerless.
+// defaultStrandedGrace is how long a live lease is left alone before the
+// periodic pass may consider it ownerless. A test overrides it through
+// the controller's own strandedGrace field.
 //
 // It is keyed on the last transition rather than on creation, so it also
 // keeps the pass off a lease a goroutine is actively moving: every

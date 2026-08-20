@@ -502,11 +502,6 @@ func (s *Controller) scheduleReadyAttempts(ctx context.Context, b *binding) {
 	}
 }
 
-// announce tells the broker this binding's current credit, and logs the
-// tier's whole accounting when the number changes. A binding announcing
-// zero is the question an operator will ask about, and the answer —
-// who holds the discovery credit, who has demand, who is running — is
-// only meaningful as the pool's state, not the binding's.
 // backoff is the pause between failed polls. Held on the controller so a
 // test can exercise the failure run without waiting out real seconds.
 func (s *Controller) backoff() time.Duration {
