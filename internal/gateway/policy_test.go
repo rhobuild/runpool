@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/egress"
+	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // TestPolicyGenerationAdvancesOnlyOnChange: the relay drops pooled
@@ -339,5 +340,75 @@ func TestConcurrentInstallsAreSerialized(t *testing.T) {
 		t.Errorf("%d installers held the critical section at once; want 1 — "+
 			"each one past the read is building its successor from a policy "+
 			"another is about to replace", got)
+	}
+}
+
+// TestAReaderCrossingAnInstallDoesNotOverCountGenerations: the policy's
+// generation counts installs, not readers that raced one.
+//
+// The generation is what makes the relay retire its pooled transport and
+// every idle connection in it — a pooled request never reaches the
+// dialer, so a policy that moved has no other way to reach it. Advancing
+// it for a file that did not change is that pool thrown away for
+// nothing, on a relay that may be carrying a job's whole traffic.
+//
+// The interleaving that causes it needs the file to change between one
+// reader's stat and its turn at the lock, which no test can schedule.
+// What this does instead is race enough readers against enough installs
+// that the window is entered, and assert the invariant that survives any
+// interleaving: the generation never exceeds the number of distinct
+// policies actually installed.
+func TestAReaderCrossingAnInstallDoesNotOverCountGenerations(t *testing.T) {
+	dir := t.TempDir()
+	path := PolicyPath(dir)
+	policy := func(deny string) []byte {
+		return []byte(`{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+			`"allow":[],"deny":["` + deny + `"]}`)
+	}
+	if err := atomicfile.Replace(path, policy("10.0.0.0/8"), 0o600, -1, -1); err != nil {
+		t.Fatal(err)
+	}
+	store := &PolicyStore{Path: path}
+	if _, err := store.Current(); err != nil {
+		t.Fatal(err)
+	}
+
+	const installs = 40
+	denies := []string{"10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"}
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 8 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := store.Current(); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	for i := range installs {
+		if err := atomicfile.Replace(path, policy(denies[i%len(denies)]), 0o600, -1, -1); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(stop)
+	readers.Wait()
+
+	// One for the first read, and at most one per install. Two installs
+	// inside the same nanosecond-and-size stamp are indistinguishable to
+	// the store, so this is an upper bound rather than an equality.
+	if got, max := store.Generation(), uint64(installs+1); got > max {
+		t.Errorf("generation = %d after %d installs; want at most %d. "+
+			"The extra reloads are pooled transports retired for a policy that did not move",
+			got, installs, max)
 	}
 }
