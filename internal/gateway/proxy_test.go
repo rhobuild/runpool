@@ -841,6 +841,13 @@ func TestARevokedTransferDoesNotReachTheCapsuleLookingWhole(t *testing.T) {
 	defer resp.Body.Close()
 	n, readErr := io.Copy(io.Discard, resp.Body)
 
+	// Prove the transfer happened before judging how it ended. A relay
+	// that refused the request outright also reports a short body that
+	// stopped, and blaming that on the ending would hide the refusal.
+	if resp.StatusCode != http.StatusOK || n == 0 {
+		t.Fatalf("the request never streamed: status %d, %d bytes; the upstream was not reached, "+
+			"so nothing here says anything about how a cut transfer ends", resp.StatusCode, n)
+	}
 	if n >= int64(chunk)*chunks {
 		t.Fatalf("the transfer delivered its whole body (%d bytes); the revocation never reached it", n)
 	}
@@ -863,28 +870,35 @@ func TestARevokedTransferDoesNotReachTheCapsuleLookingWhole(t *testing.T) {
 func TestAPoolIsNeverOlderThanTheGenerationItServes(t *testing.T) {
 	for _, c := range []struct {
 		name       string
-		inForce    uint64 // zero means nothing pooled yet
+		pooled     bool // whether anything is in force to begin with
+		inForce    uint64
 		ask        uint64
 		wantReused bool
 	}{
-		{"nothing pooled yet", 0, 5, false},
-		{"same generation", 5, 5, true},
-		{"the policy moved on", 3, 5, false},
-		{"a caller that read the policy late", 5, 3, true},
-		{"the document became unreadable", 5, 0, false},
-		{"still unreadable", 0, 0, true},
+		{name: "nothing pooled yet", ask: 5},
+		{name: "same generation", pooled: true, inForce: 5, ask: 5, wantReused: true},
+		{name: "the policy moved on", pooled: true, inForce: 3, ask: 5},
+		{name: "a caller that read the policy late", pooled: true, inForce: 5, ask: 3, wantReused: true},
+		{name: "the document became unreadable", pooled: true, inForce: 5, ask: 0},
+		{name: "still unreadable", pooled: true, inForce: 0, ask: 0, wantReused: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := &Relay{Log: discardLogger()}
 			var before *pool
-			if c.inForce > 0 || c.name == "still unreadable" {
+			if c.pooled {
 				before = &pool{gen: c.inForce, transport: r.newTransport()}
 				r.pool.Store(before)
 			}
 			got := r.poolAt(c.ask)
+			if got == nil {
+				t.Fatal("no pool at all; the next request would have nothing to travel on")
+			}
 			if reused := before != nil && got == before; reused != c.wantReused {
 				t.Errorf("reused the pool in force = %v; want %v", reused, c.wantReused)
 			}
+			// A reused pool is the only way to be handed a generation
+			// other than the one asked for, and it must never be an older
+			// one: its connections were authorised by that policy.
 			if got.gen < c.ask {
 				t.Errorf("a caller that observed generation %d was handed a pool built for %d; "+
 					"its connections were authorised by a policy that no longer applies", c.ask, got.gen)

@@ -104,11 +104,16 @@ func (s *PolicyStore) Current() (*egress.Decider, error) {
 	return decider, nil
 }
 
-// readPolicy reads a policy document, refusing to hold more of one than
-// a policy may be. The bound is the same MaxPolicyBytes ParsePolicy
-// applies, taken before the bytes are resident rather than after: this
-// read now happens on every call rather than once per change, and the
-// gateway it happens in has 128 MiB.
+// readPolicy reads a policy document without holding more of one than a
+// policy may be. The bound is taken before the bytes are resident rather
+// than after: this read happens on every call rather than once per
+// change, and the gateway it happens in has 128 MiB.
+//
+// One byte past MaxPolicyBytes, which is what makes the bound a refusal
+// instead of a truncation. Reading exactly the limit returns the same
+// length for a document that fits and for one that was cut off there,
+// and the cut one can still be valid JSON describing a policy nobody
+// installed. The extra byte is what ParsePolicy sees to reject it.
 func readPolicy(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -139,7 +144,11 @@ func (s *PolicyStore) Generation() uint64 {
 // the relay still applies the old ones. A capsule therefore never sees
 // a moment in which a newly denied destination is reachable.
 func Reload(controlDir string, r io.Reader) error {
-	payload, err := io.ReadAll(io.LimitReader(r, MaxPolicyBytes))
+	// One byte past the bound, so a document that exceeds it is refused
+	// by ParsePolicy rather than silently truncated into a different one:
+	// reading exactly MaxPolicyBytes cannot tell a document that fits
+	// from one that was cut off at the limit.
+	payload, err := io.ReadAll(io.LimitReader(r, MaxPolicyBytes+1))
 	if err != nil {
 		return err
 	}

@@ -285,27 +285,6 @@ type closeWriter interface{ CloseWrite() error }
 // through a tunnel that is already open.
 const tunnelPollInterval = 30 * time.Second
 
-// tunnel copies both directions and returns when both of them have
-// ended.
-//
-// A clean EOF on one direction is a half-close, not the end of the
-// tunnel. Propagating it as CloseWrite is what lets the peer finish its
-// own reply; returning there truncated the response of every client
-// that shuts down its write side once its request is out — an ordinary
-// thing for an HTTP client to do, and the reason both directions are
-// now waited on: the deferred closes around this call fire when it
-// returns, so ending early closes the connection the peer was still
-// answering on.
-//
-// The idle bound is the tunnel's, not each direction's. A long one-way
-// transfer is silent in the other direction for its whole duration, so
-// a per-direction deadline severed a large upload or a slow download
-// while it was actively streaming. Each direction now reads in short
-// intervals and consults a clock both of them write.
-// stillAllowed is consulted once per poll interval by each direction:
-// a tunnel is authorised at CONNECT and then runs for as long as both
-// ends keep talking, so without it a policy tightened underneath one
-// applies only to destinations nobody had reached yet.
 // tunnelClock is the activity clock two directions of one tunnel share:
 // traffic either way is what keeps the other alive.
 //
@@ -328,6 +307,28 @@ func (c *tunnelClock) mark()                     { c.last.Store(int64(time.Since
 func (c *tunnelClock) sinceStart() time.Duration { return time.Since(c.start) }
 func (c *tunnelClock) idleFor() time.Duration    { return c.sinceStart() - time.Duration(c.last.Load()) }
 
+// tunnelWith copies both directions and returns when both of them have
+// ended.
+//
+// A clean EOF on one direction is a half-close, not the end of the
+// tunnel. Propagating it as CloseWrite is what lets the peer finish its
+// own reply; returning there truncated the response of every client
+// that shuts down its write side once its request is out — an ordinary
+// thing for an HTTP client to do, and the reason both directions are
+// now waited on: the deferred closes around this call fire when it
+// returns, so ending early closes the connection the peer was still
+// answering on.
+//
+// The idle bound is the tunnel's, not each direction's. A long one-way
+// transfer is silent in the other direction for its whole duration, so
+// a per-direction deadline severed a large upload or a slow download
+// while it was actively streaming. Each direction now reads in short
+// intervals and consults a clock both of them write.
+//
+// stillAllowed is consulted once per poll interval by each direction:
+// a tunnel is authorised at CONNECT and then runs for as long as both
+// ends keep talking, so without it a policy tightened underneath one
+// applies only to destinations nobody had reached yet.
 func tunnelWith(client, upstream net.Conn, idle, poll time.Duration, stillAllowed func() bool) {
 	clock := newTunnelClock()
 
@@ -450,7 +451,13 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 		// chunked reader reports an unexpected EOF and a Content-Length
 		// reader reports a short read. It is the same answer the tunnel
 		// gives by resetting rather than draining.
-		panic(http.ErrAbortHandler)
+		//
+		// Only under a server, which is the one thing that recovers it.
+		// Driven directly — by a test holding a recorder, say — the panic
+		// would take the process down instead of ending one response.
+		if req.Context().Value(http.ServerContextKey) != nil {
+			panic(http.ErrAbortHandler)
+		}
 	}
 }
 

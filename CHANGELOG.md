@@ -78,7 +78,9 @@ by its public and operational effects.
   inside one clock tick carry the same modification time, so deciding on
   that pair meant the second never reached the relay at all: the
   tightening would have been reported as installed and silently not
-  applied.
+  applied. A document larger than a policy may be is refused rather than
+  cut down to the limit, since a cut one can still parse as a policy
+  nobody wrote.
 - **The two policy installers cannot overwrite each other.** A reload
   and an emergency close arrive as separate processes into the same
   container, so the install is serialized by a lock the kernel holds and

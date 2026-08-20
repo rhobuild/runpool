@@ -283,13 +283,50 @@ func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
 				return
 			}
 			first := strings.Trim(words[0], "`*.,:")
-			if first == name || !declared[first] {
+			if first != name && declared[first] {
+				found = append(found, fmt.Sprintf(
+					"%s: the doc comment on %s begins with %q, which is another declaration in this file. "+
+						"Something was inserted between %q's comment and %q",
+					fset.Position(pos), name, first, first, first))
 				return
 			}
-			found = append(found, fmt.Sprintf(
-				"%s: the doc comment on %s begins with %q, which is another declaration in this file. "+
-					"Something was inserted between %q's comment and %q",
-				fset.Position(pos), name, first, first, first))
+			// The same detachment happens by deletion, and the rule above
+			// cannot see it: a comment left behind by a declaration that
+			// no longer exists opens with a name nothing declares any
+			// more. What gives it away is where this declaration's own
+			// introduction sits. A comment that opens by naming its
+			// subject is describing it from the first line, and a later
+			// paragraph starting with the same word is prose — "Version 2
+			// moved ..." under Version. A comment that opens with some
+			// other word and then introduces this one partway down has
+			// two subjects, and only the second is here.
+			if first == name {
+				return
+			}
+			for i, line := range doc.List {
+				if i == 0 {
+					continue
+				}
+				text := strings.Fields(strings.TrimPrefix(line.Text, "//"))
+				if len(text) == 0 || strings.Trim(text[0], "`*.,:") != name {
+					continue
+				}
+				// A sentence opening, not a wrapped line that happens to
+				// break before the name. Requiring a blank line above
+				// would miss the shape this is for: a deleted
+				// declaration leaves its comment butted straight against
+				// the next one, with no blank line anywhere.
+				prev := strings.TrimSpace(strings.TrimPrefix(doc.List[i-1].Text, "//"))
+				if prev != "" && !strings.HasSuffix(prev, ".") && !strings.HasSuffix(prev, ":") {
+					continue
+				}
+				found = append(found, fmt.Sprintf(
+					"%s: the doc comment on %s introduces it partway through, at %s. "+
+						"Everything above that line describes something else, and was left "+
+						"behind when whatever it named went away",
+					fset.Position(pos), name, fset.Position(line.Pos())))
+				return
+			}
 		}
 		for _, decl := range file.Decls {
 			switch decl := decl.(type) {
