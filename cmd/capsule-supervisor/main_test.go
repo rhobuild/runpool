@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +96,7 @@ func TestPrepareRunnerConfigRejectsPathsAndCollisions(t *testing.T) {
 func TestTerminalFailureDistinguishesUnstartedRunners(t *testing.T) {
 	err := errors.New("no credential was delivered")
 
-	for _, state := range []string{"", "waiting"} {
+	for _, state := range []string{"", "waiting", "starting"} {
 		if got := terminalFailure(state, err); !strings.HasPrefix(got, "aborted:") {
 			t.Errorf("failure from state %q = %q; want an aborted state", state, got)
 		}
@@ -343,5 +345,126 @@ func TestEveryFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
 	}
 	if found == 0 {
 		t.Error("no file-creating call found at all; this test asserted nothing")
+	}
+}
+
+// TestTheStartAuthorizationRecordsItselfBeforeItLands: the state is
+// written before the file that carries the authorization.
+//
+// PID 1 learns of an authorization only by polling for that file, and it
+// writes nothing of its own until fork/exec has returned. Between those
+// two moments the capsule answers with whatever state was last written,
+// and if that is still `waiting` a launcher reads it as proof no runner
+// ever started: an authorization whose exec landed but whose call
+// returned an error requeues an assignment this capsule is at that
+// moment starting a runner for.
+func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
+	var wrote []string
+	record := func(path string, body []byte, _ os.FileMode, _, _ int) error {
+		wrote = append(wrote, filepath.Base(path)+"="+string(body))
+		return nil
+	}
+	if err := authorizeStart(record); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"state=" + protocol.StateStarting, "start=" + protocolVersion}
+	if !slices.Equal(wrote, want) {
+		t.Errorf("the authorization wrote %v; want %v.\nUntil the state is recorded the capsule "+
+			"answers `waiting`, which is read as proof that no runner ever started.", wrote, want)
+	}
+}
+
+// TestAnAuthorizationThatCannotLandSaysSo: a file that never appears
+// leaves the state where an assignment can still be served again.
+//
+// This is the one place that knows nothing took effect, and it is the
+// likely shape of a full control tmpfs rather than a remote one: on a
+// full one the state's fallback truncates the file already there and
+// writes into the page that frees, where the authorization has no old
+// value to reclaim. Left saying `starting`, an assignment that could
+// simply be requeued is held for a person instead.
+func TestAnAuthorizationThatCannotLandSaysSo(t *testing.T) {
+	full := errors.New("no space left on device")
+	var wrote []string
+	record := func(path string, body []byte, _ os.FileMode, _, _ int) error {
+		if filepath.Base(path) == "start" {
+			return full
+		}
+		wrote = append(wrote, string(body))
+		return nil
+	}
+	if err := authorizeStart(record); !errors.Is(err, full) {
+		t.Fatalf("authorize returned %v; want the write's own failure", err)
+	}
+	if len(wrote) == 0 || wrote[len(wrote)-1] != protocol.StateWaiting {
+		t.Errorf("the capsule was left saying %v after an authorization that never landed; "+
+			"it has to say the state a launcher requeues from", wrote)
+	}
+}
+
+// TestTheStartSubcommandAuthorizesThroughTheOrderedPath: the two
+// properties above belong to authorizeStart, so the verb has to go
+// through it.
+//
+// Writing the start file from the clause directly is a working
+// authorization with none of the ordering: the capsule answers `waiting`
+// for the whole preamble again, and nothing else would notice, because
+// the function keeps its own tests either way.
+func TestTheStartSubcommandAuthorizesThroughTheOrderedPath(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clause *ast.CaseClause
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runSubcommand" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			c, ok := n.(*ast.CaseClause)
+			if !ok || clause != nil {
+				return true
+			}
+			for _, expr := range c.List {
+				if lit, ok := expr.(*ast.BasicLit); ok && lit.Value == `"start"` {
+					clause = c
+				}
+			}
+			return true
+		})
+	}
+	if clause == nil {
+		t.Fatal("no `start` subcommand in the dispatcher; there is nothing here to authorize with")
+	}
+	authorizes, writesTheFileItself := false, false
+	ast.Inspect(clause, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch id.Name {
+		case "authorizeStart":
+			authorizes = true
+		case "startFile", "stateFile":
+			// The authorization owns both names. A clause that still
+			// reaches for one is writing the control surface beside the
+			// function that orders those writes -- which is how a call
+			// left in a branch nothing takes reads as authorizing while
+			// the line below it does the real work, unordered.
+			writesTheFileItself = true
+		}
+		return true
+	})
+	if !authorizes {
+		t.Errorf("%s: the start subcommand does not authorize through authorizeStart, so the "+
+			"order of the state and the file, and the undo when the file cannot land, are "+
+			"whatever this clause happens to do", fset.Position(clause.Pos()))
+	}
+	if writesTheFileItself {
+		t.Errorf("%s: the start subcommand names the control files itself. Whatever it does with "+
+			"them is outside the order authorizeStart exists to keep, and a call to it can sit "+
+			"beside that and prove nothing", fset.Position(clause.Pos()))
 	}
 }
