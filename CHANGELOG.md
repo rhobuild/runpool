@@ -51,7 +51,9 @@ by its public and operational effects.
   would put the assignment back in the queue while the capsule was
   handing it to a runner, and it would run twice. The controller now
   holds such an attempt for a person, because at that moment neither
-  answer is available.
+  answer is available — and an authorization that could not be written at
+  all says so, so an assignment nothing ever started is still simply
+  served again.
 - Under the restricted network profile a capsule has **no route out**.
   Its only egress is a per-capsule gateway that resolves and connects
   on its behalf under a default-deny policy, which is also the DNS

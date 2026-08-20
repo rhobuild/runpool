@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +96,7 @@ func TestPrepareRunnerConfigRejectsPathsAndCollisions(t *testing.T) {
 func TestTerminalFailureDistinguishesUnstartedRunners(t *testing.T) {
 	err := errors.New("no credential was delivered")
 
-	for _, state := range []string{"", "waiting"} {
+	for _, state := range []string{"", "waiting", "starting"} {
 		if got := terminalFailure(state, err); !strings.HasPrefix(got, "aborted:") {
 			t.Errorf("failure from state %q = %q; want an aborted state", state, got)
 		}
@@ -356,57 +358,95 @@ func TestEveryFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
 // ever started: an authorization whose exec landed but whose call
 // returned an error requeues an assignment this capsule is at that
 // moment starting a runner for.
-//
-// The order is what carries it, so the order is what is checked. It
-// cannot be reached without the control directory this runs against, so
-// it is read out of the source instead.
 func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	var wrote []string
+	record := func(path string, body []byte, _ os.FileMode, _, _ int) error {
+		wrote = append(wrote, filepath.Base(path)+"="+string(body))
+		return nil
+	}
+	if err := authorizeStart("/c/state", "/c/start", record); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"state=" + protocol.StateStarting, "start=" + protocolVersion}
+	if !slices.Equal(wrote, want) {
+		t.Errorf("the authorization wrote %v; want %v.\nUntil the state is recorded the capsule "+
+			"answers `waiting`, which is read as proof that no runner ever started.", wrote, want)
+	}
+}
+
+// TestAnAuthorizationThatCannotLandSaysSo: a file that never appears
+// leaves the state where an assignment can still be served again.
+//
+// This is the one place that knows nothing took effect, and it is the
+// likely shape of a full control tmpfs rather than a remote one: the
+// start file needs a fresh inode, and the state's own in-place fallback
+// does not. Left saying `starting`, an assignment that could simply be
+// requeued is held for a person instead.
+func TestAnAuthorizationThatCannotLandSaysSo(t *testing.T) {
+	full := errors.New("no space left on device")
+	var wrote []string
+	record := func(path string, body []byte, _ os.FileMode, _, _ int) error {
+		if filepath.Base(path) == "start" {
+			return full
+		}
+		wrote = append(wrote, string(body))
+		return nil
+	}
+	if err := authorizeStart("/c/state", "/c/start", record); !errors.Is(err, full) {
+		t.Fatalf("authorize returned %v; want the write's own failure", err)
+	}
+	if len(wrote) == 0 || wrote[len(wrote)-1] != protocol.StateWaiting {
+		t.Errorf("the capsule was left saying %v after an authorization that never landed; "+
+			"it has to say the state a launcher requeues from", wrote)
+	}
+}
+
+// TestTheStartSubcommandAuthorizesThroughTheOrderedPath: the two
+// properties above belong to authorizeStart, so the verb has to go
+// through it.
+//
+// Writing the start file from the clause directly is a working
+// authorization with none of the ordering: the capsule answers `waiting`
+// for the whole preamble again, and nothing else would notice, because
+// the function keeps its own tests either way.
+func TestTheStartSubcommandAuthorizesThroughTheOrderedPath(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var clause *ast.CaseClause
-	ast.Inspect(file, func(n ast.Node) bool {
-		c, ok := n.(*ast.CaseClause)
-		if !ok {
-			return true
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runSubcommand" {
+			continue
 		}
-		for _, expr := range c.List {
-			if lit, ok := expr.(*ast.BasicLit); ok && lit.Value == `"start"` {
-				clause = c
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			c, ok := n.(*ast.CaseClause)
+			if !ok || clause != nil {
+				return true
 			}
-		}
-		return true
-	})
-	if clause == nil {
-		t.Fatal("no `start` subcommand found; this checks the order of something that is not there")
-	}
-
-	recorded, landed := -1, -1
-	for i, stmt := range clause.Body {
-		ast.Inspect(stmt, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CallExpr:
-				if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "setState" && recorded < 0 {
-					recorded = i
-				}
-			case *ast.Ident:
-				if node.Name == "startFile" && landed < 0 {
-					landed = i
+			for _, expr := range c.List {
+				if lit, ok := expr.(*ast.BasicLit); ok && lit.Value == `"start"` {
+					clause = c
 				}
 			}
 			return true
 		})
 	}
-	switch {
-	case recorded < 0:
-		t.Error("the start authorization records no state of its own, so the capsule answers " +
-			"`waiting` for the whole preamble and an assignment already being started is requeued")
-	case landed < 0:
-		t.Error("the start authorization writes no start file; nothing would ever launch a runner")
-	case recorded > landed:
-		t.Errorf("the start authorization writes its file at statement %d and records its state "+
-			"at %d; between the two the capsule answers `waiting`, which is read as proof that "+
-			"no runner ever started", landed, recorded)
+	if clause == nil {
+		t.Fatal("no `start` subcommand in the dispatcher; there is nothing here to authorize with")
+	}
+	authorizes := false
+	ast.Inspect(clause, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == "authorizeStart" {
+			authorizes = true
+		}
+		return true
+	})
+	if !authorizes {
+		t.Errorf("%s: the start subcommand does not authorize through authorizeStart, so the "+
+			"order of the state and the file, and the undo when the file cannot land, are "+
+			"whatever this clause happens to do", fset.Position(clause.Pos()))
 	}
 }

@@ -9,12 +9,15 @@
 // The control surface is the filesystem under /run/runpool, all tmpfs:
 //
 //	protocol   written at boot, before any state: the protocol version
-//	state      booting | waiting | running | exited:<code>
+//	state      booting | waiting | starting | running | exited:<code>
 //	           | failed:<reason> | aborted:<reason>
 //	           `booting` is the control surface answering before the
 //	           daemon is proven; `waiting` is written only once dockerd
 //	           answers, because it is the state on which the launcher
-//	           delivers a credential and authorizes a start.
+//	           delivers a credential and authorizes a start; `starting`
+//	           is that authorization accepted and the runner not yet
+//	           forked, which is the only stretch in which neither answer
+//	           is available.
 //	           `aborted` is a failure before the runner started, so the job
 //	           was never handed over and must be retried; `failed` is a
 //	           failure after it started, which is an execution outcome.
@@ -125,8 +128,7 @@ func runSubcommand(args []string) int {
 		// Writing it here rather than in PID 1 is what keeps the other
 		// direction true: an authorization that never landed leaves
 		// `waiting` behind, and that assignment is still retried.
-		setState(protocol.StateStarting)
-		if err := atomicfile.Replace(startFile, []byte(protocolVersion), 0o600, -1, -1); err != nil {
+		if err := authorizeStart(stateFile, startFile, atomicfile.Replace); err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)
 			return 1
 		}
@@ -608,6 +610,37 @@ func prepareRunnerConfig(encoded, runnerRoot, volatileRoot string, uid, gid int)
 		links = append(links, link)
 	}
 	return cleanup, nil
+}
+
+// authorizeStart records the authorization and then lands it, in that
+// order.
+//
+// PID 1 does not learn of an authorization until it polls for the file,
+// and it writes nothing of its own until fork/exec has returned, so
+// between those two moments the capsule answers with whatever state was
+// last written. Left at `waiting`, that reads as proof no runner ever
+// started, and an authorization whose exec landed but whose call failed
+// requeues an assignment this capsule is already starting a runner for.
+//
+// A file that does not land undoes the record. This is the one place
+// that knows nothing took effect -- PID 1 is still waiting for a file
+// that will never appear -- and it is the likely shape of a full control
+// tmpfs rather than a remote one, because the replacement below needs an
+// inode that the state's own in-place fallback does not. Left saying
+// `starting`, an assignment that could simply be served again would be
+// held for a person instead.
+//
+// replace is a parameter for the same reason replaceState takes one: the
+// order of these writes, and the undo, are what this does, and neither
+// is observable through a control directory a test cannot create.
+func authorizeStart(statePath, startPath string,
+	replace func(string, []byte, os.FileMode, int, int) error) error {
+	replaceState(statePath, protocol.StateStarting, replace)
+	if err := replace(startPath, []byte(protocolVersion), 0o600, -1, -1); err != nil {
+		replaceState(statePath, protocol.StateWaiting, replace)
+		return err
+	}
+	return nil
 }
 
 // replaceState records the supervisor's own account of itself, and
