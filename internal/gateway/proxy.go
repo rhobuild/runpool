@@ -95,9 +95,11 @@ type Relay struct {
 	pool atomic.Pointer[pool]
 
 	// pollInterval overrides how often a transfer already in flight
-	// re-checks its destination. Zero means tunnelPollInterval, which is
-	// what production runs; a test sets it so a revocation can be
-	// observed without waiting out the real interval.
+	// re-checks its destination — a tunnel and a plain HTTP transfer
+	// alike, so the two shapes cannot drift apart. Zero means
+	// tunnelPollInterval, which is what production runs; a test sets it
+	// so a revocation can be observed without waiting out the real
+	// interval.
 	pollInterval time.Duration
 }
 
@@ -225,7 +227,7 @@ func (r *Relay) establishTunnel(w http.ResponseWriter, upstream net.Conn) {
 		}
 		_ = upstream.SetWriteDeadline(time.Time{})
 	}
-	tunnel(client, upstream, r.tunnelDestinationAllowed(upstream))
+	tunnelWith(client, upstream, TunnelIdleTimeout, r.poll(), r.tunnelDestinationAllowed(upstream))
 }
 
 // tunnelDestinationAllowed builds the check a running tunnel repeats
@@ -304,10 +306,6 @@ const tunnelPollInterval = 30 * time.Second
 // a tunnel is authorised at CONNECT and then runs for as long as both
 // ends keep talking, so without it a policy tightened underneath one
 // applies only to destinations nobody had reached yet.
-func tunnel(client, upstream net.Conn, stillAllowed func() bool) {
-	tunnelWith(client, upstream, TunnelIdleTimeout, tunnelPollInterval, stillAllowed)
-}
-
 // tunnelClock is the activity clock two directions of one tunnel share:
 // traffic either way is what keeps the other alive.
 //
@@ -438,7 +436,22 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		// A body that stops partway must not reach the capsule looking
+		// whole. The status line and headers are already out, so there is
+		// no way left to say "this failed" except in how the connection
+		// ends — and a response with no Content-Length ends when the
+		// chunk stream is terminated, which is what returning normally
+		// from here would make the server do. The job would then see a
+		// well-formed 200 carrying a truncated artifact.
+		//
+		// Aborting the handler is how the standard library says this: the
+		// server closes the connection without a terminator, so a
+		// chunked reader reports an unexpected EOF and a Content-Length
+		// reader reports a short read. It is the same answer the tunnel
+		// gives by resetting rather than draining.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // tracedRequest clones a request onto a context that is cancelled as

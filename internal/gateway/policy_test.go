@@ -52,7 +52,6 @@ func TestPolicyGenerationAdvancesOnlyOnChange(t *testing.T) {
 	}
 
 	// A restriction that actually changed must advance it.
-	time.Sleep(10 * time.Millisecond) // distinct mtime
 	write("192.168.0.0/16")
 	if _, err := s.Current(); err != nil {
 		t.Fatal(err)
@@ -405,9 +404,12 @@ func TestAReaderCrossingAnInstallDoesNotOverCountGenerations(t *testing.T) {
 	}
 	settle()
 
-	// One for the first read, and at most one per install. Two installs
-	// inside the same nanosecond-and-size stamp are indistinguishable to
-	// the store, so this is an upper bound rather than an equality.
+	// One for the first read, and at most one per install. It is an upper
+	// bound rather than an equality because a reader only learns of a
+	// document by reading it: installs that land between two reads are
+	// collapsed into one move, and the loop cycles through a small set of
+	// denies, so an install that restores the document a reader last saw
+	// is not a change at all.
 	if got, max := store.Generation(), uint64(installs+1); got > max {
 		t.Errorf("generation = %d after %d installs; want at most %d. "+
 			"The extra reloads are pooled transports retired for a policy that did not move",

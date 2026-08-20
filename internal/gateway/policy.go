@@ -83,7 +83,7 @@ func (s *PolicyStore) Current() (*egress.Decider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	raw, err := os.ReadFile(s.Path)
+	raw, err := readPolicy(s.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +102,20 @@ func (s *PolicyStore) Current() (*egress.Decider, error) {
 	s.decider, s.stamp = decider, stamp
 	s.generation++
 	return decider, nil
+}
+
+// readPolicy reads a policy document, refusing to hold more of one than
+// a policy may be. The bound is the same MaxPolicyBytes ParsePolicy
+// applies, taken before the bytes are resident rather than after: this
+// read now happens on every call rather than once per change, and the
+// gateway it happens in has 128 MiB.
+func readPolicy(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, MaxPolicyBytes+1))
 }
 
 // Generation is how many policies this store has installed. It changes

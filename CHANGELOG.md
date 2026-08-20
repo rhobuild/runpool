@@ -67,7 +67,11 @@ by its public and operational effects.
   So both shapes the relay serves re-check the address they are joined to
   while they run — a CONNECT tunnel and a plain HTTP transfer alike — and
   the longest a revoked destination keeps flowing is one poll interval,
-  whatever it is carrying.
+  whatever it is carrying. A transfer stopped that way reaches the job as
+  a failed read rather than as a complete response with a short body:
+  once the status line is out there is nothing left to say "this was
+  cut" except how the connection ends, so it ends without the terminator
+  a client would otherwise read as the end of the data.
 - **An install takes effect whenever it lands.** Whether a new policy is
   in force is decided by the document's contents rather than by its
   modification time and size. Two documents of equal length installed

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -717,15 +718,23 @@ func TestATransferWithoutAConnectionIsNotCancelled(t *testing.T) {
 	}
 }
 
-// TestAGenerationIsNeverServedByTwoPools: the pool and the generation it
-// was authorised under are one value because they are read as one.
+// TestConcurrentReadersNeverSplitThePoolFromItsGeneration: the pool and
+// the generation it was authorised under are one value because they are
+// read as one.
 //
 // Held in two atomics, a caller that observed the new generation could
 // still be handed the pool that generation retired — it reads them in two
 // steps and the install lands in between — so its request would travel on
 // a connection dialled under the policy that no longer applies, which the
 // kernel then accepts as established traffic.
-func TestAGenerationIsNeverServedByTwoPools(t *testing.T) {
+//
+// The document here is only ever replaced, never removed, so every read
+// succeeds and the generation only advances. That is what makes one pool
+// per generation the right thing to assert: it is a consequence of this
+// sequence rather than a property of poolAt, whose full condition —
+// including what an unreadable document does to it — is stated case by
+// case in TestAPoolIsNeverOlderThanTheGenerationItServes.
+func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 	store, install := policyFile(t, "10.0.0.0/8")
 	r := &Relay{Policy: store, Log: discardLogger()}
 
@@ -771,5 +780,115 @@ func TestAGenerationIsNeverServedByTwoPools(t *testing.T) {
 	if len(served) < 2 {
 		t.Fatalf("only %d generation(s) were observed; the policy never moved under the readers "+
 			"and the race this rules out was never given a chance", len(served))
+	}
+}
+
+// TestARevokedTransferDoesNotReachTheCapsuleLookingWhole drives the real
+// handler: a real http.Transport, the trace that reports its dial, the
+// watch forward installs, and the copy that has to stop.
+//
+// The body is chunked deliberately. With no Content-Length, the only
+// thing that tells a client where the body ended is how the connection
+// ended — so a relay that cancels the transfer and then returns normally
+// has the server terminate the chunk stream for it, and the job receives
+// a well-formed 200 carrying a truncated artifact it cannot tell from a
+// whole one. Git's smart-HTTP pack responses and anything gzipped on the
+// fly arrive this way.
+//
+// The relay's own dialer refuses loopback outright — the decider does so
+// before it consults any allow list — so the upstream is reached through
+// a plain transport installed at the generation in force. That leaves the
+// re-check exactly as production runs it, and it denies loopback on the
+// first tick, which is the revocation this test needs.
+func TestARevokedTransferDoesNotReachTheCapsuleLookingWhole(t *testing.T) {
+	const (
+		chunk  = 32 << 10
+		chunks = 200
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		body := bytes.Repeat([]byte("x"), chunk)
+		for range chunks {
+			if _, err := w.Write(body); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer upstream.Close()
+
+	store, _ := policyFile(t, "10.0.0.0/8")
+	if _, err := store.Current(); err != nil {
+		t.Fatal(err)
+	}
+	r := &Relay{Policy: store, Log: discardLogger(), pollInterval: 20 * time.Millisecond}
+	r.pool.Store(&pool{gen: store.Generation(), transport: &http.Transport{}})
+
+	relay := httptest.NewServer(r)
+	defer relay.Close()
+	via, err := url.Parse(relay.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(via)}}
+	resp, err := client.Get(upstream.URL + "/big")
+	if err != nil {
+		t.Fatalf("the request never reached the upstream: %v", err)
+	}
+	defer resp.Body.Close()
+	n, readErr := io.Copy(io.Discard, resp.Body)
+
+	if n >= int64(chunk)*chunks {
+		t.Fatalf("the transfer delivered its whole body (%d bytes); the revocation never reached it", n)
+	}
+	if readErr == nil {
+		t.Errorf("the revoked transfer ended cleanly after %d of %d bytes; the capsule cannot "+
+			"tell a cut artifact from a whole one", n, chunk*chunks)
+	}
+}
+
+// TestAPoolIsNeverOlderThanTheGenerationItServes states what poolAt's
+// condition means, case by case, where the concurrent test can only
+// sample it.
+//
+// The property that matters is not that a generation is served by one
+// pool for all time — restoring a document a reader had already seen
+// leaves the generation where it was while the pool moved through zero,
+// and that is harmless because every connection is checked at its dial.
+// It is that a caller which observed a generation is never handed a pool
+// built for an older one.
+func TestAPoolIsNeverOlderThanTheGenerationItServes(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		inForce    uint64 // zero means nothing pooled yet
+		ask        uint64
+		wantReused bool
+	}{
+		{"nothing pooled yet", 0, 5, false},
+		{"same generation", 5, 5, true},
+		{"the policy moved on", 3, 5, false},
+		{"a caller that read the policy late", 5, 3, true},
+		{"the document became unreadable", 5, 0, false},
+		{"still unreadable", 0, 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := &Relay{Log: discardLogger()}
+			var before *pool
+			if c.inForce > 0 || c.name == "still unreadable" {
+				before = &pool{gen: c.inForce, transport: r.newTransport()}
+				r.pool.Store(before)
+			}
+			got := r.poolAt(c.ask)
+			if reused := before != nil && got == before; reused != c.wantReused {
+				t.Errorf("reused the pool in force = %v; want %v", reused, c.wantReused)
+			}
+			if got.gen < c.ask {
+				t.Errorf("a caller that observed generation %d was handed a pool built for %d; "+
+					"its connections were authorised by a policy that no longer applies", c.ask, got.gen)
+			}
+		})
 	}
 }
