@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -415,25 +416,21 @@ func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 
 // TestASessionThatWillNotClearReportsSomethingElse: the report is one
 // string per binding, so waiting a conflict out and being stuck behind
-// one have to say different things in it.
+// one have to read differently in it.
 //
-// A conflict is the ordinary shape of a restart, and the binding says so
-// while it waits. Past the point a session expires by inactivity it is
-// not ordinary any more — but the log level is the only place that ever
-// changed, and an operator reading `runpool status` saw the same 409
-// either way. The binding is still serving what was already queued,
-// which is the part the report has to be able to say.
+// A conflict is the ordinary shape of a restart, and while the wait is
+// ordinary nothing is recorded at all — the binding is not failing to
+// reach its provider, and saying so would put every restart in the
+// report. Past the point a session expires by inactivity it is not
+// ordinary any more, and that is what the record has to carry: an
+// operator reading `runpool status` decides whether to act, and the log
+// level is not where they look.
+//
+// Both halves are asserted, and each is gated on the loop's own attempt
+// count rather than on the clock, so neither can pass by sampling at a
+// convenient moment.
 func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
-	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Hour
-	h.srv.conflictBackoff = time.Millisecond
-	h.srv.conflictGrace = 30 * time.Millisecond
-
-	h.bind.newSession = func(context.Context) (providerSession, error) {
-		return nil, errors.New(`the session "abc" already exists, status="409 Conflict"`)
-	}
-
-	read := func() string {
+	read := func(t *testing.T, h *harness) string {
 		t.Helper()
 		var reason string
 		if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
@@ -450,33 +447,65 @@ func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
 		return reason
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.srv.loop(ctx, h.bind)
-	}()
+	// conflicting runs the loop against a broker that always answers 409,
+	// and returns once it has answered n times.
+	conflicting := func(t *testing.T, h *harness, grace time.Duration, n int64) {
+		t.Helper()
+		h.srv.pollBackoff = time.Hour
+		h.srv.conflictBackoff = time.Millisecond
+		h.srv.conflictGrace = grace
 
-	var stuck string
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if r := read(); strings.Contains(r, "not clearing on its own") {
-			stuck = r
-			break
+		var attempts atomic.Int64
+		reached := make(chan struct{})
+		var once sync.Once
+		h.bind.newSession = func(context.Context) (providerSession, error) {
+			if attempts.Add(1) >= n {
+				once.Do(func() { close(reached) })
+			}
+			return nil, errors.New(`the session "abc" already exists, status="409 Conflict"`)
 		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	cancel()
-	<-done
 
-	if stuck == "" {
-		t.Fatalf("the report never distinguished a session that will not clear from one being "+
-			"waited out; it says %q either way", read())
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			h.srv.loop(ctx, h.bind)
+		}()
+		select {
+		case <-reached:
+		case <-time.After(10 * time.Second):
+			cancel()
+			<-done
+			t.Fatalf("the loop answered fewer than %d conflicts", n)
+		}
+		cancel()
+		<-done
 	}
-	if !strings.Contains(stuck, "already queued") {
-		t.Errorf("the reason is %q; it has to say the binding is still serving what it has, "+
-			"because an operator reading it decides whether to act", stuck)
-	}
+
+	t.Run("while the wait is ordinary", func(t *testing.T) {
+		h := newHarness(t, 1)
+		// An hour of grace, so every one of these conflicts is inside it.
+		conflicting(t, h, time.Hour, 5)
+		if got := read(t, h); got != "" {
+			t.Errorf("five conflicts inside the grace recorded %q. Waiting one out is the "+
+				"ordinary shape of a restart, and an operator reading the report cannot tell "+
+				"it from a session that will not clear.", got)
+		}
+	})
+
+	t.Run("once it is not", func(t *testing.T) {
+		h := newHarness(t, 1)
+		conflicting(t, h, 20*time.Millisecond, 200)
+		got := read(t, h)
+		if !strings.Contains(got, "not clearing on its own") {
+			t.Fatalf("the report says %q past the grace; it never distinguished a session that "+
+				"will not clear from one being waited out", got)
+		}
+		if !strings.Contains(got, "already queued") {
+			t.Errorf("the reason is %q; it has to say the binding is still serving what it "+
+				"has, because an operator reading it decides whether to act", got)
+		}
+	})
 }
 
 // TestAnUnrelatedOutageDoesNotAgeTheConflict: the run of conflicts is a

@@ -115,7 +115,11 @@ const (
 	// sessionConflictGrace is how long a broker may hold a predecessor's
 	// session before the wait stops being ordinary. The broker expires a
 	// session by inactivity well inside this, so past it the binding is
-	// serving nothing for a reason no report would otherwise carry.
+	// taking no new work for a reason that will not resolve itself. It
+	// keeps serving what it already holds, and the reason it records
+	// changes to say both of those things -- the report holds one string
+	// per binding, and waiting one out and being stuck behind one have to
+	// read differently in it.
 	sessionConflictGrace = 5 * time.Minute
 )
 
