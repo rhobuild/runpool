@@ -332,11 +332,18 @@ func Validate(c *Config) error {
 	// what runs. Accepting "enforced" would promise parity that does
 	// not exist.
 	// The egress policy is rendered into an IPv4 ruleset, and an allow
-	// prefix is a hole punched through the baseline deny. Both facts have
+	// prefix is a hole punched through the baseline deny. Three facts have
 	// to be checked here: an IPv6 prefix passes CIDR parsing and then fails
-	// at gateway boot pointing at iptables instead of at the config line,
-	// and a public or over-wide allow silently reopens what the restricted
-	// profile exists to close.
+	// at gateway boot pointing at iptables instead of at the config line;
+	// a public or over-wide allow silently reopens what the restricted
+	// profile exists to close; and an allow through a range no relay
+	// reaches is a line that does nothing, while the ruleset still carries
+	// its accept -- a firewall that agrees with the file and a gateway
+	// that refuses every request, with nothing saying why.
+	//
+	// The policy holds the same two rules, because a gateway takes one
+	// from its reload channel as well as from here. This names the
+	// configuration field an operator has to fix.
 	for i, p := range c.Network.AllowPrivateCIDRs {
 		path := fmt.Sprintf("network.allowPrivateCIDRs[%d]", i)
 		switch {
@@ -345,6 +352,10 @@ func Validate(c *Config) error {
 		case egress.WidensBaselineDeny(p.Prefix):
 			v.errf(path, "%s is broader than a range the restricted profile withholds, "+
 				"so allowing it would reopen that whole range; name the specific addresses instead", p)
+		case egress.RefusedOutright(p.Prefix):
+			v.errf(path, "%s names addresses no relay reaches, so it cannot take effect: "+
+				"loopback is the gateway itself, and link-local, multicast, broadcast and the "+
+				"unspecified range are not destinations a connection can have", p)
 		}
 	}
 	for i, p := range c.Network.DenyCIDRs {

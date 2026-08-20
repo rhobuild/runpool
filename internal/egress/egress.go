@@ -81,6 +81,16 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("allow %s is broader than a range the restricted profile withholds, "+
 				"so allowing it would reopen that whole range", prefix)
 		}
+		// And an allow the decider can never honour is refused here
+		// rather than accepted and ignored. Left in, the kernel ruleset
+		// carries the matching accept while the relay refuses every
+		// request, so the operator has a firewall rule that agrees with
+		// the configuration and a gateway that does not.
+		if RefusedOutright(prefix) {
+			return fmt.Errorf("allow %s names addresses no relay reaches, so it cannot take "+
+				"effect: loopback is the gateway itself, and link-local, multicast, broadcast "+
+				"and the unspecified range are not destinations a connection can have", prefix)
+		}
 	}
 	return nil
 }
@@ -116,22 +126,31 @@ func (p Policy) Compile() (*Decider, error) {
 }
 
 // Allowed reports whether the gateway may connect to an address.
-// Anything that is not an ordinary global unicast IPv4 address is
-// refused outright: IPv6 has no path here, and the special-purpose
-// forms (loopback, link-local, multicast, unspecified) are the ones an
-// attacker reaches for. An explicit allow prefix wins over a deny;
-// otherwise a deny match refuses; otherwise the address is public and
-// permitted.
+//
+// Three questions, in this order. Is it an address a connection can have
+// at all -- IPv6 has no path here, and loopback, multicast, broadcast
+// and the unspecified address name no destination a relay could carry.
+// Then, does the policy name it: an explicit allow wins over everything
+// below. Then link-local, which is refused unless the policy named it,
+// because a cloud instance keeps its own credentials there and a job
+// that wanders into it should not arrive.
+//
+// The order is the point. Refusing link-local before the allow list is
+// consulted makes an operator's entry for it inert -- accepted by
+// validation, rendered into the kernel ruleset as an accept, and refused
+// by the relay on every request with nothing to say why.
 func (d *Decider) Allowed(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	if !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() ||
-		addr.IsLinkLocalUnicast() || addr.IsMulticast() || addr.IsUnspecified() {
+	if !reachable(addr) {
 		return false
 	}
+	addr = addr.Unmap()
 	for _, p := range d.allow {
 		if p.Contains(addr) {
 			return true
 		}
+	}
+	if addr.IsLinkLocalUnicast() {
+		return false
 	}
 	for _, p := range d.deny {
 		if p.Contains(addr) {
@@ -141,11 +160,50 @@ func (d *Decider) Allowed(addr netip.Addr) bool {
 	return true
 }
 
+// ipv4Broadcast is the address a datagram goes to when it goes to
+// everyone, which is not something a relay connects to.
+var ipv4Broadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
+// reachable reports whether an address is the kind a relay can carry at
+// all, which is the one question no policy answers differently.
+// Loopback is the gateway itself, unspecified names no destination, and
+// multicast and broadcast are not connections. Link-local is not here:
+// it is a real destination on the link, refused by default and
+// reopenable by naming it.
+//
+// It is named so the two places that must agree can share it. A policy
+// allowing a range this refuses is not a narrower policy, it is a policy
+// with a line that does nothing -- and the kernel ruleset carries the
+// matching accept, so the operator has a rule in the firewall, a clean
+// validation, and a relay that refuses every request with nothing saying
+// why.
+func reachable(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.Is4() && !addr.IsLoopback() && !addr.IsMulticast() &&
+		!addr.IsUnspecified() && addr != ipv4Broadcast
+}
+
+// RefusedOutright reports whether an allow prefix names only addresses
+// the decider refuses whatever the policy says.
+//
+// The prefix's own network address decides it, which is enough because
+// an allow broader than the range it sits in is already refused for
+// widening: what reaches here is either inside one of these ranges or
+// outside all of them.
+func RefusedOutright(prefix netip.Prefix) bool {
+	return !reachable(prefix.Masked().Addr())
+}
+
 // baselineDeny is every IPv4 range that is never a legitimate public
 // destination for a CI job: the private ranges, loopback, link-local
 // (cloud metadata lives there), CGNAT, benchmarking, multicast,
-// reserved, and broadcast. Operator allowPrivateCIDRs punch holes
-// through it at decision time; nothing widens the list away.
+// reserved, and broadcast. Nothing widens the list away.
+//
+// Operator allowPrivateCIDRs punch holes through it at decision time,
+// link-local included -- a deployment with a reason to reach one address
+// in it names that address. What they cannot reopen is what no
+// connection reaches at all, and a policy naming one of those is refused
+// rather than accepted and ignored.
 var baselineDeny = []string{
 	"0.0.0.0/8",
 	"10.0.0.0/8",

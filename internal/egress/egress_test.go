@@ -148,3 +148,103 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+// TestTheKernelAndTheRelayAgreeAboutAnAllow: an operator gets one
+// answer, or the configuration is a lie.
+//
+// The ruleset and the decider are two renderings of one policy, and the
+// operator sees only the first. An allow the kernel accepts and the
+// relay refuses leaves a rule in the firewall that matches the file, and
+// a gateway that answers 403 to every request through it with nothing
+// anywhere saying why.
+func TestTheKernelAndTheRelayAgreeAboutAnAllow(t *testing.T) {
+	for _, allow := range []string{
+		"10.9.8.0/24",        // the ordinary case: a hole in a private range
+		"169.254.169.254/32", // one address of link-local, named
+		"100.64.7.0/24",      // CGNAT
+		"198.18.5.0/24",      // benchmarking
+	} {
+		p := policy()
+		p.Allow = append(p.Allow, allow)
+		if err := p.Validate(); err != nil {
+			t.Errorf("allow %s: rejected by the policy: %v", allow, err)
+			continue
+		}
+		d, err := p.Compile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix := netip.MustParsePrefix(allow)
+		addr := prefix.Masked().Addr()
+		accepted := strings.Contains(p.RenderIPTables("eth0", 3128),
+			"-A OUTPUT -d "+allow+" -j ACCEPT")
+		if reached := d.Allowed(addr); accepted != reached {
+			t.Errorf("allow %s: the ruleset accepts it = %v, the relay reaches %s = %v. "+
+				"An operator reading the firewall and an operator reading the logs "+
+				"see different policies.", allow, accepted, addr, reached)
+		}
+	}
+}
+
+// TestLinkLocalIsRefusedUntilItIsNamed: the default is what matters
+// here, since a cloud instance keeps its own credentials there.
+func TestLinkLocalIsRefusedUntilItIsNamed(t *testing.T) {
+	metadata := netip.MustParseAddr("169.254.169.254")
+
+	// A deny set that does not mention link-local, so the refusal has to
+	// come from the decider. BuildDeny always includes the range, and a
+	// policy carrying it would refuse the address through the list --
+	// proving the list works, not this. The reload channel takes whatever
+	// deny set it is handed, so a policy without it is reachable.
+	thin := policy()
+	thin.Deny = []string{"10.0.0.0/8"}
+	if err := thin.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := thin.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Allowed(metadata) {
+		t.Error("link-local is reachable with nothing denying it and nothing naming it; " +
+			"a job that wanders into the metadata service arrives")
+	}
+
+	p := policy()
+	p.Allow = append(p.Allow, "169.254.169.254/32")
+	named, err := p.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !named.Allowed(metadata) {
+		t.Error("an allow naming one link-local address does not take effect, so the entry is " +
+			"accepted, rendered into the ruleset, and refused on every request")
+	}
+	// One address, not the range it sits in.
+	if named.Allowed(netip.MustParseAddr("169.254.1.1")) {
+		t.Error("naming one link-local address reopened the rest of the range")
+	}
+}
+
+// TestWhatNoConnectionReachesCannotBeAllowed: an allow through one of
+// these is a line that does nothing, so it is refused rather than
+// accepted and ignored.
+func TestWhatNoConnectionReachesCannotBeAllowed(t *testing.T) {
+	for _, allow := range []string{
+		"127.0.0.1/32",       // the gateway itself
+		"224.0.0.1/32",       // multicast
+		"255.255.255.255/32", // broadcast
+		"0.0.0.0/32",         // no destination
+	} {
+		p := policy()
+		p.Allow = append(p.Allow, allow)
+		if err := p.Validate(); err == nil {
+			t.Errorf("allow %s was accepted; the ruleset would carry its accept while the "+
+				"relay refused every request through it", allow)
+		}
+		if !RefusedOutright(netip.MustParsePrefix(allow)) {
+			t.Errorf("%s is not reported as unreachable, so the configuration validator "+
+				"would accept it too", allow)
+		}
+	}
+}

@@ -405,6 +405,19 @@ effect — `0.0.0.0/0` readmits every private network while `profile` still
 reads `public-internet-only` — so the validator refuses any entry that
 strictly contains a denied range.
 
+An entry that names something no connection reaches is refused for a
+different reason: it cannot take effect. Loopback is the gateway itself, and
+multicast, broadcast and the unspecified address are not destinations a relay
+connects to. Accepting one would put an allow rule in the rendered firewall
+while the gateway refused every request through it, with nothing anywhere
+saying why.
+
+Link-local is not in that group. It is denied by default — a cloud instance
+keeps its own credentials there, and a job that wanders into it should not
+arrive — and a deployment with a reason to reach one address in it names that
+address. The range itself cannot be reopened, because an entry broader than a
+withheld range is refused by the rule above.
+
 Narrower entries are the intended use, and public prefixes are accepted
 because they change nothing: the profile already permits the public internet.
 That is also how a capsule reaches a service on the host's own public

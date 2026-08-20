@@ -121,6 +121,14 @@ by its public and operational effects.
   whole range as a side effect; a policy carrying one is refused. The
   rule belongs to the policy rather than to the configuration file, so
   the live reload channel is held to it too.
+  An entry naming what no connection reaches — loopback, multicast,
+  broadcast, the unspecified address — is refused for the opposite
+  reason: it cannot take effect, and accepting it would leave an allow
+  rule in the rendered firewall while the gateway refused every request
+  through it. Link-local is not in that group: it stays denied by
+  default, because a cloud instance keeps its own credentials there, and
+  an allowance naming one address in it now reaches that address rather
+  than being accepted and quietly ignored.
   Public prefixes are accepted because the profile already permits the
   public internet — which is how a capsule reaches a service on the
   host's own public address, an address the runtime deny set withholds
