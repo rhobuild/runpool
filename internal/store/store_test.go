@@ -6,9 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1897,158 +1894,168 @@ func TestUninstallClearsABindingThatReachedItsProvider(t *testing.T) {
 	}
 }
 
-// executedPurgeOrder reads the sequence PurgeEverything actually runs and
-// pairs each step with the table it clears.
-//
-// The order comes from the slice literal the function walks, parsed from
-// the source, because that is what executes. Reading it from the query
-// file instead would check the order of a declaration: the two are
-// independent, and a step moved in the Go code alone would leave every
-// assertion below passing while uninstall aborts. Parsing also means a
-// step that has been commented out is a step that is not there, where
-// searching the text for its name would still find it.
-//
-// The query file supplies only the table each name clears. A name whose
-// table cannot be read is a failure rather than a skip, since a step
-// silently dropped here would take its whole subtree of foreign keys out
-// of the rule with it.
-func executedPurgeOrder(t *testing.T) map[string]int {
+// seedEverything writes one row into every table an instance fills, so
+// what uninstall does can be observed instead of read.
+func seedEverything(t *testing.T, s *Store) {
 	t.Helper()
-
-	file, err := parser.ParseFile(token.NewFileSet(), "purge.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var steps []string
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "PurgeEverything" {
-			continue
+	binding := seedBinding(t, s)
+	attempt := seedAttempt(t, s, binding, "msg-seed", "job-seed")
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.RecordProviderContact(binding, time.Now()); err != nil {
+			return err
 		}
-		// Scoped to this function, and to selectors on its query set. A
-		// walk of the whole file would collect any other slice of
-		// selectors as though it were part of the sequence, and one more
-		// mention of a step is enough to move it past its own child.
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			lit, ok := n.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			for _, el := range lit.Elts {
-				sel, ok := el.(*ast.SelectorExpr)
-				if !ok {
-					continue
-				}
-				if on, ok := sel.X.(*ast.SelectorExpr); ok && on.Sel.Name == "q" {
-					steps = append(steps, sel.Sel.Name)
-				}
-			}
-			return true
-		})
-	}
-	if len(steps) < 2 {
-		t.Fatalf("read %d steps out of PurgeEverything; the rule below would hold vacuously", len(steps))
-	}
-
-	raw, err := os.ReadFile(filepath.Join("query", "purge.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Split on the name markers so a delete is read as belonging to the
-	// query above it, whatever comments or whitespace sit in between.
-	deletes := map[string]string{}
-	marker := regexp.MustCompile(`(?m)^-- name: (\w+) :exec\b`)
-	deleted := regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+"?(\w+)"?`)
-	chunks := marker.FindAllStringSubmatchIndex(string(raw), -1)
-	for i, at := range chunks {
-		end := len(raw)
-		if i+1 < len(chunks) {
-			end = chunks[i+1][0]
+		if err := tx.RecordGitHubBindingMetadata(binding, "repository",
+			"https://github.com/acme/app", "default", "runpool-standard", 41); err != nil {
+			return err
 		}
-		// Comment lines go first. This file explains itself at length,
-		// and a comment may legally sit between a name and its statement
-		// -- the generator turns one into the doc on what it emits -- so
-		// a scan that let a comment win would map a step to a table it
-		// does not clear and check the rule against that.
-		var stmt strings.Builder
-		for _, line := range strings.Split(string(raw[at[1]:end]), "\n") {
-			if !strings.HasPrefix(strings.TrimSpace(line), "--") {
-				stmt.WriteString(line)
-				stmt.WriteByte('\n')
-			}
+		// A second binding recorded before its scale set was ensured, so
+		// its metadata row carries no scale set id. A statement narrowed
+		// to the rows an instance provisioned would pass over exactly
+		// this one, and pass over it in every real deployment too.
+		unprovisioned, err := tx.EnsureBinding("default", "github_actions",
+			"v1|repository|https://github.com/acme/other||runpool-standard")
+		if err != nil {
+			return err
 		}
-		if m := deleted.FindStringSubmatch(stmt.String()); m != nil {
-			deletes[string(raw[at[2]:at[3]])] = m[1]
+		if err := tx.RecordGitHubBindingMetadata(unprovisioned, "repository",
+			"https://github.com/acme/other", "default", "runpool-standard", 0); err != nil {
+			return err
 		}
-	}
-
-	// Position in the sequence, not a count of the tables seen. A table
-	// reached twice would otherwise take the later index, which is how a
-	// parent mentioned again ends up ranked after the child that has to
-	// precede it, with nothing to say so.
-	order := map[string]int{}
-	for i, name := range steps {
-		table, ok := deletes[name]
-		if !ok {
-			t.Errorf("PurgeEverything runs %s and query/purge.sql does not show it deleting from any "+
-				"table; every child of whatever it clears is outside the rule below", name)
-			continue
+		if err := tx.RecordGitHubAttemptMetadata(attempt, "job-seed", 7, 9); err != nil {
+			return err
 		}
-		if at, twice := order[table]; twice {
-			t.Errorf("steps %d and %d both clear %s; which one the rule below is about is "+
-				"undecidable, and the later one outranks every child ordered against the earlier",
-				at, i, table)
-			continue
+		if err := tx.RecordRepeatableEvent(attempt, "runtime_observation_failed", map[string]string{"why": "seeding"}); err != nil {
+			return err
 		}
-		order[table] = i
-	}
-	for name := range deletes {
-		if !slices.Contains(steps, name) {
-			t.Errorf("query/purge.sql declares %s and PurgeEverything never runs it; the statement "+
-				"exists and the table it clears does not get cleared", name)
+		lease, err := tx.LeaseAttempt(attempt, binding, "standard")
+		if err != nil {
+			return err
 		}
-	}
-	return order
+		if _, err := tx.PlanResource(lease.ID, ResourceContainer, "capsule", "runpool-seed"); err != nil {
+			return err
+		}
+		project, err := tx.EnsureCacheProject("acme/app")
+		if err != nil {
+			return err
+		}
+		_, err = tx.LeaseCacheLane(project, "default", lease.ID, 2)
+		return err
+	})
 }
 
-// TestUninstallReachesEveryChildOfWhatItDeletes states the rule the case
-// above is one instance of.
-//
-// A table whose parent uninstall deletes must be deleted too, and first.
-// Neither half is optional: a child left behind fails its parent's
-// delete, and a child deleted after its parent never runs, because the
-// transaction has already aborted. Both are silent until an operator
-// runs uninstall on an instance that did some work, which is the one
-// moment when nothing can be retried.
-//
-// The relationships come from the database rather than from a list kept
-// by hand, so a table added later is covered without anyone remembering
-// to add it here.
-func TestUninstallReachesEveryChildOfWhatItDeletes(t *testing.T) {
-	s := newStore(t)
-	order := executedPurgeOrder(t)
+// tablesOf is every table the schema declares.
+func tablesOf(t *testing.T, s *Store) []string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
 
-	checked := 0
-	for child, parents := range foreignKeys(t, s) {
-		for _, parent := range parents {
-			parentAt, purged := order[parent]
-			if !purged {
-				continue // uninstall leaves the parent alone, so the child may stay too
-			}
-			checked++
-			childAt, ok := order[child]
-			switch {
-			case !ok:
-				t.Errorf("uninstall deletes %s but never deletes %s, which references it; "+
-					"the foreign key fails the delete and the whole uninstall aborts", parent, child)
-			case childAt > parentAt:
-				t.Errorf("uninstall deletes %s before %s, which references it; the parent's "+
-					"delete fails and nothing after it runs", parent, child)
-			}
+func rowsIn(t *testing.T, s *Store, table string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestUninstallClearsEveryTableItOwns runs the purge against a database
+// holding a row everywhere an instance writes one, and requires it to
+// finish and to leave nothing of itself behind.
+//
+// It watches the database rather than reading the statements, which is
+// what makes it total. Every way of getting this wrong arrives at the
+// same two observations: a step that clears only some of its rows, one
+// that names its table in a spelling the schema does not use, one
+// declared in a form the generator emits differently, or a sequence
+// that runs in an order the source does not show. Either a foreign key
+// refuses a parent whose child is still present, or a table asserted
+// empty is not.
+func TestUninstallClearsEveryTableItOwns(t *testing.T) {
+	s := newStore(t)
+
+	// What uninstall deliberately leaves. meta carries the schema
+	// fingerprint, and a database whose meta was cleared is refused on
+	// every later open; pressure is one row whose retention keeps the
+	// disk hysteresis across a restart; audit_log is a record of what an
+	// operator did, which outlives the machine it describes.
+	kept := []string{"audit_log", "meta", "pressure"}
+
+	seedEverything(t, s)
+
+	// The seed has to keep up with the schema, so an unseeded table is a
+	// failure here rather than a silent gap: uninstall would be neither
+	// observed against it nor observed to skip it.
+	for _, table := range tablesOf(t, s) {
+		if slices.Contains(kept, table) {
+			continue
+		}
+		if rowsIn(t, s, table) == 0 {
+			t.Errorf("nothing seeded %s, so what uninstall does to it is not observed; "+
+				"seed it above, or say why uninstall leaves it", table)
 		}
 	}
-	if checked == 0 {
-		t.Fatal("no child of a purged table was found; the rule proved nothing")
+
+	if err := s.Tx(t.Context(), func(tx *Tx) error { return tx.PurgeEverything() }); err != nil {
+		t.Fatalf("uninstall did not finish: %v\nThe containers and the scale sets are already "+
+			"gone by the time this runs, so what is left is a half-removed instance and a "+
+			"state database no supported command will clear.", err)
+	}
+
+	for _, table := range tablesOf(t, s) {
+		if slices.Contains(kept, table) {
+			continue
+		}
+		if n := rowsIn(t, s, table); n != 0 {
+			t.Errorf("%s still holds %d row(s) after uninstall; a reinstall onto a retained "+
+				"state volume inherits them", table, n)
+		}
+	}
+}
+
+// TestEveryPurgeStatementIsTotal: uninstall names the whole instance, so
+// each of its deletes takes a whole table.
+//
+// It reads the generated statements rather than the queries they came
+// from, because those are what run: a document that reaches the
+// generator damaged produces a statement nobody wrote, and comparing
+// the two sources would not show it. A narrowed delete is the natural
+// mistake here -- clearing only the rows an instance provisioned reads
+// as caution -- and it leaves the rest behind for the foreign key of
+// whatever they hang from to refuse.
+func TestEveryPurgeStatementIsTotal(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("sqlitedb", "purge.sql.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := regexp.MustCompile(`(?is)DELETE\s+FROM\s+([^\n`+"`"+`]*)`).FindAllStringSubmatch(string(raw), -1)
+	if len(statements) < 2 {
+		t.Fatalf("read %d delete statements out of the generated layer; "+
+			"the rule below would hold vacuously", len(statements))
+	}
+	for _, stmt := range statements {
+		rest := strings.TrimSpace(stmt[1])
+		if fields := strings.Fields(rest); len(fields) != 1 {
+			t.Errorf("uninstall runs `DELETE FROM %s`, which does not clear a whole table. "+
+				"Every row it passes over stays behind for the foreign key of whatever "+
+				"references it to refuse, and the delete of that parent is what aborts "+
+				"the rest of the uninstall.", rest)
+		}
 	}
 }
 

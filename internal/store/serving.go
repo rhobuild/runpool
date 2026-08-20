@@ -583,8 +583,8 @@ func providerContactFromRow(bindingID, contactMs int64, lastError string, errorM
 // It is named rather than written inline so there is one place to state
 // it and one place to check it against the schema. Uninstall clears the
 // same parent through its own sequence, which is wider: it runs when
-// nothing is left, so it takes the deliveries and leases this pass is
-// defined never to meet.
+// nothing is left, so it also takes the deliveries this pass is defined
+// never to meet, and the leases that follow from them.
 var bindingChildren = []string{"github_actions_binding_metadata", "provider_binding_contact"}
 
 // ForgetUnclaimedBindings removes the binding rows configuration no
