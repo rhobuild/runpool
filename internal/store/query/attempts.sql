@@ -124,11 +124,16 @@ WHERE id = @attempt_id AND execution_evidence = @current;
 -- leased, preparing and prepared all precede the start authorization.
 -- From starting onward at-most-once rules, and requeue must refuse.
 --
--- The evidence resets like the proof-carrying requeues' does, and for
--- the same reason: the serving is over and the next one starts from
--- nothing. The authorization can be present here - recording it commits
--- before the best-effort walk to starting - and left behind it makes the
--- next serving's first honest observation a write that moves backwards.
+-- The evidence resets like the proof-carrying requeue's does, and for the
+-- same reason: the serving is over and the next one starts from nothing,
+-- so an authorization left behind would make the next serving's first
+-- honest observation a write that moves backwards.
+--
+-- Reaching here with that authorization already recorded is not possible
+-- as the code stands: the walk to starting is the authoritative edge and
+-- it commits before the evidence, so an attempt this guard accepts has
+-- not been authorized. The reset is what keeps that a property of the
+-- ordering rather than something this query depends on.
 UPDATE assignment_attempts
 SET state = 'ready', execution_evidence = 'not_started'
 WHERE id = @attempt_id AND state IN ('leased', 'preparing', 'prepared');

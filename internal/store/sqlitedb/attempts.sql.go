@@ -446,11 +446,16 @@ WHERE id = ?1 AND state IN ('leased', 'preparing', 'prepared')
 // leased, preparing and prepared all precede the start authorization.
 // From starting onward at-most-once rules, and requeue must refuse.
 //
-// The evidence resets like the proof-carrying requeues' does, and for
-// the same reason: the serving is over and the next one starts from
-// nothing. The authorization can be present here - recording it commits
-// before the best-effort walk to starting - and left behind it makes the
-// next serving's first honest observation a write that moves backwards.
+// The evidence resets like the proof-carrying requeue's does, and for the
+// same reason: the serving is over and the next one starts from nothing,
+// so an authorization left behind would make the next serving's first
+// honest observation a write that moves backwards.
+//
+// Reaching here with that authorization already recorded is not possible
+// as the code stands: the walk to starting is the authoritative edge and
+// it commits before the evidence, so an attempt this guard accepts has
+// not been authorized. The reset is what keeps that a property of the
+// ordering rather than something this query depends on.
 func (q *Queries) RequeueAttempt(ctx context.Context, attemptID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, requeueAttempt, attemptID)
 	if err != nil {

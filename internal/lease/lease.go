@@ -369,10 +369,7 @@ func (m *Manager) HoldAttempt(ctx context.Context, leaseID assignment.LeaseID, r
 // matching no row, and a requeue that matches nothing rolls the whole
 // finalizing transaction back and pins the lease in cleaning.
 func (m *Manager) requeueProven(tx *store.Tx, attempt store.Attempt, leaseID assignment.LeaseID) error {
-	if attempt.State == "starting" || attempt.State == "running" {
-		return m.requeueOrReview(tx, attempt.ID, tx.RequeueProvenInert(attempt.ID), leaseID)
-	}
-	return m.requeueOrReview(tx, attempt.ID, tx.Requeue(attempt.ID), leaseID)
+	return m.requeueOrReview(tx, attempt.ID, tx.RequeueServing(attempt), leaseID)
 }
 
 // requeueOrReview turns a refused retry into a review rather than an

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
@@ -352,7 +351,7 @@ func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor 
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is not in manual review", ErrConflict, attemptID)
 	}
-	return t.RecordEventDetail(attemptID, "operator_resolved", "operator_resolved",
+	return t.RecordRepeatableEvent(attemptID, "operator_resolved",
 		map[string]string{"decision": "retry", "actor": actor, "reason": reason})
 }
 
@@ -370,7 +369,7 @@ func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution, 
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is not in manual review", ErrConflict, attemptID)
 	}
-	return t.RecordEventDetail(attemptID, "operator_resolved", "operator_resolved",
+	return t.RecordRepeatableEvent(attemptID, "operator_resolved",
 		map[string]string{"decision": "settle", "actor": actor, "reason": reason})
 }
 
@@ -388,6 +387,30 @@ func (t *Tx) Settle(attemptID assignment.AttemptID, currentState, resolution str
 	return t.RecordEvent(attemptID, "attempt_settled", "attempt_settled")
 }
 
+// RequeueServing returns a serving's attempt to the queue, choosing
+// between the two requeues by the state the caller read.
+//
+// The choice belongs here because the partition does. The two queries
+// have identical bodies and differ only in which states they accept, and
+// they are two rather than one on purpose: RequeueProvenInertAttempt
+// admits `starting` and `running`, which are past the start
+// authorization, and a caller may only reach it holding the daemon's
+// proof that the start never took effect. Merging them into one guard
+// would hand that permission to every caller, which is the at-most-once
+// rule given away for a shorter file.
+//
+// What nothing here states is that their union covers the states a
+// serving passes through. TestEveryServingStateCanBeDisposedOf does,
+// by walking that set and requiring each of them to dispose.
+func (t *Tx) RequeueServing(attempt Attempt) error {
+	switch attempt.State {
+	case "starting", "running":
+		return t.RequeueProvenInert(attempt.ID)
+	default:
+		return t.Requeue(attempt.ID)
+	}
+}
+
 // HoldForReview parks an attempt for an operator with the reason the
 // queue will show.
 func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error {
@@ -400,7 +423,27 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error 
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s cannot enter review from its state", ErrConflict, attemptID)
 	}
-	return t.RecordEvent(attemptID, "manual_review_requested", "manual_review_requested")
+	return t.RecordRepeatableEvent(attemptID, "manual_review_requested",
+		map[string]string{"reason": reason})
+}
+
+// RecordRepeatableEvent appends one lifecycle event whose kind can
+// happen to an attempt more than once, sequencing the key so a second
+// occurrence is a second event rather than a replay of the first.
+//
+// Use it for a decision a person makes: held for review, resolved,
+// served again, held again. RecordEvent is for the rest, where the key
+// already carries what makes the write distinct — a lease id, a delivery
+// id — or where the thing can only happen once.
+func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind string, detail map[string]string) error {
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return err
+	}
+	_, err = t.q.InsertSequencedAttemptEvent(t.ctx, sqlitedb.InsertSequencedAttemptEventParams{
+		AttemptID: string(attemptID), Kind: kind, DetailJson: string(encoded),
+	})
+	return err
 }
 
 // RecordEvent appends one lifecycle event, idempotently per key.
@@ -518,20 +561,20 @@ func providerContactFromRow(bindingID, contactMs int64, lastError string, errorM
 // layer: sqlc's sqlite engine has no slice parameter, and the ids come
 // from the caller's own loop, never from input.
 func (t *Tx) ForgetUnclaimedBindings(claimed []assignment.BindingID) (int, error) {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(claimed)), ",")
-	if placeholders == "" {
+	if len(claimed) == 0 {
 		// No claim at all is a caller with no bindings, which serve
 		// refuses before reaching here. Deleting everything on an empty
 		// list would turn that mistake into data loss.
 		return 0, nil
 	}
+	held := placeholders(len(claimed))
 	args := make([]any, len(claimed))
 	for i, id := range claimed {
 		args[i] = id
 	}
 	unclaimed := `
 		SELECT id FROM provider_bindings
-		WHERE id NOT IN (` + placeholders + `)
+		WHERE id NOT IN (` + held + `)
 		  AND NOT EXISTS (SELECT 1 FROM broker_deliveries d WHERE d.binding_id = provider_bindings.id)`
 
 	// The dependents first: both reference the binding row, so the

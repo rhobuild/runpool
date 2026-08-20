@@ -1788,3 +1788,65 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 			"one of them lists something the other does not", found, len(AllAttemptStates))
 	}
 }
+
+// TestASecondReviewCycleIsItsOwnHistory: holding an attempt twice, and
+// resolving it twice, leaves four decisions in the record rather than
+// two.
+//
+// The attempt row keeps only the latest review reason, the latest actor
+// and the latest resolution, so the event log is the whole of what says
+// who decided what and why the time before. A fixed idempotency key made
+// every occurrence after the first a replay: the insert's conflict
+// clause dropped it, silently and successfully, and the earlier decision
+// was the one that survived.
+//
+// The cycle is reachable — hold, an operator resolves back to the queue,
+// the attempt is served again and held again — and one of this round's
+// own changes is what made it complete rather than pin the lease.
+func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-two-reviews", "job-two-reviews")
+
+	cycle := func(reason, actor, why string) {
+		t.Helper()
+		inTx(t, s, func(tx *Tx) error {
+			if err := tx.HoldForReview(id, reason); err != nil {
+				return err
+			}
+			return tx.ResolveReviewToReady(id, why, actor)
+		})
+	}
+	cycle(ReviewReasonStartOutcomeUnknown, "alice", "the runner never picked it up")
+	cycle(ReviewReasonStartOutcomeUnknown, "bob", "the daemon was replaced mid-flight")
+
+	var events []Event
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		events, err = tx.Events(id)
+		return err
+	})
+
+	var holds, resolves []string
+	for _, e := range events {
+		switch e.Kind {
+		case "manual_review_requested":
+			holds = append(holds, e.Detail)
+		case "operator_resolved":
+			resolves = append(resolves, e.Detail)
+		}
+	}
+	if len(holds) != 2 {
+		t.Errorf("%d hold(s) recorded for two reviews: %v", len(holds), holds)
+	}
+	if len(resolves) != 2 {
+		t.Fatalf("%d resolution(s) recorded for two decisions: %v", len(resolves), resolves)
+	}
+	// Both actors, not the first one twice and not the last one only.
+	joined := strings.Join(resolves, " ")
+	for _, actor := range []string{"alice", "bob"} {
+		if !strings.Contains(joined, actor) {
+			t.Errorf("the record does not name %s: %v", actor, resolves)
+		}
+	}
+}

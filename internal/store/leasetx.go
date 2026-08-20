@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -252,13 +251,13 @@ func (t *Tx) LeasesInStates(states ...LeaseState) ([]Lease, error) {
 	if len(states) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(states)), ", ")
+	held := placeholders(len(states))
 	args := make([]any, len(states))
 	for i, s := range states {
 		args[i] = s
 	}
 	rows, err := t.tx.Query(
-		selectLease+`WHERE state IN (`+placeholders+`) ORDER BY created_at, id`, args...)
+		selectLease+`WHERE state IN (`+held+`) ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, err
 	}
