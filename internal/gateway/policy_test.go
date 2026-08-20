@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,6 @@ func TestPolicyGenerationAdvancesOnlyOnChange(t *testing.T) {
 	}
 
 	// A restriction that actually changed must advance it.
-	time.Sleep(10 * time.Millisecond) // distinct mtime
 	write("192.168.0.0/16")
 	if _, err := s.Current(); err != nil {
 		t.Fatal(err)
@@ -80,25 +80,20 @@ func TestRelayNoticesAPolicyChangeWithoutDialing(t *testing.T) {
 	write("10.0.0.0/8")
 
 	r := &Relay{Policy: &PolicyStore{Path: path}, Log: discardLogger()}
-	r.roundTripper() // the transport must exist before the pool can be dropped
 
 	// Two observations settle the baseline; no dial happens in either.
-	r.expireStaleConnections()
-	r.expireStaleConnections()
-	baseline := r.policyGen.Load()
+	r.transportInForce()
+	baseline := r.transportInForce().gen
 	if baseline == 0 {
 		t.Fatal("the relay never read the policy; a pooled request would keep the old one forever")
 	}
 
-	r.expireStaleConnections()
-	if got := r.policyGen.Load(); got != baseline {
+	if got := r.transportInForce().gen; got != baseline {
 		t.Errorf("generation moved to %d with an unchanged policy; the pool would be dropped every request", got)
 	}
 
-	time.Sleep(10 * time.Millisecond) // distinct mtime
 	write("192.168.0.0/16")
-	r.expireStaleConnections()
-	if got := r.policyGen.Load(); got == baseline {
+	if got := r.transportInForce().gen; got == baseline {
 		t.Error("the relay did not notice a new policy without dialing; pooled connections would keep the old one")
 	}
 }
@@ -261,19 +256,15 @@ func TestAPolicyMoveRetiresTheTransport(t *testing.T) {
 	write("10.0.0.0/8")
 
 	r := &Relay{Policy: &PolicyStore{Path: path}, Log: discardLogger()}
-	first := r.roundTripper()
+	first := r.transportInForce()
 
-	// Two observations settle the baseline; neither is a policy move.
-	r.expireStaleConnections()
-	r.expireStaleConnections()
-	if got := r.roundTripper(); got != first {
+	// A second observation of the same policy is not a move.
+	if got := r.transportInForce(); got != first {
 		t.Fatal("the transport was replaced without the policy moving; every request would start a new pool")
 	}
 
-	time.Sleep(10 * time.Millisecond) // distinct mtime
 	write("192.168.0.0/16")
-	r.expireStaleConnections()
-	if got := r.roundTripper(); got == first {
+	if got := r.transportInForce(); got == first {
 		t.Error("the transport survived a policy move; a connection pooled under the old one " +
 			"still carries the next request past the dialer, where the address is checked")
 	}
@@ -413,12 +404,76 @@ func TestAReaderCrossingAnInstallDoesNotOverCountGenerations(t *testing.T) {
 	}
 	settle()
 
-	// One for the first read, and at most one per install. Two installs
-	// inside the same nanosecond-and-size stamp are indistinguishable to
-	// the store, so this is an upper bound rather than an equality.
+	// One for the first read, and at most one per install. It is an upper
+	// bound rather than an equality because a reader only learns of a
+	// document by reading it: installs that land between two reads are
+	// collapsed into one move, and the loop cycles through a small set of
+	// denies, so an install that restores the document a reader last saw
+	// is not a change at all.
 	if got, max := store.Generation(), uint64(installs+1); got > max {
 		t.Errorf("generation = %d after %d installs; want at most %d. "+
 			"The extra reloads are pooled transports retired for a policy that did not move",
 			got, installs, max)
+	}
+}
+
+// TestAnEqualLengthInstallIsNotMissed: what counts as a policy change is
+// the document's bytes, not its modification time and size.
+//
+// Linux stamps mtime from the coarse clock, which advances once per tick,
+// so two documents of equal length installed inside one tick carry the
+// same pair. Deciding on that pair, the second install never reaches the
+// relay at all: the decider stays as it was, the generation does not
+// move, and the pooled transport is not retired either — a tightening
+// that silently does not take effect.
+func TestAnEqualLengthInstallIsNotMissed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	doc := func(deny string) string {
+		return `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+			`"allow":[],"deny":["` + deny + `"]}`
+	}
+	first, second := doc("10.20.20.0/24"), doc("10.30.30.0/24")
+	if len(first) != len(second) {
+		t.Fatalf("the two documents differ in length (%d vs %d); size alone would "+
+			"separate them and the test would prove nothing", len(first), len(second))
+	}
+
+	// One instant for both installs: the tick they would have shared.
+	tick := time.Unix(1_700_000_000, 0)
+	install := func(body string) {
+		t.Helper()
+		if err := atomicfile.Replace(path, []byte(body), 0o600, -1, -1); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, tick, tick); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := &PolicyStore{Path: path}
+	install(first)
+	decider, err := s.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decider.Allowed(netip.MustParseAddr("10.20.20.5")) {
+		t.Fatal("the first policy did not take effect; nothing after this means anything")
+	}
+	baseline := s.Generation()
+
+	install(second)
+	decider, err = s.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decider.Allowed(netip.MustParseAddr("10.20.20.5")) {
+		t.Error("the second install never reached the relay; the range it stopped denying is still refused")
+	}
+	if decider.Allowed(netip.MustParseAddr("10.30.30.5")) {
+		t.Error("the second install never reached the relay; the range it began denying is still permitted")
+	}
+	if s.Generation() == baseline {
+		t.Error("the generation did not move on the second install; the pooled transport " +
+			"keeps every connection the previous policy authorised")
 	}
 }

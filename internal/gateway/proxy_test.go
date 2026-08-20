@@ -3,16 +3,23 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // TestParseAuthority is the strictest surface in the gateway: this
@@ -616,5 +623,286 @@ func TestTheTunnelClockIsMonotonic(t *testing.T) {
 	c.mark()
 	if after := c.idleFor(); after >= before {
 		t.Errorf("idleFor = %v after marking traffic and %v before; a mark must reset it", after, before)
+	}
+}
+
+// dialedTo stands in for the connection an http.Transport reports
+// through its trace. Only the remote address is ever read: it is the one
+// thing a re-check needs and the one thing a net.Pipe cannot supply.
+type dialedTo struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c dialedTo) RemoteAddr() net.Addr { return c.remote }
+
+// policyFile writes a gateway policy denying one range and returns a
+// store reading it, plus the installer for later revisions.
+//
+// Installs go through atomicfile.Replace because that is what Reload
+// does. os.WriteFile truncates before it writes, so a reader crossing
+// one sees an empty document, refuses to compile it, and treats the
+// policy as unavailable — a denial arrived at through a shape production
+// cannot produce, which would let these tests pass for a reason that is
+// not the one they name.
+func policyFile(t *testing.T, deny string) (*PolicyStore, func(string)) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.json")
+	write := func(deny string) {
+		body := `{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24",` +
+			`"allow":[],"deny":["` + deny + `"]}`
+		if err := atomicfile.Replace(path, []byte(body), 0o600, -1, -1); err != nil {
+			t.Error(err)
+		}
+	}
+	write(deny)
+	return &PolicyStore{Path: path}, write
+}
+
+// TestARevokedDestinationEndsALiveTransfer: a plain HTTP transfer is
+// authorised once, at the dial, and then streams with no further
+// reference to the policy.
+//
+// Nothing else reaches it. Retiring the pool does not: CloseIdleConnections
+// leaves a connection carrying a request alone by contract, and a job can
+// carry one for as long as it likes. The kernel does not either: the
+// ruleset accepts established traffic ahead of every reject. So without
+// this re-check, a destination revoked mid-download kept flowing until the
+// job chose to stop, which is the promise in Reload's own doc — that a
+// capsule never sees a moment in which a newly denied destination is
+// reachable — going unkept on the one path that carries bulk traffic.
+func TestARevokedDestinationEndsALiveTransfer(t *testing.T) {
+	store, install := policyFile(t, "10.0.0.0/8")
+	r := &Relay{Policy: store, Log: discardLogger(), pollInterval: 20 * time.Millisecond}
+
+	outbound, stop := r.tracedRequest(httptest.NewRequest(http.MethodGet, "http://example.com/big", nil))
+	defer stop()
+
+	// Report the connection the way http.Transport does once it has
+	// dialled. Until this lands there is no address to re-check.
+	httptrace.ContextClientTrace(outbound.Context()).GotConn(httptrace.GotConnInfo{
+		Conn: dialedTo{remote: &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 80}},
+	})
+
+	// While the destination is allowed the transfer is left alone.
+	select {
+	case <-outbound.Context().Done():
+		t.Fatal("an allowed transfer was cancelled; every plain HTTP download would be cut at the poll interval")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	install("203.0.113.0/24")
+
+	select {
+	case <-outbound.Context().Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transfer outlived the revocation of its destination; " +
+			"the body keeps streaming from an address the policy now denies")
+	}
+}
+
+// TestATransferWithoutAConnectionIsNotCancelled: the re-check has
+// nothing to decide about until the transport reports a dial, and a
+// denial in that gap would refuse requests the policy allows.
+func TestATransferWithoutAConnectionIsNotCancelled(t *testing.T) {
+	store, _ := policyFile(t, "10.0.0.0/8")
+	r := &Relay{Policy: store, Log: discardLogger(), pollInterval: 10 * time.Millisecond}
+
+	outbound, stop := r.tracedRequest(httptest.NewRequest(http.MethodGet, "http://example.com/", nil))
+	defer stop()
+
+	select {
+	case <-outbound.Context().Done():
+		t.Fatal("a request was cancelled before it had a connection; a slow dial would never complete")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestConcurrentReadersNeverSplitThePoolFromItsGeneration: the pool and
+// the generation it was authorised under are one value because they are
+// read as one.
+//
+// Held in two atomics, a caller that observed the new generation could
+// still be handed the pool that generation retired — it reads them in two
+// steps and the install lands in between — so its request would travel on
+// a connection dialled under the policy that no longer applies, which the
+// kernel then accepts as established traffic.
+//
+// The document here is only ever replaced, never removed, so every read
+// succeeds and the generation only advances. That is what makes one pool
+// per generation the right thing to assert: it is a consequence of this
+// sequence rather than a property of poolAt, whose full condition —
+// including what an unreadable document does to it — is stated case by
+// case in TestAPoolIsNeverOlderThanTheGenerationItServes.
+func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
+	store, install := policyFile(t, "10.0.0.0/8")
+	r := &Relay{Policy: store, Log: discardLogger()}
+
+	var mu sync.Mutex
+	served := map[uint64]*http.Transport{}
+
+	stop := make(chan struct{})
+	var installers sync.WaitGroup
+	installers.Add(1)
+	go func() {
+		defer installers.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			install(fmt.Sprintf("10.%d.0.0/16", i%256))
+		}
+	}()
+
+	var readers sync.WaitGroup
+	for range 8 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for range 400 {
+				got := r.transportInForce()
+				mu.Lock()
+				if prev, seen := served[got.gen]; seen && prev != got.transport {
+					t.Errorf("generation %d was served by two pools; a request took a connection "+
+						"dialled under the policy that generation replaced", got.gen)
+				}
+				served[got.gen] = got.transport
+				mu.Unlock()
+			}
+		}()
+	}
+	readers.Wait()
+	close(stop)
+	installers.Wait()
+
+	if len(served) < 2 {
+		t.Fatalf("only %d generation(s) were observed; the policy never moved under the readers "+
+			"and the race this rules out was never given a chance", len(served))
+	}
+}
+
+// TestARevokedTransferDoesNotReachTheCapsuleLookingWhole drives the real
+// handler: a real http.Transport, the trace that reports its dial, the
+// watch forward installs, and the copy that has to stop.
+//
+// The body is chunked deliberately. With no Content-Length, the only
+// thing that tells a client where the body ended is how the connection
+// ended — so a relay that cancels the transfer and then returns normally
+// has the server terminate the chunk stream for it, and the job receives
+// a well-formed 200 carrying a truncated artifact it cannot tell from a
+// whole one. Git's smart-HTTP pack responses and anything gzipped on the
+// fly arrive this way.
+//
+// The relay's own dialer refuses loopback outright — the decider does so
+// before it consults any allow list — so the upstream is reached through
+// a plain transport installed at the generation in force. That leaves the
+// re-check exactly as production runs it, and it denies loopback on the
+// first tick, which is the revocation this test needs.
+func TestARevokedTransferDoesNotReachTheCapsuleLookingWhole(t *testing.T) {
+	const (
+		chunk  = 32 << 10
+		chunks = 200
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		body := bytes.Repeat([]byte("x"), chunk)
+		for range chunks {
+			if _, err := w.Write(body); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer upstream.Close()
+
+	store, _ := policyFile(t, "10.0.0.0/8")
+	if _, err := store.Current(); err != nil {
+		t.Fatal(err)
+	}
+	r := &Relay{Policy: store, Log: discardLogger(), pollInterval: 20 * time.Millisecond}
+	r.pool.Store(&pool{gen: store.Generation(), transport: &http.Transport{}})
+
+	relay := httptest.NewServer(r)
+	defer relay.Close()
+	via, err := url.Parse(relay.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(via)}}
+	resp, err := client.Get(upstream.URL + "/big")
+	if err != nil {
+		t.Fatalf("the request never reached the upstream: %v", err)
+	}
+	defer resp.Body.Close()
+	n, readErr := io.Copy(io.Discard, resp.Body)
+
+	// Prove the transfer happened before judging how it ended. A relay
+	// that refused the request outright also reports a short body that
+	// stopped, and blaming that on the ending would hide the refusal.
+	if resp.StatusCode != http.StatusOK || n == 0 {
+		t.Fatalf("the request never streamed: status %d, %d bytes; the upstream was not reached, "+
+			"so nothing here says anything about how a cut transfer ends", resp.StatusCode, n)
+	}
+	if n >= int64(chunk)*chunks {
+		t.Fatalf("the transfer delivered its whole body (%d bytes); the revocation never reached it", n)
+	}
+	if readErr == nil {
+		t.Errorf("the revoked transfer ended cleanly after %d of %d bytes; the capsule cannot "+
+			"tell a cut artifact from a whole one", n, chunk*chunks)
+	}
+}
+
+// TestAPoolIsNeverOlderThanTheGenerationItServes states what poolAt's
+// condition means, case by case, where the concurrent test can only
+// sample it.
+//
+// The property that matters is not that a generation is served by one
+// pool for all time — restoring a document a reader had already seen
+// leaves the generation where it was while the pool moved through zero,
+// and that is harmless because every connection is checked at its dial.
+// It is that a caller which observed a generation is never handed a pool
+// built for an older one.
+func TestAPoolIsNeverOlderThanTheGenerationItServes(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		pooled     bool // whether anything is in force to begin with
+		inForce    uint64
+		ask        uint64
+		wantReused bool
+	}{
+		{name: "nothing pooled yet", ask: 5},
+		{name: "same generation", pooled: true, inForce: 5, ask: 5, wantReused: true},
+		{name: "the policy moved on", pooled: true, inForce: 3, ask: 5},
+		{name: "a caller that read the policy late", pooled: true, inForce: 5, ask: 3, wantReused: true},
+		{name: "the document became unreadable", pooled: true, inForce: 5, ask: 0},
+		{name: "still unreadable", pooled: true, inForce: 0, ask: 0, wantReused: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := &Relay{Log: discardLogger()}
+			var before *pool
+			if c.pooled {
+				before = &pool{gen: c.inForce, transport: r.newTransport()}
+				r.pool.Store(before)
+			}
+			got := r.poolAt(c.ask)
+			if got == nil {
+				t.Fatal("no pool at all; the next request would have nothing to travel on")
+			}
+			if reused := before != nil && got == before; reused != c.wantReused {
+				t.Errorf("reused the pool in force = %v; want %v", reused, c.wantReused)
+			}
+			// A reused pool is the only way to be handed a generation
+			// other than the one asked for, and it must never be an older
+			// one: its connections were authorised by that policy.
+			if got.gen < c.ask {
+				t.Errorf("a caller that observed generation %d was handed a pool built for %d; "+
+					"its connections were authorised by a policy that no longer applies", c.ask, got.gen)
+			}
+		})
 	}
 }

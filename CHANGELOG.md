@@ -55,12 +55,32 @@ by its public and operational effects.
   gateway that could be named, so a pass that could not name one leaves
   the books where they were and the next pass installs the change
   instead of comparing it against itself.
-- **A revoked address stops being reachable.** A destination the policy
-  no longer allows is checked when a connection is dialled, and the pool
-  a job keeps warm never dials again — the kernel does not intervene
-  either, since the ruleset accepts established traffic ahead of every
-  reject. A policy that moves therefore retires the pool it authorised
-  rather than closing the connections that happen to be idle in it.
+- **A revoked address stops being reachable, transfers under way
+  included.** A destination the policy no longer allows is checked when a
+  connection is dialled, and the pool a job keeps warm never dials again
+  — the kernel does not intervene either, since the ruleset accepts
+  established traffic ahead of every reject. A policy that moves
+  therefore retires the pool it authorised rather than closing the
+  connections that happen to be idle in it. Retiring the pool does not
+  reach a transfer already running: the connection carrying it is left
+  alone, and a large download can hold one for as long as the job likes.
+  So both shapes the relay serves re-check the address they are joined to
+  while they run — a CONNECT tunnel and a plain HTTP transfer alike — and
+  the longest a revoked destination keeps flowing is one poll interval,
+  whatever it is carrying. A transfer stopped that way reaches the job as
+  a failed read rather than as a complete response with a short body:
+  once the status line is out there is nothing left to say "this was
+  cut" except how the connection ends, so it ends without the terminator
+  a client would otherwise read as the end of the data.
+- **An install takes effect whenever it lands.** Whether a new policy is
+  in force is decided by the document's contents rather than by its
+  modification time and size. Two documents of equal length installed
+  inside one clock tick carry the same modification time, so deciding on
+  that pair meant the second never reached the relay at all: the
+  tightening would have been reported as installed and silently not
+  applied. A document larger than a policy may be is refused rather than
+  cut down to the limit, since a cut one can still parse as a policy
+  nobody wrote.
 - **The two policy installers cannot overwrite each other.** A reload
   and an emergency close arrive as separate processes into the same
   container, so the install is serialized by a lock the kernel holds and
