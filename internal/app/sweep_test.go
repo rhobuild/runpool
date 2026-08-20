@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"github.com/rhobuild/runpool/internal/assignment"
 	"slices"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 		{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"},
 	}
 
-	if err := h.srv.sweepOrphans(t.Context(), map[string]bool{"lse-adopted": true}); err != nil {
+	if err := h.srv.sweepOrphans(t.Context(), map[assignment.LeaseID]bool{"lse-adopted": true}); err != nil {
 		t.Fatal(err)
 	}
 

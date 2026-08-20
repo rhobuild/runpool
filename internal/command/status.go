@@ -161,9 +161,9 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	}
 	fmt.Fprintln(streams.Out)
 	for _, l := range live {
-		resources := snap.Resources[string(l.ID)]
+		resources := snap.Resources[l.ID]
 		project := ""
-		if a, ok := snap.Attempts[string(l.ID)]; ok {
+		if a, ok := snap.Attempts[l.ID]; ok {
 			project = a.TenantKey + "/" + a.ProjectKey
 		}
 		fmt.Fprintf(streams.Out, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))

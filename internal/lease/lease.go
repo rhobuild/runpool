@@ -528,12 +528,12 @@ func (m *Manager) removeObject(ctx context.Context, kind store.ResourceKind,
 // confirmed id or the deterministic name, since an unconfirmed intent's
 // object is only reachable by name. A lease with no matching intent is
 // unaffected; the point is that a row never outlives its object.
-func (m *Manager) ForgetResource(ctx context.Context, leaseID, dockerID string) error {
+func (m *Manager) ForgetResource(ctx context.Context, leaseID assignment.LeaseID, dockerID string) error {
 	if leaseID == "" {
 		return nil // never recorded, so nothing to reconcile
 	}
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
-		intents, err := tx.Resources(assignment.LeaseID(leaseID))
+		intents, err := tx.Resources(leaseID)
 		if err != nil {
 			return err
 		}

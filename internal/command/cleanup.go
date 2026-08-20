@@ -41,14 +41,14 @@ func runCleanup(streams IO, apply bool) error {
 	// Cleanup removes what no live lease needs: resources belonging to
 	// released leases, and objects the books never recorded. A running
 	// capsule is left alone — stopping work is what drain is for.
-	keep := map[string]bool{}
+	keep := map[assignment.LeaseID]bool{}
 	snap, err := st.Snapshot()
 	if err != nil {
 		return err
 	}
 	for _, l := range snap.Leases {
 		if !l.State.Terminal() {
-			keep[string(l.ID)] = true
+			keep[l.ID] = true
 		}
 	}
 	removable := plan.exclude(keep)
@@ -232,7 +232,7 @@ func planOwnedResources(ctx context.Context, st *store.Store, dock *docker.Clien
 	return p, err
 }
 
-func (p ownedPlan) exclude(keep map[string]bool) ownedPlan {
+func (p ownedPlan) exclude(keep map[assignment.LeaseID]bool) ownedPlan {
 	out := ownedPlan{instanceID: p.instanceID}
 	for _, c := range p.containers {
 		// A helper the instance is still running is not garbage. Apply

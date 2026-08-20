@@ -26,8 +26,8 @@ type Snapshot struct {
 	// and the line uninstall prints before destroying the books — need it
 	// to stay true once the rows behind it are bounded.
 	ReleasedTotal int
-	Attempts      map[string]Attempt          // by lease id
-	Resources     map[string][]ResourceIntent // by lease id
+	Attempts      map[assignment.LeaseID]Attempt
+	Resources     map[assignment.LeaseID][]ResourceIntent
 	// Queued is how many attempts wait for admission, per binding id. It
 	// is counted rather than listed because the rest of this snapshot is
 	// keyed by lease, and an attempt waiting for admission has none — so
@@ -93,8 +93,8 @@ type CacheLaneInfo struct {
 func (s *Store) Snapshot() (Snapshot, error) {
 	snap := Snapshot{
 		InstanceID: s.instanceID,
-		Attempts:   map[string]Attempt{},
-		Resources:  map[string][]ResourceIntent{},
+		Attempts:   map[assignment.LeaseID]Attempt{},
+		Resources:  map[assignment.LeaseID][]ResourceIntent{},
 		Queued:     map[int64]int{},
 	}
 	version, err := s.SchemaVersion()
@@ -188,8 +188,8 @@ const selectAttempt = `SELECT id, delivery_id, binding_id, source_workload_key, 
 // One read per lease made `runpool status` cost two round trips per row
 // on the single connection every lease transition also waits for, and a
 // snapshot carries up to a hundred leases.
-func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
-	out := make(map[string]Attempt, len(leases))
+func (t *Tx) attemptsOfLeases(leases []Lease) (map[assignment.LeaseID]Attempt, error) {
+	out := make(map[assignment.LeaseID]Attempt, len(leases))
 	if len(leases) == 0 {
 		return out, nil
 	}
@@ -212,7 +212,7 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	byAttempt := make(map[string]Attempt, len(args))
+	byAttempt := make(map[assignment.AttemptID]Attempt, len(args))
 	for rows.Next() {
 		var r sqlitedb.AssignmentAttempt
 		if err := rows.Scan(&r.ID, &r.DeliveryID, &r.BindingID, &r.SourceWorkloadKey,
@@ -220,7 +220,7 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 			&r.ReviewReason, &r.ReviewedAt, &r.ReviewedBy, &r.ReceivedAt, &r.SettledAt); err != nil {
 			return nil, err
 		}
-		byAttempt[r.ID] = fromRow(r)
+		byAttempt[assignment.AttemptID(r.ID)] = fromRow(r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -231,19 +231,19 @@ func (t *Tx) attemptsOfLeases(leases []Lease) (map[string]Attempt, error) {
 	// appended after live ones, so the row that lost its attempt was
 	// always the lease still running.
 	for _, l := range leases {
-		attempt, ok := byAttempt[string(l.AttemptID)]
+		attempt, ok := byAttempt[l.AttemptID]
 		if !ok {
 			return nil, fmt.Errorf("lease %s names attempt %s, which does not exist", l.ID, l.AttemptID)
 		}
-		out[string(l.ID)] = attempt
+		out[l.ID] = attempt
 	}
 	return out, nil
 }
 
 // resourcesOfLeases reads every lease's resource intents in one query,
 // for the same reason attemptsOfLeases exists.
-func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, error) {
-	out := make(map[string][]ResourceIntent, len(leases))
+func (t *Tx) resourcesOfLeases(leases []Lease) (map[assignment.LeaseID][]ResourceIntent, error) {
+	out := make(map[assignment.LeaseID][]ResourceIntent, len(leases))
 	if len(leases) == 0 {
 		return out, nil
 	}
@@ -262,7 +262,7 @@ func (t *Tx) resourcesOfLeases(leases []Lease) (map[string][]ResourceIntent, err
 		if err != nil {
 			return nil, err
 		}
-		out[string(in.LeaseID)] = append(out[string(in.LeaseID)], in)
+		out[in.LeaseID] = append(out[in.LeaseID], in)
 	}
 	return out, rows.Err()
 }

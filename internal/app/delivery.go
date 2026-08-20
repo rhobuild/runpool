@@ -428,11 +428,14 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 	for _, ev := range msg.Completed {
 		s.log.Info("workload completed (hint)",
 			"binding", b.key, "workload", ev.SourceWorkloadKey, "runtime", ev.RuntimeName, "result", ev.Result)
-		kind, idempotency := "exit_observed", "remote_exit_observed:"+ev.RuntimeName
+		// An idempotency key, not a runtime name: the same concatenation
+		// one line up converts, and this one did not, so the key carried
+		// the type of the thing it names.
+		kind, idempotency := "exit_observed", "remote_exit_observed:"+string(ev.RuntimeName)
 		if ev.Result == "canceled" {
 			kind, idempotency = "remote_canceled", "remote_canceled"
 		}
-		record(ev, kind, string(idempotency), ev.Result == "canceled")
+		record(ev, kind, idempotency, ev.Result == "canceled")
 	}
 }
 

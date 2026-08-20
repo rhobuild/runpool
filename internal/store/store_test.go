@@ -605,7 +605,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	}
 
 	// Three live leases, each in a different state.
-	live := map[string]bool{}
+	live := map[assignment.LeaseID]bool{}
 	for i, state := range []LeaseState{LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered} {
 		key := assignment.SourceWorkloadKey(fmt.Sprintf("live-%d", i))
 		attempt := seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
@@ -614,7 +614,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			live[string(lease.ID)] = true
+			live[lease.ID] = true
 			if state == LeaseReserved {
 				return nil
 			}
@@ -634,9 +634,9 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	}
 
 	var gotLive, gotReleased int
-	seen := map[string]bool{}
+	seen := map[assignment.LeaseID]bool{}
 	for _, l := range snap.Leases {
-		seen[string(l.ID)] = true
+		seen[l.ID] = true
 		if l.State.Terminal() {
 			gotReleased++
 		} else {
@@ -1659,7 +1659,7 @@ func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
 	})
 
 	// Live first, released after: the order Snapshot builds.
-	var got map[string]Attempt
+	var got map[assignment.LeaseID]Attempt
 	inTx(t, s, func(tx *Tx) error {
 		var err error
 		got, err = tx.attemptsOfLeases([]Lease{second, first})
@@ -1667,7 +1667,7 @@ func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
 	})
 
 	for _, l := range []Lease{second, first} {
-		a, ok := got[string(l.ID)]
+		a, ok := got[l.ID]
 		if !ok {
 			t.Errorf("lease %s has no attempt in the report; it serves %s", l.ID, l.AttemptID)
 			continue
@@ -1741,7 +1741,7 @@ func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		set = byLease[string(lease.ID)]
+		set = byLease[lease.ID]
 		return nil
 	})
 

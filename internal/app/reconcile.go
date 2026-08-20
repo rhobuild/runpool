@@ -68,14 +68,14 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		s.log.Info("reconciling interrupted leases", "count", n)
 	}
 
-	runnerByLease := make(map[string]docker.OwnedContainer, len(containers))
+	runnerByLease := make(map[assignment.LeaseID]docker.OwnedContainer, len(containers))
 	for _, c := range containers {
 		if c.Role == capsule.RoleCapsule {
 			runnerByLease[c.LeaseID] = c
 		}
 	}
 
-	adopted := make(map[string]bool)
+	adopted := make(map[assignment.LeaseID]bool)
 	for _, lease := range live {
 		b := s.byBinding[int64(lease.BindingID)] // may be nil if the target was removed
 		// Adoption means "this lease is still executing; wait it out".
@@ -85,11 +85,11 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		// returns before any cleanup. The lease would then hold its credit
 		// and its privileged container forever, because being marked
 		// adopted also exempts it from the orphan sweep.
-		if runner, ok := runnerByLease[string(lease.ID)]; ok && runner.Running && b != nil && adoptable(lease.State) {
+		if runner, ok := runnerByLease[lease.ID]; ok && runner.Running && b != nil && adoptable(lease.State) {
 			s.log.Info("adopting running capsule", "binding", b.key, "lease", lease.ID)
 			s.reportAdoption(b, s.alloc.Adopt(b.key))
 			s.adopt(b, lease, runner.ID)
-			adopted[string(lease.ID)] = true
+			adopted[lease.ID] = true
 			continue
 		}
 		// Every nonterminal lease holds a credit until it is resolved, even
@@ -100,7 +100,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 			s.reportAdoption(b, s.alloc.Adopt(b.key))
 			defer s.releaseCreditIfDone(b, lease.ID)
 		}
-		runner, hasRunner := runnerByLease[string(lease.ID)]
+		runner, hasRunner := runnerByLease[lease.ID]
 		s.resolveInterrupted(ctx, b, lease, runner, hasRunner)
 	}
 
@@ -332,7 +332,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 // released, and retention refuses a lease that still owns an intent —
 // deliberately, so the leak stays visible in `status` rather than being
 // quietly forgotten.
-func (s *Controller) sweepOrphans(ctx context.Context, keep map[string]bool) error {
+func (s *Controller) sweepOrphans(ctx context.Context, keep map[assignment.LeaseID]bool) error {
 	wedged := 0
 	fail := func(kind, name string, err error) {
 		wedged++
@@ -491,9 +491,9 @@ func (s *Controller) sweepPeriodically(ctx context.Context) {
 		s.log.Error("periodic sweep cannot list live leases", "error", err)
 		return
 	}
-	keep := make(map[string]bool, len(live))
+	keep := make(map[assignment.LeaseID]bool, len(live))
 	for _, lease := range live {
-		keep[string(lease.ID)] = true
+		keep[lease.ID] = true
 	}
 	if err := s.sweepOrphans(ctx, keep); err != nil {
 		s.log.Error("periodic sweep failed", "error", err)
