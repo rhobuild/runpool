@@ -277,7 +277,8 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// the job over, and discarding the status here settled it as a
 		// run that finished.
 		if obs := capsule.ClassifyExit(int(exit)); obs != assignment.ObservedExited {
-			s.log.Warn("the adopted capsule reports the runner never started; the attempt is returned to the queue",
+			s.log.Warn("the adopted capsule reports the runner never started; the attempt "+
+				"returns to the queue unless the provider says otherwise",
 				"lease", lease.ID, "exit", exit)
 			if err := s.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",

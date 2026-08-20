@@ -99,6 +99,10 @@ func (nullProvider) OpenSession(context.Context, int, string) (*githubactions.Se
 type fakeRegistry struct {
 	nullProvider
 	jitErr error
+	// removeErr is what the provider answers when asked to deregister
+	// the runner, which is the one question in this machine put to a
+	// party that did not run the job.
+	removeErr error
 }
 
 func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (githubactions.JITConfig, error) {
@@ -108,7 +112,7 @@ func (f *fakeRegistry) GenerateJITConfig(context.Context, int, string, string) (
 	return githubactions.JITConfig{RunnerID: 5, RunnerName: "fake", Encoded: "fake-jit"}, nil
 }
 
-func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return nil }
+func (f *fakeRegistry) RemoveRunner(context.Context, int) error { return f.removeErr }
 
 type fakeWaiter struct {
 	exit    int64
@@ -172,7 +176,44 @@ func TestStartFaultMatrix(t *testing.T) {
 			// Start errored and the daemon shows the container never left
 			// created: the one provable requeue past the authorization.
 			name: "start error, runtime proven inert",
-			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedNeverStarted}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			want: store.AttemptReady,
+		},
+		{
+			// The capsule's own account that it never started, against a
+			// provider that still holds the runner busy with the job.
+			// One of those two parties did not run the job, and it is not
+			// the capsule -- whose account the job inside it can write.
+			name: "capsule says it never started, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptSettled, wantRes: assignment.ResolutionStartedObserved,
+		},
+		{
+			// The daemon's account, against the same answer. This one is
+			// not the capsule's word and not the weaker of the two: the
+			// container was never started, observed from outside the
+			// machine the job runs in. The provable requeue stays.
+			name: "daemon says it never started, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedNeverStarted},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptReady,
+		},
+		{
+			// An outcome nobody could establish is still nobody's to
+			// settle. The provider says a runner was busy, not that this
+			// attempt's runner ran, so the hold stands.
+			name: "runtime absent, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptManualReview,
+		},
+		{
+			// And only that answer. Any other failure to deregister says
+			// nothing about who had the job.
+			name: "capsule says it never started, deregistration fails some other way",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated},
+			reg:  &fakeRegistry{removeErr: boom}, wait: &fakeWaiter{},
 			want: store.AttemptReady,
 		},
 		{
@@ -953,5 +994,35 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 		t.Errorf("the unwind had %v left; want its own budget of at most %v. "+
 			"Anything longer is the tier's ceiling, which is the deadline that just failed",
 			left, recoveryBudget)
+	}
+}
+
+// TestEveryObservationHasAStartFailureReport: a failed start reports
+// what its observation means, and every observation means something.
+//
+// A switch says nothing about a value nobody added a case for. It falls
+// into whatever branch is last, which reads as a decision and is not
+// one — that is how the daemon's own account of a container it never
+// started came to be reported as an outcome needing an operator, at the
+// level an operator is paged on, for the ordinary case of a start that
+// failed and left nothing behind.
+func TestEveryObservationHasAStartFailureReport(t *testing.T) {
+	for _, obs := range assignment.AllExecutionObservations {
+		report, unproven := startFailureReport(obs)
+		if report == "" {
+			t.Errorf("observation %q has no report, so a failed start carrying it is logged "+
+				"as an outcome nobody could establish and paged on", obs)
+			continue
+		}
+		// The daemon's own account is the one this exists to keep apart
+		// from an outcome nobody established.
+		if obs == assignment.ObservedNeverStarted && unproven {
+			t.Error("the daemon reporting a container it never started is not an unprovable " +
+				"outcome; it is the clearest answer there is")
+		}
+	}
+	if report, unproven := startFailureReport("something-nobody-declared"); report != "" || !unproven {
+		t.Errorf("an observation this package does not know reported %q, unproven=%v; "+
+			"want no report and no claim", report, unproven)
 	}
 }

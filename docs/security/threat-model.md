@@ -81,7 +81,7 @@ policy remain necessary in either topology.
 | Defence | Mechanism | Evidence |
 |---|---|---|
 | No state survives a job | Fresh dind data root, workspace and control tmpfs per capsule; the data root is a volume removed with the lease | Capsule contract, live |
-| A leaked runner cannot outlive its job | Ephemeral JIT runner, one job, removed on failure paths too | Live JIT flow, including removing a runner that never started |
+| A leaked runner cannot outlive its job | Ephemeral JIT runner, one job, removed on failure paths too — where the removal can be attempted and is accepted. It is not attempted for a target no longer configured or an attempt with no recorded runner id, and it is not accepted when the provider refuses to deregister one it still considers busy, or answers any other way. In every one of those the runner is left for the provider to expire; the refusal specifically is also what the controller reads as the job having been handed over | Live JIT flow, including removing a runner that never started; the refusal path is table-tested |
 | Provider credentials never enter capsules; JIT state does not persist across jobs | The provider token or App private key remains in the controller. JIT arrives over exec stdin, its files are redirected to tmpfs, and it is absent from Docker configuration, environment, labels, and logs. The upstream runner requires it transiently in argv, visible to the assigned workload | Capsule contract asserts volatile materialization and no log disclosure; controller end-to-end qualification remains required |
 | Cross-repository cache contamination | Lanes are daemon-side named volumes, exclusive per lease, named by opaque ids, reused only for the same repository and generation | Live lane contract: marker persists for the same lane, another generation is blind |
 | Runpool deletes only what it owns | Instance- and lease-scoped ownership labels on every created object; creation recovery and destructive intent cleanup re-inspect ownership before acting; no daemon-wide prune | Foreign-resource contracts pass live; controller E2E asserts unrelated container, network and volume sentinels and still needs release qualification |
@@ -89,6 +89,35 @@ policy remain necessary in either topology.
 | The host cannot be starved by a job | One envelope per lease, split between the capsule and its egress gateway and placed under one parent cgroup: the capsule's aggregate covers runner, daemon and every inner container; the gateway holds the rest of the same tier, because every connection a job opens is work it performs. The doctor refuses a configuration whose full tiers plus reserve exceed the host, and the validator refuses a tier too small to split | Kernel-proven on the reference host: inner OOM charged to the capsule; both containers report one parent cgroup and their limits sum to the tier; a fork storm in the gateway stops at its own ceiling |
 | The host cannot be filled | Disk monitor probes the daemon's filesystem from inside it; admission closes at the soft floor, fails closed at the hard floor, and GC evicts only free lanes | Pressure transitions table-tested; disk-full behaviour live for both SQLite and containers |
 | Egress confinement | Under `public-internet-only`, the host kernel drops anything the capsule addresses beyond its bridge; the gateway relays DNS and HTTP(S) under default-deny, resolving before dialing (rebinding defence) | Live bypass suite: no direct route anywhere, denied addresses refused by name and by address, gateway loss removes egress |
+
+## Known weakness
+
+**The capsule's control surface is not a boundary against its own job.**
+This is not a consequence the design accepted; the control directory's
+ownership and the credential file's mode were chosen to build that
+boundary, and it does not hold.
+
+The runner holds the inner daemon's socket, which is what a CI job
+needs. A container started through that socket runs as real root with no
+user namespace remapping, so it can bind mount the control directory and
+write the file the supervisor reports its state through — including the
+one value that asks for the assignment to be served again. Hardening
+inside the capsule raises the effort without closing it: the same socket
+reaches PID 1's own namespaces.
+
+What the controller does about it is partial, and worth stating as such.
+The deregistration it performs on a failure path asks the party that
+assigned the work, and a refusal naming that runner as still busy
+outranks the capsule's own word that it never started. So a forged
+refusal-to-start cannot return an assignment to the queue while the
+provider still considers it in flight. It does nothing for a forgery
+made after the provider has released the runner, and it does not fire
+when the deregistration cannot be attempted — a deconfigured target, no
+recorded runner id, or any other failure answering. In those cases the
+capsule's account is still what settles the attempt.
+
+Closing it properly means the controller not depending on the capsule's
+account at all, which is not where the machine is today.
 
 ## Accepted exposure
 

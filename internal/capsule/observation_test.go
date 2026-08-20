@@ -82,7 +82,7 @@ func TestClassifyContainerStateNeverAsksAStoppedCapsule(t *testing.T) {
 		want          assignment.ExecutionObservation
 		askSupervisor bool
 	}{
-		{"created", 0, assignment.ObservedCreated, false},
+		{"created", 0, assignment.ObservedNeverStarted, false},
 		{"running", 0, assignment.ObservedUnavailable, true},
 		{"paused", 0, assignment.ObservedUnavailable, true},
 		{"restarting", 0, assignment.ObservedUnavailable, true},
@@ -187,5 +187,37 @@ func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
 			t.Errorf("state %q no longer requeues; a job that was never handed over is left "+
 				"for a person or settled as though it ran", proves)
 		}
+	}
+}
+
+// TestTheDaemonsAccountIsNotTheCapsulesOwn: both say the runner never
+// had the job, and they are not the same fact.
+//
+// A container the daemon has never started is the host daemon's own
+// word, and the workload has no socket to it. Everything else that says
+// "never started" is the capsule speaking about itself — the state it
+// writes, the status it exits with — and the workload holds the socket
+// of the daemon inside that capsule. Anything weighing one account
+// against another needs to be able to tell them apart, and one value
+// for both makes that impossible.
+func TestTheDaemonsAccountIsNotTheCapsulesOwn(t *testing.T) {
+	daemon, _, err := classifyContainerState("c1", docker.ContainerState{Status: "created"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromExit := ClassifyExit(SupervisorAbortedExitCode)
+	fromState, err := classifySupervisorState(protocol.AbortedPrefix + "no credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fromExit != fromState {
+		t.Errorf("the capsule's two ways of saying it never started differ: %q and %q",
+			fromExit, fromState)
+	}
+	if daemon == fromState {
+		t.Errorf("the daemon's account and the capsule's are both %q; nothing downstream can "+
+			"weigh one against the other, and the one the workload can write is the one that "+
+			"would win", daemon)
 	}
 }

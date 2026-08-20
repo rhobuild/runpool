@@ -201,7 +201,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
 			"attempt", attemptID, "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedCreated)
+		// This controller's own knowledge, not the capsule's: no start
+		// was ever issued, so the capsule has said nothing about one.
+		// Spelling it as the capsule's account would put a report of
+		// what the capsule said where the capsule was never asked, and
+		// hand the provider's answer something to overrule that is not
+		// the account it is allowed to overrule.
+		s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedNeverStarted)
 		return
 	}
 	// The authorization is durable immediately before the one effect
@@ -232,16 +238,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 			}
 			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
-		case assignment.ObservedCreated:
-			log.Info("the runtime was never started; the assignment stays servable", "error", startErr)
-			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
-			return
 		default:
-			// Absent or unavailable: neither retry nor settlement can be
-			// justified, so the finalizing transaction holds the
-			// assignment for a person.
-			log.Error("start outcome is unobservable; the assignment needs an operator",
-				"observation", string(obs), "error", startErr)
+			report, unproven := startFailureReport(obs)
+			if unproven {
+				log.Error(report, "observation", string(obs), "error", startErr)
+			} else {
+				log.Info(report, "observation", string(obs), "error", startErr)
+			}
 			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
 		}
@@ -273,7 +276,8 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		// recording an observed exit settles an attempt that never ran
 		// as complete, and nothing requeues it afterwards.
 		if startObs = capsule.ClassifyExit(int(exit)); startObs != assignment.ObservedExited {
-			log.Warn("the capsule reports the runner never started; the attempt is returned to the queue",
+			log.Warn("the capsule reports the runner never started; the attempt returns to the "+
+				"queue unless the provider says otherwise",
 				"exit", exit)
 			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
@@ -355,6 +359,12 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID)
 // by definition — the next pass, or the next start, finds the lease
 // exactly where this left it — and a recovery that outlived the
 // shutdown budget would have the platform kill the process inside one.
+//
+// startObs may be replaced here. The deregistration below is the one
+// question this path puts to the party that assigned the work, and its
+// answer outranks one account and one only: the capsule's own word that
+// it never started, which is the account the job inside that capsule
+// can write.
 func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID assignment.LeaseID,
 	startObs assignment.ExecutionObservation) error {
 
@@ -414,6 +424,29 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 			log.Warn("the provider refuses to deregister a runner it still considers busy; "+
 				"the registration is leaked until it expires there",
 				"runner", runnerGitHubID, "error", err)
+			// And it says something the capsule cannot be trusted to
+			// say. The capsule's own account of never having handed the
+			// job over -- the state it writes, the status it exits with
+			// -- is produced inside the machine running the job, whose
+			// daemon socket that job holds. This comes from the party
+			// that assigned the work, which still considers the runner
+			// busy with it.
+			//
+			// Only that one account is replaced. What the host daemon
+			// says is not the capsule's word and is not the weaker of
+			// the two: a container it has never started is a container
+			// in which nothing has run, observed from outside, more
+			// recently and closer to hand. And an outcome nobody could
+			// establish stays held for a person, because this does not
+			// establish it either -- it says a runner was busy, not that
+			// this attempt's runner ran.
+			if startObs == assignment.ObservedCreated {
+				log.Warn("the provider says the job was handed over; the capsule's own account "+
+					"of never having started it is not what settles this",
+					"observation", string(startObs))
+				startObs = assignment.ObservedRunning
+			}
+
 		default:
 			log.Warn("removing registered runner", "runner", runnerGitHubID, "error", err)
 		}
@@ -429,6 +462,36 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		return err
 	}
 	return nil
+}
+
+// startFailureReport says what a failed start's observation means for
+// the assignment, and whether the outcome is one nobody established.
+//
+// It is a function rather than the last branch of the switch above
+// because a branch that catches everything left over says the same
+// thing about a value nobody thought about as it does about the values
+// it was written for. That is how the daemon's own account of a
+// container it never started came to be reported as an outcome needing
+// an operator, at the level an operator is paged on, for the ordinary
+// case of a start that failed and left nothing behind.
+//
+// An observation with no report here is a value nobody has decided
+// about, which TestEveryObservationHasAStartFailureReport fails on.
+func startFailureReport(obs assignment.ExecutionObservation) (report string, unproven bool) {
+	switch obs {
+	case assignment.ObservedNeverStarted:
+		return "the daemon reports the container was never started; the assignment stays servable", false
+	case assignment.ObservedCreated:
+		return "the capsule reports the runner never started; the attempt returns to the " +
+			"queue unless the provider says otherwise", false
+	case assignment.ObservedAbsent, assignment.ObservedUnavailable:
+		return "start outcome is unobservable; the assignment needs an operator", true
+	case assignment.ObservedRunning, assignment.ObservedExited:
+		// Decided before this is reached, and named here so the totality
+		// check is about every observation rather than the leftovers.
+		return "the runtime outlived the start that reported an error", false
+	}
+	return "", true
 }
 
 // remainingCeiling is what is left of a lease's tier ceiling.

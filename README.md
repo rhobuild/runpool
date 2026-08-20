@@ -163,7 +163,7 @@ colocated services. Measure that reserve before deployment. Choose
 | [CLI reference](docs/reference/cli.md) | Generated commands, flags, and exit-code behaviour |
 | [Support matrix](docs/reference/support-matrix.md) | Engine compatibility, release reference, and provider scope |
 | [Runbook](docs/runbook.md) | Operations, recovery, backup, GC, and uninstall |
-| [Threat model](docs/security/threat-model.md) | Trust boundary, defences, and accepted exposure |
+| [Threat model](docs/security/threat-model.md) | Trust boundary, defences, one known weakness, and accepted exposure |
 | [ADRs](docs/adrs/README.md) | Architectural decisions and measured constraints |
 | [Release readiness](docs/release-readiness.md) | Objective gates for the first release |
 

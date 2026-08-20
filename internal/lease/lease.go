@@ -288,15 +288,17 @@ func servedByThisLease(state store.AttemptState) bool {
 //
 // The proof outranks the evidence. `running` and `running_observed` are
 // written when the start authorization is accepted and the capsule
-// reports itself up, never when a runner is seen owning a job, while
-// ObservedCreated only ever comes from a proof: a runtime still in its
-// created state, a supervisor reporting it never started, or the exit
-// code the capsule reserves for exactly that.
+// reports itself up, never when a runner is seen owning a job, while the
+// two observations below only ever come from a proof. ObservedCreated is
+// the capsule's own: a supervisor reporting it never started, or the
+// exit code it reserves for exactly that. ObservedNeverStarted is the
+// daemon's: a container it has never started. They differ in who is
+// saying it and not in what it proves, so both requeue.
 func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
 	switch {
 	case !servedByThisLease(attempt.State):
 		return dispositionNone
-	case obs == assignment.ObservedCreated:
+	case obs == assignment.ObservedCreated, obs == assignment.ObservedNeverStarted:
 		return dispositionRequeue
 	case attempt.Evidence == store.EvidenceExitObserved:
 		return dispositionSettleCompleted
