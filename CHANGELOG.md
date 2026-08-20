@@ -327,13 +327,12 @@ by its public and operational effects.
 - **Uninstall clears the whole machine, including what an instance
   recorded about reaching its provider** — a success and a failure write
   the same row, so this is every instance that ever ran. It runs once,
-  after the containers and
-  the scale sets are already gone, so a row left behind is not a
-  cosmetic leftover: a child table its foreign key still points at fails
-  the delete of its parent and aborts the rest, leaving a half-removed
-  instance and a database no supported command will clear. Which tables
-  are children is now read from the database rather than kept in a list
-  by hand, so one added later is covered without anyone remembering.
+  after the containers and the scale sets are already gone, so a row left
+  behind is not a cosmetic leftover: a child table its foreign key still
+  points at fails the delete of its parent and aborts the rest, leaving a
+  half-removed instance and a database no supported command will clear.
+  A table added later that references something uninstall deletes has to
+  be cleared before it, and the build refuses a release where one is not.
 - **The durability configuration the release qualifies is the one the
   product opens with.** The suite and the store share a single
   connection string rather than each holding a copy, so a pragma changed
