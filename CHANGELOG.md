@@ -313,6 +313,9 @@ by its public and operational effects.
   still considers it busy with the job, that is a party which did not
   run the job saying it was handed over, and the attempt settles as
   started rather than returning to the queue on the capsule's word.
+  Only that one account is replaced: what the host daemon says about a
+  container it never started is not the capsule's word, and an outcome
+  nobody could establish is still held for a person.
 - **One rule decides what becomes of an attempt.** The two paths that end
   a serving — the finalizing transaction and the sweep that finds a lease
   nobody is driving — reach the same decision through the same function,

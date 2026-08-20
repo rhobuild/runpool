@@ -176,18 +176,45 @@ func TestStartFaultMatrix(t *testing.T) {
 			// Start errored and the daemon shows the container never left
 			// created: the one provable requeue past the authorization.
 			name: "start error, runtime proven inert",
-			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedNeverStarted}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
 			want: store.AttemptReady,
 		},
 		{
-			// The capsule says the runner never started; the provider
-			// says it is busy with the job. One of those two parties did
-			// not run the job, and it is not the capsule -- so requeueing
-			// on the capsule's word is how the same job runs twice.
-			name: "start error, runtime proven inert, provider holds the runner busy",
+			// The capsule's own account that it never started, against a
+			// provider that still holds the runner busy with the job.
+			// One of those two parties did not run the job, and it is not
+			// the capsule -- whose account the job inside it can write.
+			name: "capsule says it never started, provider holds the runner busy",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated},
 			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
 			want: store.AttemptSettled, wantRes: assignment.ResolutionStartedObserved,
+		},
+		{
+			// The daemon's account, against the same answer. This one is
+			// not the capsule's word and not the weaker of the two: the
+			// container was never started, observed from outside the
+			// machine the job runs in. The provable requeue stays.
+			name: "daemon says it never started, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedNeverStarted},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptReady,
+		},
+		{
+			// An outcome nobody could establish is still nobody's to
+			// settle. The provider says a runner was busy, not that this
+			// attempt's runner ran, so the hold stands.
+			name: "runtime absent, provider holds the runner busy",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent},
+			reg:  &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}, wait: &fakeWaiter{},
+			want: store.AttemptManualReview,
+		},
+		{
+			// And only that answer. Any other failure to deregister says
+			// nothing about who had the job.
+			name: "capsule says it never started, deregistration fails some other way",
+			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated},
+			reg:  &fakeRegistry{removeErr: boom}, wait: &fakeWaiter{},
+			want: store.AttemptReady,
 		},
 		{
 			// Start errored but the container ran and exited: the error

@@ -296,7 +296,7 @@ func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) 
 	switch {
 	case !servedByThisLease(attempt.State):
 		return dispositionNone
-	case obs == assignment.ObservedCreated:
+	case obs == assignment.ObservedCreated, obs == assignment.ObservedNeverStarted:
 		return dispositionRequeue
 	case attempt.Evidence == store.EvidenceExitObserved:
 		return dispositionSettleCompleted

@@ -161,8 +161,18 @@ type WorkloadLifecycleEvent struct {
 type ExecutionObservation string
 
 const (
-	// ObservedCreated means the supervisor still holds the runner unstarted.
+	// ObservedCreated means the supervisor still holds the runner
+	// unstarted. It is the capsule's own account of itself, reached
+	// either by asking it or by reading the status it reserved for
+	// stopping before the runner had the job.
 	ObservedCreated ExecutionObservation = "created"
+	// ObservedNeverStarted means the daemon has never started this
+	// container. It says the same thing as ObservedCreated about the
+	// job and something different about who is saying it: the host
+	// daemon, which the workload has no socket to, where the capsule is
+	// the machine running the workload. Nothing that weighs one account
+	// against another may collapse the two.
+	ObservedNeverStarted ExecutionObservation = "never_started"
 	// ObservedRunning means the runner is executing now.
 	ObservedRunning ExecutionObservation = "running"
 	// ObservedExited means the runner ran and stopped.

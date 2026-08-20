@@ -98,7 +98,10 @@ func classifySupervisorState(state string) (assignment.ExecutionObservation, err
 func classifyContainerState(runtimeID string, state docker.ContainerState) (obs assignment.ExecutionObservation, askSupervisor bool, err error) {
 	switch state.Status {
 	case "created":
-		return assignment.ObservedCreated, false, nil
+		// The daemon's own word, not the capsule's: this container has
+		// never been started, so nothing inside it has run to say
+		// otherwise.
+		return assignment.ObservedNeverStarted, false, nil
 	case "exited", "dead":
 		// A stopped capsule cannot be asked anything: exec needs a running
 		// container and the control surface is tmpfs. The exit code is the
