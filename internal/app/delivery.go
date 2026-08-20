@@ -90,11 +90,26 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 					// past that the binding serves nothing for a reason
 					// nothing else would carry.
 					b.conflictSince = firstOf(b.conflictSince, time.Now())
-					if held := time.Since(b.conflictSince); held > sessionConflictGrace {
+					held := time.Since(b.conflictSince)
+					switch {
+					case held > s.conflictDeadline():
+						// Past here the wait has stopped being useful.
+						// The binding serves nothing either way, and a
+						// loop that keeps saying so on a schedule is a
+						// process that looks alive to whatever supervises
+						// it. It stops, and the report carries why.
+						s.log.Error("the broker has held this binding's session beyond the point "+
+							"waiting can help; the binding stops trying",
+							"binding", b.key, "held", held.Round(time.Second),
+							"deadline", s.conflictDeadline())
+						s.recordProviderFailure(ctx, b, err)
+						b.gaveUpOnSession = true
+						return
+					case held > sessionConflictGrace:
 						s.log.Error("the broker has held this binding's session past the point it expires by inactivity",
 							"binding", b.key, "held", held.Round(time.Second))
 						s.recordProviderFailure(ctx, b, err)
-					} else {
+					default:
 						s.log.Info("the broker still holds this binding's previous session; waiting for it to expire",
 							"binding", b.key)
 					}

@@ -409,3 +409,63 @@ func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestABindingStopsWaitingForASessionThatWillNotClear: waiting past the
+// point it can help is a process that looks alive to whatever supervises
+// it while serving nothing.
+//
+// A conflict is the ordinary shape of a restart, and the loop is right
+// to wait one out. What it must not do is wait forever: the broker
+// expires a session by inactivity in well under a minute, so a run of
+// conflicts lasting past the deadline is not a predecessor's session
+// clearing slowly. The binding stops, records why, and says so where the
+// serve loop can act on it.
+func TestABindingStopsWaitingForASessionThatWillNotClear(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.pollBackoff = time.Hour
+	h.srv.conflictBackoff = time.Millisecond
+	h.srv.conflictDeadlineOverride = 50 * time.Millisecond
+
+	var attempts int
+	h.bind.newSession = func(context.Context) (providerSession, error) {
+		attempts++
+		return nil, errors.New(`the session "abc" already exists, status="409 Conflict"`)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(t.Context(), h.bind)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the binding never stopped waiting for a session it could not open; " +
+			"the process stays up serving nothing and nothing supervising it can tell")
+	}
+
+	if attempts < 2 {
+		t.Errorf("the loop tried %d time(s) before giving up; a conflict is the ordinary "+
+			"shape of a restart and has to be waited out first", attempts)
+	}
+	if !h.bind.gaveUpOnSession {
+		t.Error("the binding returned without recording that it stopped waiting, so a " +
+			"controller left with nothing to serve cannot tell it is in that state")
+	}
+}
+
+// TestAControllerThatCanServeNothingEnds: one binding that gave up is a
+// report, and every binding that gave up is a process that should not be
+// running.
+func TestAControllerThatCanServeNothingEnds(t *testing.T) {
+	h := newHarness(t, 1)
+
+	if err := h.srv.everyBindingGaveUp(); err != nil {
+		t.Errorf("a controller whose binding is working reported %v", err)
+	}
+	h.bind.gaveUpOnSession = true
+	if err := h.srv.everyBindingGaveUp(); err == nil {
+		t.Error("every binding gave up and the controller reported nothing; it stays up " +
+			"serving nothing, which is the one shape a restart answers")
+	}
+}

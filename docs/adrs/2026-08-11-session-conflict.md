@@ -39,8 +39,34 @@ removed — during the wait, and the job concluded successfully.
 
 - The retry deadline bounds how long a fresh start tolerates a stuck
   session before giving up and letting the platform restart it.
+
 - This is distinct from local controller contention: here the singleton
   lock is already held and only the remote session lingers. Standby and
   handover between two controllers are not implemented.
 - Reconcile-before-session is now a load-bearing ordering, not an
   incidental one, and is documented as such.
+
+## Amendment
+
+**Date:** 2026-08-20
+
+The deadline above needed a unit, and giving up needed something to
+mean. Both are now decided.
+
+The deadline belongs to a binding, not to the process. A controller may
+serve several scale sets, and one broker holding one session is not a
+reason to stop serving the others: the binding that cannot open a
+session stops trying, records the reason where `runpool status` reports
+it, and leaves the rest running.
+
+Giving up ends the process only when every binding has. That is the one
+shape a restart is the right answer to — and the honest reason is not
+that a restart clears the session, because it does not. It is that a
+process which is up and serving nothing is invisible to whatever
+supervises it, and one that exits is not.
+
+The value is fifteen minutes: three times the point at which the wait
+stops being ordinary, which is itself well past the inactivity the
+broker expires a session on. Long enough that a broker recovering
+slowly is not mistaken for one that will not, short enough that an
+operator is not an hour into an outage before anything says so.

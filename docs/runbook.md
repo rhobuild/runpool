@@ -182,6 +182,29 @@ encrypted host swap where CI secrets may be paged to disk, and investigate
 sustained swap activity as resource pressure rather than treating it as normal
 capacity.
 
+## A binding that cannot open its session
+
+GitHub's broker allows one active message session per scale set, and a
+controller killed without a clean shutdown leaves its session marked
+active until the broker expires it by inactivity. A successor sees `409
+Conflict` on every attempt to open one. This is ordinary on a restart:
+the binding logs that it is waiting, and the wait costs nothing, because
+adopted capsules are recovered before session creation is reached.
+
+Past five minutes the wait stops being ordinary and the binding reports
+a provider failure, which `runpool status` shows against it. Past fifteen
+it stops waiting: that binding serves nothing until the controller is
+restarted, and the reason stays in the report. Other bindings are
+unaffected and keep serving.
+
+If **every** binding reaches that point the controller exits non-zero,
+so whatever supervises it can act. Restarting does not clear the
+broker's session — nothing on this side can — but a process that is up
+and serving nothing is invisible, and one that has exited is not. If a
+restart loops, the session is genuinely stuck on the provider's side:
+check whether another controller is running against the same scale set,
+and otherwise wait the broker out rather than restarting into it.
+
 ## Manual review
 
 `runpool status` lists attempts held for a person. Inspect one with
