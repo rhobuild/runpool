@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -415,6 +414,12 @@ func eachGateway[T any](items []T, fn func(T)) {
 // worked around. It returns the ids of the gateways that did not take
 // the new policy, so the caller can decide what that costs from what
 // the change was.
+//
+// Those ids come back in whatever order the daemon answered, because the
+// gateways are reached concurrently. No caller may depend on it. Sorting
+// here would be a second mechanism for a property nothing reads — the
+// one caller takes a length and iterates order-blind, and a test that
+// compares the set sorts what it compares.
 func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []string) (failed []string, err error) {
 	containers, err := n.daemon.ListOwnedContainers(ctx, n.instanceID)
 	if err != nil {
@@ -442,9 +447,6 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 		}
 		n.log.Info("gateway policy reloaded", "container", c.Name)
 	})
-	// Concurrent appends make the order the daemon answered in, which
-	// nothing should depend on. Sorted so a caller cannot start.
-	slices.Sort(failed)
 	return failed, nil
 }
 

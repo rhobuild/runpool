@@ -452,13 +452,14 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 	if err := n.applyPolicy(t.Context(), tightened); err != nil {
 		t.Fatalf("the retry failed: %v", err)
 	}
-	if len(daemon.reloaded) != 1 || daemon.reloaded[0] != "gw-1" {
-		t.Errorf("gateways reloaded on the retry = %v; want the restriction to reach gw-1", daemon.reloaded)
+	if got := daemon.reloads(); len(got) != 1 || got[0] != "gw-1" {
+		t.Errorf("gateways reloaded on the retry = %v; want the restriction to reach gw-1", got)
 	}
 }
 
-// TestARefreshCostsOneTimeoutNotN: installing a policy reaches every
-// gateway in about what one gateway costs, not that times their number.
+// TestARefreshPaysItsExecBoundsInParallel: installing a policy overlaps
+// the gateways it reaches, so the wait is the number of waves and not the
+// number of gateways.
 //
 // The pass holds the refresh lock, and every launch waits on that lock
 // with a plain mutex — no context, nothing to give up, no way to time
@@ -467,11 +468,33 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 // that wait grow with exactly the parallelism the host was configured
 // for: at thirty-two capsules and a thirty-second exec bound, sixteen
 // minutes during which nothing new could start, for one policy change.
-func TestARefreshCostsOneTimeoutNotN(t *testing.T) {
+//
+// The exec count is unchanged — still one per gateway. What changed is
+// how many are outstanding at once, which is what the wait is made of:
+// ceil(N/8) bounds rather than N.
+func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 	const (
 		count   = 24
 		perCall = 40 * time.Millisecond
 	)
+	// Two checks on the knob before the one on the code, because the
+	// assertion below compares against the knob and so moves with it.
+	//
+	// A fan-out of one is not a narrower tuning, it is the serial pass
+	// this replaces. Whether eight is the right width is a judgement
+	// about how much a single daemon should be asked at once, and no test
+	// can settle that; that it is more than one is not a judgement.
+	if gatewayFanout < 2 {
+		t.Fatalf("the fan-out bound is %d, which is the serial pass with extra steps", gatewayFanout)
+	}
+	// And the bound is only observable with more gateways than slots:
+	// with fewer, a bounded pass and an unbounded one both run everything
+	// at once and look identical.
+	if gatewayFanout >= count {
+		t.Fatalf("this test needs more gateways (%d) than the fan-out bound (%d), "+
+			"or it cannot tell a bounded pass from an unbounded one", count, gatewayFanout)
+	}
+
 	containers := make([]docker.OwnedContainer, 0, count)
 	for i := range count {
 		id := fmt.Sprintf("gw-%02d", i)
@@ -498,16 +521,15 @@ func TestARefreshCostsOneTimeoutNotN(t *testing.T) {
 	// What is asserted is how many commands the daemon served at once,
 	// not how long the pass took. Wall-clock is a machine-speed test: it
 	// passes on an idle laptop and fails under coverage instrumentation,
-	// and neither says anything about the code. Overlap is the mechanism
-	// that makes the cost one exec bound rather than as many as there
-	// are capsules.
-	peak := d.peakInFlight()
-	if peak < 2 {
-		t.Errorf("peak %d gateway command(s) in flight for %d gateways; the pass is serial, "+
-			"and every launch waits out all of it", peak, count)
-	}
-	if peak > gatewayFanout {
-		t.Errorf("peak %d in flight against a bound of %d; a pass that opens one exec per "+
-			"capsule trades a slow refresh for a slow daemon", peak, gatewayFanout)
+	// and neither says anything about the code.
+	//
+	// Exactly the bound, in both directions: fewer means the slots are
+	// not being filled and launches wait out more waves than they should,
+	// more means the bound is not holding at all.
+	if peak, want := d.peakInFlight(), gatewayFanout; peak != want {
+		t.Errorf("peak %d gateway command(s) in flight for %d gateways; want %d. "+
+			"Fewer means launches wait out more waves than they should; more means the "+
+			"bound is not holding, and a pass that opens one exec per capsule trades a "+
+			"slow refresh for a slow daemon", peak, count, want)
 	}
 }
