@@ -576,14 +576,6 @@ func TestAProvenInertStartIsRequeuedFromEitherPath(t *testing.T) {
 	}
 }
 
-// attemptStates is every state an attempt can hold, terminal ones
-// included. It is the domain the test below filters, so the test states
-// the question and the predicate states the answer.
-var attemptStates = []string{
-	"ready", "leased", "preparing", "prepared", "starting", "running",
-	"superseded", "settled", "canceled", "manual_review",
-}
-
 // TestEveryServingStateCanBeDisposedOf: no disposition this decision can
 // reach fails to match a row.
 //
@@ -595,13 +587,16 @@ var attemptStates = []string{
 // lease already in cleaning cannot move there again, so no later pass
 // recovers it.
 //
-// The states walked come from the predicate itself, not from a list
-// beside it: a state added to the serving set is disposed of here
-// whether or not anyone remembers this test. One the fixture cannot
-// drive to fails in advanceAttemptTo, which names it.
+// The states walked are the store's own list filtered through the
+// predicate, so neither side of the question is restated here: the
+// domain comes from store.AllAttemptStates, which its own test holds
+// against the schema's constraint, and the answer comes from
+// servedByThisLease. A state added to the serving set is disposed of
+// here whether or not anyone remembers this test, and one the fixture
+// cannot drive to fails in advanceAttemptTo, which names it.
 func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
 	var walked int
-	for _, state := range attemptStates {
+	for _, state := range store.AllAttemptStates {
 		if !servedByThisLease(state) {
 			continue
 		}

@@ -112,8 +112,12 @@ type fakeSandboxDaemon struct {
 	mu       sync.Mutex
 	inFlight int
 	peak     int
-	reloaded []string
-	removed  []string
+	// removeDeadline is the bound a container removal ran under, which
+	// is where an unbounded one would otherwise be invisible.
+	removeDeadline time.Time
+	removeBounded  bool
+	reloaded       []string
+	removed        []string
 }
 
 // serve models one gateway control command occupying the daemon for as
@@ -200,7 +204,10 @@ func (f *fakeSandboxDaemon) ExecWithInput(_ context.Context, id string, _ []stri
 	f.note(&f.reloaded, id)
 	return 0, "", nil
 }
-func (f *fakeSandboxDaemon) RemoveContainer(_ context.Context, id string) error {
+func (f *fakeSandboxDaemon) RemoveContainer(ctx context.Context, id string) error {
+	f.mu.Lock()
+	f.removeDeadline, f.removeBounded = ctx.Deadline()
+	f.mu.Unlock()
 	f.serve()
 	f.note(&f.removed, id)
 	return nil
@@ -531,5 +538,43 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 			"Fewer means launches wait out more waves than they should; more means the "+
 			"bound is not holding, and a pass that opens one exec per capsule trades a "+
 			"slow refresh for a slow daemon", peak, count, want)
+	}
+}
+
+// TestClosingAGatewayIsBoundedInBothSteps: closing a gateway bounds its
+// removal, not only the exec that precedes it.
+//
+// Both steps run under the refresh lock, and every launch waits on that
+// lock with a plain mutex — no context, nothing to give up, no way to
+// time out. A daemon that accepts a container removal and then answers
+// nothing is an ordinary failure, and an unbounded one there holds that
+// lock for the life of the process while every launch on the host blocks
+// behind it. Bounding the exec and not the removal left that in the same
+// function as the bound.
+func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
+	d := &fakeSandboxDaemon{containers: []docker.OwnedContainer{
+		{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
+	}}
+	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
+
+	// A context with no deadline of its own, which is what the watch
+	// loop hands this path.
+	if err := n.closeGateway(context.Background(), "gw-1"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !slices.Equal(d.removes(), []string{"gw-1"}) {
+		t.Fatalf("removed %v; want gw-1", d.removes())
+	}
+
+	d.mu.Lock()
+	bounded, deadline := d.removeBounded, d.removeDeadline
+	d.mu.Unlock()
+	if !bounded {
+		t.Fatal("the removal ran on a context with no deadline; a daemon that stops " +
+			"answering holds the refresh lock, and every launch waits on it uninterruptibly")
+	}
+	if left := time.Until(deadline); left <= 0 || left > gatewayControlTimeout {
+		t.Errorf("the removal had %v left; want a positive bound no larger than %v",
+			left, gatewayControlTimeout)
 	}
 }
