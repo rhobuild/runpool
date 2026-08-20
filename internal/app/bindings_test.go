@@ -429,6 +429,29 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 // the original is left in `status` for good with no command that removes
 // it. Every delivery, attempt and lease hangs off that row, so the
 // history goes with it.
+// TestTheBindingKeyIsVersionedAndPinned: the durable binding key is a
+// literal here, not a comparison against itself.
+//
+// Its sibling in internal/assignment pins the delivery key this way, and
+// that is the cheaper of the two to move: a re-keyed delivery is
+// processed again and finds its attempts by workload key. This one is
+// the expensive one. Moving it renames every binding — the old row is
+// forgotten on the next startup with the scale set id recorded against
+// it, and each binding then meets a provider that already holds its
+// scale set and refuses to adopt one it has no record of creating.
+//
+// The test that existed compared sourceBindingKey's output to
+// sourceBindingKey's output, so any change to the encoding, version
+// included, left the suite green. The costly one was the unpinned one.
+func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
+	got := sourceBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
+	if want := assignment.SourceBindingKey("v2|app|default|runpool-standard"); got != want {
+		t.Errorf("sourceBindingKey = %q; want %q. This value keys every delivery, attempt "+
+			"and lease a binding owns, and moving it is a migration rather than an encoding change",
+			got, want)
+	}
+}
+
 func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	base := config.Target{ID: "app", RunnerGroup: "default"}
 	want := sourceBindingKey(base, "runpool-standard")

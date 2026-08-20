@@ -48,6 +48,21 @@ func (a WorkloadAssignment) Validate() error {
 	return nil
 }
 
+// DeliveryKeyVersion prefixes the delivery key. It is named, and named
+// separately from the binding key's version, because the two are
+// unrelated encodings that happen to be at the same number, and the
+// cost of bumping them is not the same.
+//
+// Bumping this one re-keys deliveries. A message already recorded stops
+// matching, so it is processed again; the attempts it created are still
+// there, and the redelivery finds them by workload key rather than
+// creating a second set. Recoverable.
+//
+// Bumping the binding key's is a rename of every binding. See
+// bindingKeyVersion in internal/app, which says what that costs, and do not treat the
+// two as one value because they read alike.
+const DeliveryKeyVersion = "v2"
+
 // DeliveryKey encodes a provider's delivery identity as the opaque,
 // versioned key the store deduplicates on. The version prefix is what
 // lets the encoding evolve without two encodings of one delivery ever
@@ -59,7 +74,7 @@ func (a WorkloadAssignment) Validate() error {
 // on the id alone, a fresh message can collide with a delivery this
 // binding already recorded and confirmed.
 func DeliveryKey(sourceQueueID, sourceID int) string {
-	return fmt.Sprintf("v2|%d|%d", sourceQueueID, sourceID)
+	return fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID)
 }
 
 // Fingerprint digests the normalized content of a delivery: every field
@@ -123,10 +138,11 @@ type WorkloadLifecycleEvent struct {
 	SourceWorkloadKey string
 	TenantKey         string
 	ProjectKey        string
-	// RuntimeName and RuntimeID identify the provider-side runtime the
-	// observation names, opaque to the domain.
+	// RuntimeName identifies the provider-side runtime the observation
+	// names, opaque to the domain. It is the handle a late report
+	// correlates by, which is why the workload key travels beside it
+	// rather than instead of it.
 	RuntimeName RuntimeName
-	RuntimeID   int64
 	// Result is the provider's stated outcome, populated on completed
 	// observations only.
 	Result string

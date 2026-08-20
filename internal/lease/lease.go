@@ -271,9 +271,10 @@ const (
 // wider set — the seven states that block a redelivery, `manual_review`
 // among them — and one word for two sets one grep apart is how the
 // wrong one gets copied.
-func servedByThisLease(state string) bool {
+func servedByThisLease(state store.AttemptState) bool {
 	switch state {
-	case "leased", "preparing", "prepared", "starting", "running":
+	case store.AttemptLeased, store.AttemptPreparing, store.AttemptPrepared,
+		store.AttemptStarting, store.AttemptRunning:
 		return true
 	}
 	return false

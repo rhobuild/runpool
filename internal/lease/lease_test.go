@@ -158,9 +158,10 @@ func (f *fixture) attemptState() store.Attempt {
 // advanceAttemptTo walks the attempt through the real transitions the
 // serving path uses, so a test never writes a state the product cannot
 // reach.
-func (f *fixture) advanceAttemptTo(target string) {
+func (f *fixture) advanceAttemptTo(target store.AttemptState) {
 	f.t.Helper()
-	ladder := []string{"leased", "preparing", "prepared", "starting", "running"}
+	ladder := []store.AttemptState{store.AttemptLeased, store.AttemptPreparing,
+		store.AttemptPrepared, store.AttemptStarting, store.AttemptRunning}
 	f.tx(func(tx *store.Tx) error {
 		for i := 1; i < len(ladder); i++ {
 			if err := tx.Advance(assignment.AttemptID(f.attempt), ladder[i-1], ladder[i]); err != nil {
@@ -199,16 +200,16 @@ func TestFinalizeDisposesByEvidence(t *testing.T) {
 		toState        store.LeaseState
 		startObs       assignment.ExecutionObservation
 		wantErr        bool
-		wantState      string
+		wantState      store.AttemptState
 		wantResolution string
 	}{
-		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, "", false, "settled", assignment.ResolutionCompletedObserved},
-		{"running observed", store.EvidenceRunningObserved, store.LeaseCleaning, "", false, "settled", assignment.ResolutionStartedObserved},
-		{"nothing was prepared", store.EvidenceNotStarted, store.LeaseCleaning, "", false, "ready", ""},
-		{"prepared but never authorized", store.EvidenceRuntimePrepared, store.LeaseCleaning, "", false, "ready", ""},
-		{"authorized and unprovable", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedAbsent, false, "manual_review", ""},
-		{"authorized and proven inert", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedCreated, false, "ready", ""},
-		{"lease not yet cleaning", store.EvidenceNotStarted, store.LeaseQuarantined, "", true, "leased", ""},
+		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, "", false, store.AttemptSettled, assignment.ResolutionCompletedObserved},
+		{"running observed", store.EvidenceRunningObserved, store.LeaseCleaning, "", false, store.AttemptSettled, assignment.ResolutionStartedObserved},
+		{"nothing was prepared", store.EvidenceNotStarted, store.LeaseCleaning, "", false, store.AttemptReady, ""},
+		{"prepared but never authorized", store.EvidenceRuntimePrepared, store.LeaseCleaning, "", false, store.AttemptReady, ""},
+		{"authorized and unprovable", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedAbsent, false, store.AttemptManualReview, ""},
+		{"authorized and proven inert", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedCreated, false, store.AttemptReady, ""},
+		{"lease not yet cleaning", store.EvidenceNotStarted, store.LeaseQuarantined, "", true, store.AttemptLeased, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,7 +260,7 @@ func TestFinalizeIsAtomic(t *testing.T) {
 	if got := f.reload(); got.State != store.LeaseCleaning {
 		t.Errorf("lease = %s; want still cleaning — nothing may commit", got.State)
 	}
-	if got := f.attemptState(); got.State != "leased" {
+	if got := f.attemptState(); got.State != store.AttemptLeased {
 		t.Errorf("attempt = %s; want still leased — nothing may commit", got.State)
 	}
 }
@@ -294,7 +295,7 @@ func TestReleaseRemovesEverythingAndDisposes(t *testing.T) {
 		}
 		return nil
 	})
-	if got := f.attemptState(); got.State != "settled" {
+	if got := f.attemptState(); got.State != store.AttemptSettled {
 		t.Errorf("attempt = %s; want settled", got.State)
 	}
 }
@@ -321,7 +322,7 @@ func TestReleaseQuarantinesOnAWedgedDaemon(t *testing.T) {
 	if got := f.reload(); got.State != store.LeaseQuarantined {
 		t.Fatalf("lease = %s; want quarantined", got.State)
 	}
-	if got := f.attemptState(); got.State != "leased" {
+	if got := f.attemptState(); got.State != store.AttemptLeased {
 		t.Errorf("attempt = %s; want still leased — nothing was resolved", got.State)
 	}
 
@@ -422,7 +423,7 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 			attempt, err = tx.Get(assignment.AttemptID(f.attempt))
 			return err
 		})
-		if attempt.State == "manual_review" {
+		if attempt.State == store.AttemptManualReview {
 			if attempt.ReviewReason != store.ReviewReasonRetryBudgetExhausted {
 				t.Fatalf("held for review as %q; want %q, so an operator knows the "+
 					"question is whether retrying will ever stop",
@@ -430,7 +431,7 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 			}
 			return
 		}
-		if attempt.State != "ready" {
+		if attempt.State != store.AttemptReady {
 			t.Fatalf("after serving %d the attempt is %q; want ready or manual_review", serving, attempt.State)
 		}
 		if serving > 5 {
@@ -458,14 +459,14 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 func TestAReservedExitRequeuesAnAttemptTheWalkAlreadyCalledRunning(t *testing.T) {
 	f := newFixture(t, nopRemover{})
 	f.driveTo(store.LeaseCleaning)
-	f.advanceAttemptTo("running")
+	f.advanceAttemptTo(store.AttemptRunning)
 	f.recordEvidence(store.EvidenceRunningObserved)
 
 	if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.ObservedCreated); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
-	if got := f.attemptState(); got.State != "ready" {
+	if got := f.attemptState(); got.State != store.AttemptReady {
 		t.Errorf("attempt state = %s (resolution %q); want it back in the queue as ready",
 			got.State, got.Resolution)
 	}
@@ -497,7 +498,7 @@ func TestAHeldAttemptDoesNotPinItsLease(t *testing.T) {
 	if got := f.reload().State; got != store.LeaseReleased {
 		t.Errorf("lease = %s; want released — a held attempt must not pin the lease serving it", got)
 	}
-	if got := f.attemptState(); got.State != "manual_review" {
+	if got := f.attemptState(); got.State != store.AttemptManualReview {
 		t.Errorf("attempt = %s; want it left in manual_review for the person who holds it", got.State)
 	}
 }
@@ -511,31 +512,31 @@ func TestAHeldAttemptDoesNotPinItsLease(t *testing.T) {
 // decision is one function now; this is what says so.
 func TestBothDispositionPathsAgree(t *testing.T) {
 	for name, tc := range map[string]struct {
-		state    string
+		state    store.AttemptState
 		evidence store.Evidence
 		obs      assignment.ExecutionObservation
 		want     disposition
 	}{
 		"proven inert outranks a running observation": {
-			"running", store.EvidenceRunningObserved, assignment.ObservedCreated, dispositionRequeue},
+			store.AttemptRunning, store.EvidenceRunningObserved, assignment.ObservedCreated, dispositionRequeue},
 		"an observed exit settles as completed": {
-			"running", store.EvidenceExitObserved, "", dispositionSettleCompleted},
+			store.AttemptRunning, store.EvidenceExitObserved, "", dispositionSettleCompleted},
 		"a running observation settles as started": {
-			"running", store.EvidenceRunningObserved, "", dispositionSettleStarted},
+			store.AttemptRunning, store.EvidenceRunningObserved, "", dispositionSettleStarted},
 		"nothing prepared returns to the queue": {
-			"leased", store.EvidenceNotStarted, "", dispositionRequeue},
+			store.AttemptLeased, store.EvidenceNotStarted, "", dispositionRequeue},
 		"a running runtime settles as started": {
-			"starting", store.EvidenceStartAuthorized, assignment.ObservedRunning, dispositionSettleStarted},
+			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.ObservedRunning, dispositionSettleStarted},
 		"an unprovable start is held": {
-			"starting", store.EvidenceStartAuthorized, assignment.ObservedAbsent, dispositionReview},
+			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.ObservedAbsent, dispositionReview},
 		"an attempt an operator returned to the queue is left alone": {
-			"ready", store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptReady, store.EvidenceNotStarted, "", dispositionNone},
 		"a superseded attempt is left alone": {
-			"superseded", store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptSuperseded, store.EvidenceNotStarted, "", dispositionNone},
 		"a held attempt is left alone": {
-			"manual_review", store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptManualReview, store.EvidenceNotStarted, "", dispositionNone},
 		"a settled attempt is left alone": {
-			"settled", store.EvidenceExitObserved, "", dispositionNone},
+			store.AttemptSettled, store.EvidenceExitObserved, "", dispositionNone},
 	} {
 		t.Run(name, func(t *testing.T) {
 			attempt := store.Attempt{State: tc.state, Evidence: tc.evidence}
@@ -563,12 +564,12 @@ func TestAProvenInertStartIsRequeuedFromEitherPath(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, nopRemover{})
 			f.driveTo(store.LeaseCleaning)
-			f.advanceAttemptTo("running")
+			f.advanceAttemptTo(store.AttemptRunning)
 			f.recordEvidence(store.EvidenceRunningObserved)
 
 			end(f)
 
-			if got := f.attemptState(); got.State != "ready" {
+			if got := f.attemptState(); got.State != store.AttemptReady {
 				t.Errorf("attempt = %s (resolution %q); want it back in the queue",
 					got.State, got.Resolution)
 			}
@@ -601,10 +602,10 @@ func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
 			continue
 		}
 		walked++
-		t.Run(state, func(t *testing.T) {
+		t.Run(string(state), func(t *testing.T) {
 			f := newFixture(t, nopRemover{})
 			f.driveTo(store.LeaseCleaning)
-			if state != "leased" {
+			if state != store.AttemptLeased {
 				f.advanceAttemptTo(state)
 			}
 
@@ -643,7 +644,7 @@ func TestAnAttemptReturnedToTheQueueDoesNotPinItsLease(t *testing.T) {
 	if got := f.reload().State; got != store.LeaseReleased {
 		t.Errorf("lease = %s; want released — an attempt already servable must not pin it", got)
 	}
-	if got := f.attemptState().State; got != "ready" {
+	if got := f.attemptState().State; got != store.AttemptReady {
 		t.Errorf("attempt = %s; want it left where the operator put it", got)
 	}
 }

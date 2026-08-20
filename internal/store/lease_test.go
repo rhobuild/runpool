@@ -396,7 +396,7 @@ func TestResourceIntentLifecycleAndReleaseRule(t *testing.T) {
 	// With every intent absent and the attempt resolved, the lease is
 	// purgeable.
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(lease.AttemptID, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(lease.AttemptID, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
 		return tx.PurgeLease(lease.ID)

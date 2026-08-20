@@ -42,7 +42,7 @@ func viewOf(a store.Attempt, now time.Time) attemptView {
 		ID:           string(a.ID),
 		Workload:     string(a.SourceWorkloadKey),
 		Project:      a.TenantKey + "/" + a.ProjectKey,
-		State:        a.State,
+		State:        string(a.State),
 		ReviewReason: a.ReviewReason,
 		Resolution:   a.Resolution,
 		ReviewedBy:   a.ReviewedBy,

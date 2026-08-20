@@ -96,7 +96,7 @@ func TestAnIncompatibleCapsuleIsHeldNotRetried(t *testing.T) {
 	lease, _ := runFaulted(t, h, caps, &fakeRegistry{}, &fakeWaiter{}, "job-1")
 
 	attempt := h.attemptByLease(lease.ID)
-	if attempt.State != "manual_review" {
+	if attempt.State != store.AttemptManualReview {
 		t.Fatalf("attempt state = %q, want it held rather than requeued", attempt.State)
 	}
 	if attempt.ReviewReason != store.ReviewReasonIncompatibleCapsule {
@@ -113,7 +113,7 @@ func TestAnOrdinaryPreparationFailureStillRetries(t *testing.T) {
 	lease, _ := runFaulted(t, h, caps, &fakeRegistry{}, &fakeWaiter{}, "job-1")
 
 	attempt := h.attemptByLease(lease.ID)
-	if attempt.State == "manual_review" {
+	if attempt.State == store.AttemptManualReview {
 		t.Errorf("a transient preparation failure was held as %q", attempt.ReviewReason)
 	}
 }

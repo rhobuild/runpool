@@ -12,6 +12,29 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
+// AttemptState is where an attempt stands in the walk from queued to
+// resolved.
+//
+// It is a type for the reason LeaseState is one. These values are
+// compared against literals in guards spread across three packages, and
+// every one of those must agree with a list written in SQL — where a
+// typo is not a compile error but a guard that matches nothing and
+// reports success.
+type AttemptState string
+
+const (
+	AttemptReady        AttemptState = "ready"
+	AttemptLeased       AttemptState = "leased"
+	AttemptPreparing    AttemptState = "preparing"
+	AttemptPrepared     AttemptState = "prepared"
+	AttemptStarting     AttemptState = "starting"
+	AttemptRunning      AttemptState = "running"
+	AttemptManualReview AttemptState = "manual_review"
+	AttemptSuperseded   AttemptState = "superseded"
+	AttemptSettled      AttemptState = "settled"
+	AttemptCanceled     AttemptState = "canceled"
+)
+
 // AllAttemptStates lists every state an attempt can hold, terminal ones
 // included, in the order the walk reaches them.
 //
@@ -22,9 +45,10 @@ import (
 // TestAttemptStatesCoverTheSchema holds it against the constraint the
 // database enforces, so the list cannot drift from what a row may
 // actually contain.
-var AllAttemptStates = []string{
-	"ready", "leased", "preparing", "prepared", "starting", "running",
-	"manual_review", "superseded", "settled", "canceled",
+var AllAttemptStates = []AttemptState{
+	AttemptReady, AttemptLeased, AttemptPreparing, AttemptPrepared,
+	AttemptStarting, AttemptRunning, AttemptManualReview,
+	AttemptSuperseded, AttemptSettled, AttemptCanceled,
 }
 
 // Attempt is the store's domain-facing view of one attempt row. It is a
@@ -37,7 +61,7 @@ type Attempt struct {
 	SourceWorkloadKey assignment.SourceWorkloadKey
 	TenantKey         string
 	ProjectKey        string
-	State             string
+	State             AttemptState
 	Evidence          Evidence
 	ReviewReason      string
 	Resolution        string
@@ -58,7 +82,7 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		SourceWorkloadKey: assignment.SourceWorkloadKey(r.SourceWorkloadKey),
 		TenantKey:         r.TenantKey,
 		ProjectKey:        r.ProjectKey,
-		State:             r.State,
+		State:             AttemptState(r.State),
 		Evidence:          Evidence(r.ExecutionEvidence),
 		ReviewReason:      r.ReviewReason,
 		Resolution:        r.Resolution,
@@ -164,9 +188,9 @@ func (t *Tx) StrandedAttempts() ([]Attempt, error) {
 // Advance walks the attempt state machine one edge, compare-and-swap.
 // The walk is observability — disposition rests on evidence and the
 // terminal transitions — so a conflict here reports rather than blocks.
-func (t *Tx) Advance(attemptID assignment.AttemptID, from, to string) error {
+func (t *Tx) Advance(attemptID assignment.AttemptID, from, to AttemptState) error {
 	affected, err := t.q.TransitionAttempt(t.ctx, sqlitedb.TransitionAttemptParams{
-		Next: to, AttemptID: string(attemptID), Current: from,
+		Next: string(to), AttemptID: string(attemptID), Current: string(from),
 	})
 	if err != nil {
 		return err
@@ -374,9 +398,9 @@ func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution, 
 }
 
 // Settle closes an attempt with an evidence-accurate resolution.
-func (t *Tx) Settle(attemptID assignment.AttemptID, currentState, resolution string) error {
+func (t *Tx) Settle(attemptID assignment.AttemptID, currentState AttemptState, resolution string) error {
 	affected, err := t.q.SettleAttempt(t.ctx, sqlitedb.SettleAttemptParams{
-		Resolution: resolution, AttemptID: string(attemptID), Current: currentState,
+		Resolution: resolution, AttemptID: string(attemptID), Current: string(currentState),
 	})
 	if err != nil {
 		return err
@@ -404,7 +428,7 @@ func (t *Tx) Settle(attemptID assignment.AttemptID, currentState, resolution str
 // by walking that set and requiring each of them to dispose.
 func (t *Tx) RequeueServing(attempt Attempt) error {
 	switch attempt.State {
-	case "starting", "running":
+	case AttemptStarting, AttemptRunning:
 		return t.RequeueProvenInert(attempt.ID)
 	default:
 		return t.Requeue(attempt.ID)

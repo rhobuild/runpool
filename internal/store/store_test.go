@@ -398,7 +398,7 @@ func TestPurgeLeaseRefusesWhileItsAttemptIsUnresolved(t *testing.T) {
 	}
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(attempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(attempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
 		return tx.PurgeLease(leaseID)
@@ -742,10 +742,10 @@ func TestRetentionMeasuresFromTheFinish(t *testing.T) {
 	backdateLease(t, s, resolved, longAgo, time.Now().Add(-time.Minute))
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(settledAttempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(settledAttempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
-		return tx.Settle(resolvedAttempt, "leased", "completed_observed")
+		return tx.Settle(resolvedAttempt, AttemptLeased, "completed_observed")
 	})
 
 	var removed int
@@ -802,13 +802,13 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	prunable, prunableAttempt := releasedLease(t, s, binding, "old")
 	backdateLease(t, s, prunable, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(prunableAttempt, "leased", "completed_observed")
+		return tx.Settle(prunableAttempt, AttemptLeased, "completed_observed")
 	})
 
 	// Finished, but recent: outside the window.
 	recent, recentAttempt := releasedLease(t, s, binding, "recent")
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(recentAttempt, "leased", "completed_observed")
+		return tx.Settle(recentAttempt, AttemptLeased, "completed_observed")
 	})
 
 	// Old and released, but its attempt is still open — the crash window.
@@ -819,7 +819,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	wedged, wedgedAttempt := releasedLease(t, s, binding, "wedged")
 	backdateLease(t, s, wedged, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(wedgedAttempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(wedgedAttempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
 		_, err := tx.PlanResource(wedged, ResourceContainer, "runner", "runpool-wedged")
@@ -867,7 +867,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the pruned lease's attempt disappeared with it: %v", err)
 		}
-		if attempt.State != "settled" {
+		if attempt.State != AttemptSettled {
 			t.Errorf("attempt state = %q; want the disposition preserved", attempt.State)
 		}
 		events, err := tx.Events(prunableAttempt)
@@ -1092,7 +1092,7 @@ func TestAnOperatorRetryIsNotOverruledByTheBudget(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if a.State != "ready" {
+		if a.State != AttemptReady {
 			t.Errorf("after an operator retry the attempt is %q; the budget overruled a human", a.State)
 		}
 		if a.Evidence != EvidenceNotStarted {
@@ -1194,8 +1194,8 @@ func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 			return tx.Requeue(assignment.AttemptID(id))
 		}},
 		{"proven inert from starting", "starting", func(tx *Tx, id string) error {
-			for _, step := range [][2]string{
-				{"leased", "preparing"}, {"preparing", "prepared"}, {"prepared", "starting"},
+			for _, step := range [][2]AttemptState{
+				{AttemptLeased, AttemptPreparing}, {AttemptPreparing, AttemptPrepared}, {AttemptPrepared, AttemptStarting},
 			} {
 				if err := tx.Advance(assignment.AttemptID(id), step[0], step[1]); err != nil {
 					return err
@@ -1364,7 +1364,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 				if err != nil {
 					t.Fatalf("the redelivery was refused: %v", err)
 				}
-				if got.State != "superseded" {
+				if got.State != AttemptSuperseded {
 					t.Errorf("held attempt = %s; want superseded so the queue moves", got.State)
 				}
 				return
@@ -1372,7 +1372,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 			if err == nil {
 				t.Fatal("the redelivery replaced an attempt whose start was authorized")
 			}
-			if got.State != "manual_review" {
+			if got.State != AttemptManualReview {
 				t.Errorf("held attempt = %s; want it left in manual_review", got.State)
 			}
 		})
@@ -1508,7 +1508,7 @@ func TestTheRetryCountIsIndexed(t *testing.T) {
 // here fails rather than defaulting to one.
 func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	cases := []struct {
-		state     string
+		state     AttemptState
 		authorize bool
 		because   string
 	}{
@@ -1526,7 +1526,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 
 	// The universe comes from the one list, which its own test holds
 	// against the schema.
-	decided := make(map[string]bool, len(cases))
+	decided := make(map[AttemptState]bool, len(cases))
 	for _, c := range cases {
 		decided[c.state] = true
 	}
@@ -1541,7 +1541,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 
 	// Each case gets a real lease, because the authorization is scoped to
 	// one: an attempt in a servable state is not enough on its own.
-	leased := func(t *testing.T, name, state string) (assignment.LeaseID, assignment.AttemptID) {
+	leased := func(t *testing.T, name string, state AttemptState) (assignment.LeaseID, assignment.AttemptID) {
 		t.Helper()
 		id := seedAttempt(t, s, binding, "msg-"+name, assignment.SourceWorkloadKey("job-"+name))
 		var leaseID assignment.LeaseID
@@ -1551,17 +1551,17 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 				return err
 			}
 			leaseID = lease.ID
-			if state == "leased" {
+			if state == AttemptLeased {
 				return nil
 			}
-			return tx.Advance(id, "leased", state)
+			return tx.Advance(id, AttemptLeased, state)
 		})
 		return leaseID, id
 	}
 
 	for _, c := range cases {
-		t.Run(c.state, func(t *testing.T) {
-			leaseID, id := leased(t, c.state, c.state)
+		t.Run(string(c.state), func(t *testing.T) {
+			leaseID, id := leased(t, string(c.state), c.state)
 
 			var err error
 			inTx(t, s, func(tx *Tx) error {
@@ -1583,7 +1583,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	// the attempt is still this lease's, and that is the half that keeps
 	// a job from being run twice.
 	t.Run("a lease that has been released", func(t *testing.T) {
-		leaseID, id := leased(t, "released-lease", "prepared")
+		leaseID, id := leased(t, "released-lease", AttemptPrepared)
 		// reserved -> failed -> cleaning -> released is the shortest real
 		// path to a released lease; the state machine refuses shortcuts.
 		inTx(t, s, func(tx *Tx) error {
@@ -1607,8 +1607,8 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	})
 
 	t.Run("a lease that never held this attempt", func(t *testing.T) {
-		_, id := leased(t, "wrong-lease-a", "prepared")
-		other, _ := leased(t, "wrong-lease-b", "prepared")
+		_, id := leased(t, "wrong-lease-a", AttemptPrepared)
+		other, _ := leased(t, "wrong-lease-b", AttemptPrepared)
 		inTx(t, s, func(tx *Tx) error {
 			if err := tx.AuthorizeStart(other, id); !errors.Is(err, ErrConflict) {
 				t.Errorf("AuthorizeStart with another lease's id = %v; want ErrConflict", err)
@@ -1651,7 +1651,7 @@ func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
 		}
 		// Back to the queue and served again, which is the whole of how
 		// one attempt comes to have two leases.
-		if err := tx.Advance(id, "leased", "ready"); err != nil {
+		if err := tx.Advance(id, AttemptLeased, AttemptReady); err != nil {
 			return err
 		}
 		second, err = tx.LeaseAttempt(id, binding, "tier-a")
@@ -1769,7 +1769,7 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 	}
 	constraint := body[start : start+strings.Index(body[start:], "))")]
 
-	listed := make(map[string]bool, len(AllAttemptStates))
+	listed := make(map[AttemptState]bool, len(AllAttemptStates))
 	for _, s := range AllAttemptStates {
 		listed[s] = true
 	}
@@ -1779,7 +1779,7 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 			continue
 		}
 		found++
-		if !listed[state] {
+		if !listed[AttemptState(state)] {
 			t.Errorf("the schema allows attempt state %q and AllAttemptStates omits it", state)
 		}
 	}
