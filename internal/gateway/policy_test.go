@@ -389,19 +389,29 @@ func TestAReaderCrossingAnInstallDoesNotOverCountGenerations(t *testing.T) {
 				default:
 				}
 				if _, err := store.Current(); err != nil {
+					// A reader that returned quietly would leave the
+					// ceiling below satisfied by eight dead goroutines.
+					t.Errorf("reader: %v", err)
 					return
 				}
 			}
 		}()
 	}
+	// Deferred as well as called, so a failure out of the loop below
+	// cannot leave eight goroutines spinning for the rest of the run.
+	settle := sync.OnceFunc(func() {
+		close(stop)
+		readers.Wait()
+	})
+	defer settle()
+
 	for i := range installs {
 		if err := atomicfile.Replace(path, policy(denies[i%len(denies)]), 0o600, -1, -1); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	close(stop)
-	readers.Wait()
+	settle()
 
 	// One for the first read, and at most one per install. Two installs
 	// inside the same nanosecond-and-size stamp are indistinguishable to

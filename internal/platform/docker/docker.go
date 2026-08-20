@@ -53,21 +53,29 @@ func (c *Client) OnCleanupError(fn func(name string, err error)) { c.onCleanupEr
 // first lease.
 //
 // The ping negotiates the API version rather than leaving it to the
-// first real request. The client negotiates lazily otherwise, once,
-// behind its own lock — correct, but it makes whichever caller happens
-// to be first pay for it, and since the gateway refresh fans out that
-// caller can be one of eight goroutines racing into the same lock while
-// holding the one every launch waits on. Settling it here costs nothing:
-// the ping is already being made, and a daemon that answers it is a
-// daemon whose version is known.
+// first real request. Not for speed — serve reads the daemon's facts on
+// the next line, so the lazy negotiation was already settled on the
+// startup goroutine long before anything ran concurrently. What it buys
+// is a failure with somewhere to appear: the lazy path runs inside
+// getAPIPath, which discards the error, so a version this client cannot
+// use surfaces as whatever the first request happens to fail with. Here
+// it surfaces as a refusal to start, next to the reason.
+//
+// A daemon whose version this client cannot use is one it should not
+// start against, and saying so is not the same as saying the daemon is
+// unreachable — the daemon answered.
 func New(ctx context.Context) (*Client, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("docker daemon unreachable: %w", err)
+	}
+	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		cli.Close()
+		return nil, fmt.Errorf("docker daemon answered but its API version is unusable: %w", err)
 	}
 	return &Client{cli: cli, onCleanupError: func(string, error) {}}, nil
 }
