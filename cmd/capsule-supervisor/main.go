@@ -87,7 +87,7 @@ func main() {
 			os.Exit(runGateway(log))
 		case "gateway-reload":
 			os.Exit(runGatewayReload())
-		case "gateway-deny-all":
+		case protocol.GatewayDenyAllCommand:
 			os.Exit(runGatewayDenyAll())
 		}
 		os.Exit(runSubcommand(os.Args[1:]))

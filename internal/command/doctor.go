@@ -64,16 +64,16 @@ func runDoctor(streams IO, asJSON bool) error {
 	return nil
 }
 
-// runHealthcheck is the container health command. Liveness answers
-// whether this process can still reach its own state; readiness adds
-// the host contract. It is deliberately cheap and local: no GitHub call,
-// so a broker outage never marks the controller unhealthy.
 // livenessVerdictTolerance is how stale the disk monitor's last verdict
 // may be before liveness reads the serve loop as stopped. The monitor
 // writes one per minute; ten of them is far past any transient stall a
 // restart would not fix, while a single slow cycle never trips it.
 const livenessVerdictTolerance = 10 * time.Minute
 
+// runHealthcheck is the container health command. Liveness answers
+// whether this process can still reach its own state; readiness adds
+// the host contract. It is deliberately cheap and local: no GitHub call,
+// so a broker outage never marks the controller unhealthy.
 func runHealthcheck(streams IO, mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

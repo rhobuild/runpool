@@ -10,6 +10,10 @@ package consistency
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,5 +215,108 @@ func TestTheTwoRetryBudgetDefaultsAgree(t *testing.T) {
 		t.Fatalf("config.DefaultRetryBudget = %d, store.DefaultRetryBudget = %d; "+
 			"a deployment and a maintenance command would enforce different budgets",
 			config.DefaultRetryBudget, store.DefaultRetryBudget)
+	}
+}
+
+// TestNoDocCommentBelongsToAnotherDeclaration: a doc comment sits on the
+// thing it names.
+//
+// Inserting a declaration between a comment and the declaration it
+// documents silently reassigns the comment. The result compiles, gofmt
+// says nothing, and `go vet` says nothing — staticcheck's ST1020 checks
+// only exported names, and this codebase is mostly unexported. What a
+// reader gets is `go doc` reporting one function's purpose under another
+// function's name, and the next person to change either reasons from a
+// sentence that was never about it.
+//
+// The rule is narrow on purpose. A doc comment that simply does not open
+// with its own name is a style question and there are legitimate ones
+// here. A doc comment that opens with the name of a *different*
+// declaration in the same file is not a style question: it is a comment
+// that was detached from what it describes.
+func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
+	fset := token.NewFileSet()
+	var found []string
+
+	err := filepath.WalkDir(repoPath(), func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir():
+			// Generated code carries whatever its generator emits, and
+			// vendored trees are not ours to describe.
+			if name := d.Name(); name == ".git" || name == "sqlitedb" || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		case !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+
+		// Every name this file declares, so the check can tell "a
+		// different declaration" from an ordinary first word.
+		declared := map[string]bool{}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch decl := n.(type) {
+			case *ast.FuncDecl:
+				declared[decl.Name.Name] = true
+			case *ast.TypeSpec:
+				declared[decl.Name.Name] = true
+			case *ast.ValueSpec:
+				for _, id := range decl.Names {
+					declared[id.Name] = true
+				}
+			}
+			return true
+		})
+
+		check := func(doc *ast.CommentGroup, name string, pos token.Pos) {
+			if doc == nil || len(doc.List) == 0 {
+				return
+			}
+			words := strings.Fields(strings.TrimPrefix(doc.List[0].Text, "//"))
+			if len(words) == 0 {
+				return
+			}
+			first := strings.Trim(words[0], "`*.,:")
+			if first == name || !declared[first] {
+				return
+			}
+			found = append(found, fmt.Sprintf(
+				"%s: the doc comment on %s begins with %q, which is another declaration in this file. "+
+					"Something was inserted between %q's comment and %q",
+				fset.Position(pos), name, first, first, first))
+		}
+		for _, decl := range file.Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				check(decl.Doc, decl.Name.Name, decl.Pos())
+			case *ast.GenDecl:
+				// Only single-spec blocks: a grouped const or var block
+				// documents the group, not its first member.
+				if len(decl.Specs) != 1 {
+					continue
+				}
+				switch spec := decl.Specs[0].(type) {
+				case *ast.TypeSpec:
+					check(decl.Doc, spec.Name.Name, decl.Pos())
+				case *ast.ValueSpec:
+					if len(spec.Names) > 0 {
+						check(decl.Doc, spec.Names[0].Name, decl.Pos())
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range found {
+		t.Error(f)
 	}
 }

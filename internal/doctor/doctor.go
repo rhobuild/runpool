@@ -201,6 +201,13 @@ func checkDaemon(ctx context.Context, d daemonInfo) Result {
 	return Result{"docker daemon", Pass, detail, ""}
 }
 
+// networkProbeClient is the two calls the bridge probe needs, named so
+// the probe cannot reach the rest of a daemon client.
+type networkProbeClient interface {
+	CreateNetwork(context.Context, docker.NetworkSpec) (string, error)
+	RemoveNetwork(context.Context, string) error
+}
+
 // checkIsolatedBridge proves the daemon actually provides the capability
 // the restricted profile depends on, rather than inferring it from a
 // version number. Engine 28 introduced the isolated bridge gateway mode,
@@ -215,11 +222,6 @@ func checkDaemon(ctx context.Context, d daemonInfo) Result {
 // moment it exists. Failing here is the point: a host that cannot build
 // this network must be refused before it accepts work, not after a job
 // has already been assigned to it.
-type networkProbeClient interface {
-	CreateNetwork(context.Context, docker.NetworkSpec) (string, error)
-	RemoveNetwork(context.Context, string) error
-}
-
 func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
 	const name = "isolated bridge"
 	if d == nil {

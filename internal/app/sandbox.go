@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/capsule"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/platform/docker"
@@ -122,7 +123,7 @@ func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
 	for _, c := range cfg.Network.DenyCIDRs {
 		n.denies = append(n.denies, c.String())
 	}
-	initial, err := n.build(ctx)
+	initial, err := n.build(ctx, sandboxFirstBuildBudget)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +138,10 @@ func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
 // interface networks discovered through a short-lived host-namespace
 // probe, every Docker subnet the daemon knows, the baseline ranges, and
 // the uplink itself.
-func (n *networkSandbox) build(ctx context.Context) (*capsule.Sandbox, error) {
+func (n *networkSandbox) build(ctx context.Context, budget time.Duration) (*capsule.Sandbox, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
 	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, docker.NetworkSpec{
 		Name: "runpool-uplink-" + string(n.instanceID)[:8],
 		Labels: map[string]string{
@@ -174,6 +178,36 @@ func (n *networkSandbox) build(ctx context.Context) (*capsule.Sandbox, error) {
 // the cost of noticing late is a hole that stays open until then, and
 // the cost of noticing often is one probe container.
 const rediscoverInterval = 5 * time.Minute
+
+// The two budgets on discovering the environment. It is one budget over
+// the whole of build rather than one per step, because what it protects
+// is a caller that cannot give up rather than any particular call, and
+// which step hung does not change that.
+//
+// They differ because their callers do. The first build runs from
+// newNetworkSandbox, before the state exists and before any binding does:
+// nothing holds the refresh lock, nothing waits on it, and the probe
+// image may still have to be pulled — it is the capsule image, which is
+// hundreds of megabytes. Failing that for being slow is a controller
+// that will not start on a cold host with an ordinary link.
+//
+// Every later build runs from refresh, under the lock that every launch
+// takes with a plain mutex — no context, no way out — so an unbounded
+// step there is a host on which nothing new can start. By then the image
+// is present, so what remains is creating a network, inspecting it,
+// running a small container to completion and listing subnets. The bound
+// stays under rediscoverInterval so a build that hangs cannot leave two
+// passes overlapping, which TestDiscoveringTheEnvironmentIsBounded
+// requires.
+//
+// What this does not cover: an image removed from under a running
+// controller makes a later build pull again, on the tighter budget, and
+// a refresh that fails closes every gateway. That host has lost the
+// image its capsules run from and is going to fail launches regardless.
+const (
+	sandboxFirstBuildBudget = 10 * time.Minute
+	sandboxRefreshBudget    = 2 * time.Minute
+)
 
 // PolicyChange classifies what a rediscovered deny set does to the one
 // in force. The distinction decides what a failure to install it costs.
@@ -296,7 +330,7 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 func (n *networkSandbox) refresh(ctx context.Context) error {
 	n.state.refreshMu.Lock()
 	defer n.state.refreshMu.Unlock()
-	next, err := n.build(ctx)
+	next, err := n.build(ctx, sandboxRefreshBudget)
 	if err != nil {
 		return err
 	}
@@ -421,7 +455,7 @@ func eachGateway[T any](items []T, fn func(T)) {
 // one caller takes a length and iterates order-blind, and a test that
 // compares the set sorts what it compares.
 func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []string) (failed []string, err error) {
-	containers, err := n.daemon.ListOwnedContainers(ctx, n.instanceID)
+	containers, err := n.ownedContainers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -458,6 +492,20 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 // every launch on the host.
 const gatewayControlTimeout = 30 * time.Second
 
+// ownedContainers asks the daemon what this instance owns, under a bound.
+//
+// Both callers run inside the refresh lock, and enumerating is the first
+// thing each does — so a daemon that accepts the request and answers
+// nothing would hold that lock before any gateway had been reached, with
+// every launch on the host waiting on it and none able to time out. It
+// is the same reason the exec and the removal below are bounded, and
+// leaving it out left the pass unbounded at its very first step.
+func (n *networkSandbox) ownedContainers(ctx context.Context) ([]docker.OwnedContainer, error) {
+	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
+	defer cancel()
+	return n.daemon.ListOwnedContainers(ctx, n.instanceID)
+}
+
 // execGateway runs one gateway control command under its own bound.
 func (n *networkSandbox) execGateway(ctx context.Context,
 	call func(context.Context) (int, string, error)) (int, string, error) {
@@ -477,7 +525,7 @@ func (n *networkSandbox) execGateway(ctx context.Context,
 func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) error {
 	code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
 		return n.daemon.Exec(ctx, containerID,
-			[]string{capsule.SupervisorPath, "gateway-deny-all"})
+			[]string{capsule.SupervisorPath, protocol.GatewayDenyAllCommand})
 	})
 	if err != nil || code != 0 {
 		// The policy could not be closed from inside; removing the
@@ -502,7 +550,7 @@ func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) e
 
 // closeGateways closes every live gateway this instance owns.
 func (n *networkSandbox) closeGateways(ctx context.Context) error {
-	containers, err := n.daemon.ListOwnedContainers(ctx, n.instanceID)
+	containers, err := n.ownedContainers(ctx)
 	if err != nil {
 		return err
 	}
