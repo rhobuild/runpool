@@ -85,10 +85,10 @@ func translate(msg *scaleset.RunnerScaleSetMessage) (Message, []assignment.Workl
 		out.Assigned = append(out.Assigned, workload(j.JobMessageBase))
 	}
 	for _, j := range msg.JobStartedMessages {
-		out.Started = append(out.Started, observation(assignment.LifecycleStarted, j.JobMessageBase, j.RunnerName, j.RunnerID, ""))
+		out.Started = append(out.Started, observation(assignment.LifecycleStarted, j.JobMessageBase, j.RunnerName, ""))
 	}
 	for _, j := range msg.JobCompletedMessages {
-		out.Completed = append(out.Completed, observation(assignment.LifecycleCompleted, j.JobMessageBase, j.RunnerName, j.RunnerID, j.Result))
+		out.Completed = append(out.Completed, observation(assignment.LifecycleCompleted, j.JobMessageBase, j.RunnerName, j.Result))
 	}
 	return out, available
 }
@@ -113,14 +113,13 @@ func workload(b scaleset.JobMessageBase) assignment.WorkloadAssignment {
 // events that named only the runner could not be correlated to the
 // attempt they belong to, and a cancellation aimed at an old attempt
 // could then hit a new one.
-func observation(kind assignment.LifecycleKind, b scaleset.JobMessageBase, runnerName string, runnerID int, result string) assignment.WorkloadLifecycleEvent {
+func observation(kind assignment.LifecycleKind, b scaleset.JobMessageBase, runnerName, result string) assignment.WorkloadLifecycleEvent {
 	return assignment.WorkloadLifecycleEvent{
 		Kind:              kind,
 		SourceWorkloadKey: b.JobID,
 		TenantKey:         b.OwnerName,
 		ProjectKey:        b.RepositoryName,
 		RuntimeName:       assignment.RuntimeName(runnerName),
-		RuntimeID:         int64(runnerID),
 		Result:            result,
 	}
 }

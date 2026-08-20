@@ -145,6 +145,22 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 	return nil
 }
 
+// bindingKeyVersion prefixes the binding key, and is not the delivery
+// key's version even though it reads the same today.
+//
+// Bumping it renames every binding. The new key matches no row, so a row
+// is written for it and the old one is unclaimed — ForgetUnclaimedBindings
+// deletes it on the same startup, taking the scale set id recorded
+// against it, unless it still holds deliveries. Every binding then meets
+// a provider that already has its scale set under the unchanged name and
+// refuses to adopt one it has no record of creating, once each, before
+// settling. The contact history does not come back.
+//
+// That is a migration, not an encoding change. Anything that makes this
+// value move deserves the same reading as renaming a targets[].id, which
+// docs/adrs/2026-08-17-target-hosts-and-scopes.md records.
+const bindingKeyVersion = "v2"
+
 // sourceBindingKey is a binding's durable identity: the row every
 // delivery, attempt and lease hangs off.
 //
@@ -158,8 +174,9 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 // adopt a set it has no record of creating, which is a refusal before it
 // is an adoption. Scope and canonical URL still travel, in the adapter's
 // own metadata, which is where provider identity belongs.
-func sourceBindingKey(target config.Target, scaleSetName string) string {
-	return fmt.Sprintf("v2|%s|%s|%s", target.ID, target.RunnerGroup, scaleSetName)
+func sourceBindingKey(target config.Target, scaleSetName string) assignment.SourceBindingKey {
+	return assignment.SourceBindingKey(fmt.Sprintf("%s|%s|%s|%s",
+		bindingKeyVersion, target.ID, target.RunnerGroup, scaleSetName))
 }
 
 // ensureScaleSet creates or adopts this binding's scale set and records

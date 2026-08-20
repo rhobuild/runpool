@@ -70,16 +70,20 @@ func TestRecoveryMatrix(t *testing.T) {
 					t.Errorf("a %s lease ended %s; it still holds its credit", from, got.State)
 				}
 
-				var wantState, wantResolution string
+				var (
+					wantState      store.AttemptState
+					wantResolution string
+				)
 				switch evidence {
 				case store.EvidenceNotStarted, store.EvidenceRuntimePrepared:
-					wantState = "ready"
+					wantState = store.AttemptReady
 				case store.EvidenceStartAuthorized:
-					wantState = "manual_review" // no runtime remains; nothing can be proven
+					// No runtime remains; nothing can be proven.
+					wantState = store.AttemptManualReview
 				case store.EvidenceRunningObserved:
-					wantState, wantResolution = "settled", assignment.ResolutionStartedObserved
+					wantState, wantResolution = store.AttemptSettled, assignment.ResolutionStartedObserved
 				default:
-					wantState, wantResolution = "settled", assignment.ResolutionCompletedObserved
+					wantState, wantResolution = store.AttemptSettled, assignment.ResolutionCompletedObserved
 				}
 				got := attemptState(t, h, attemptID)
 				if got.State != wantState {

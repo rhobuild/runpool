@@ -151,8 +151,8 @@ func TestStartFaultMatrix(t *testing.T) {
 		caps    *fakeCapsule
 		reg     *fakeRegistry
 		wait    *fakeWaiter
-		want    string // attempt state afterwards
-		wantRes string // attempt resolution, when settled
+		want    store.AttemptState // attempt state afterwards
+		wantRes string             // attempt resolution, when settled
 	}{
 		{
 			// The credential could not be minted: nothing was prepared,
@@ -786,7 +786,7 @@ func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 	// test decides both, and this one takes the further of the two.
 	caps.onPrepare = func() {
 		h.inStore(func(tx *store.Tx) error {
-			return tx.Advance(attemptID, "preparing", "leased")
+			return tx.Advance(attemptID, store.AttemptPreparing, store.AttemptLeased)
 		})
 	}
 

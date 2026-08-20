@@ -1194,7 +1194,7 @@ func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 			return tx.Requeue(assignment.AttemptID(id))
 		}},
 		{"proven inert from starting", "starting", func(tx *Tx, id string) error {
-			for _, step := range [][2]string{
+			for _, step := range [][2]AttemptState{
 				{"leased", "preparing"}, {"preparing", "prepared"}, {"prepared", "starting"},
 			} {
 				if err := tx.Advance(assignment.AttemptID(id), step[0], step[1]); err != nil {
@@ -1508,7 +1508,7 @@ func TestTheRetryCountIsIndexed(t *testing.T) {
 // here fails rather than defaulting to one.
 func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	cases := []struct {
-		state     string
+		state     AttemptState
 		authorize bool
 		because   string
 	}{
@@ -1526,7 +1526,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 
 	// The universe comes from the one list, which its own test holds
 	// against the schema.
-	decided := make(map[string]bool, len(cases))
+	decided := make(map[AttemptState]bool, len(cases))
 	for _, c := range cases {
 		decided[c.state] = true
 	}
@@ -1541,7 +1541,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 
 	// Each case gets a real lease, because the authorization is scoped to
 	// one: an attempt in a servable state is not enough on its own.
-	leased := func(t *testing.T, name, state string) (assignment.LeaseID, assignment.AttemptID) {
+	leased := func(t *testing.T, name string, state AttemptState) (assignment.LeaseID, assignment.AttemptID) {
 		t.Helper()
 		id := seedAttempt(t, s, binding, "msg-"+name, assignment.SourceWorkloadKey("job-"+name))
 		var leaseID assignment.LeaseID
@@ -1551,17 +1551,17 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 				return err
 			}
 			leaseID = lease.ID
-			if state == "leased" {
+			if state == AttemptLeased {
 				return nil
 			}
-			return tx.Advance(id, "leased", state)
+			return tx.Advance(id, AttemptLeased, state)
 		})
 		return leaseID, id
 	}
 
 	for _, c := range cases {
-		t.Run(c.state, func(t *testing.T) {
-			leaseID, id := leased(t, c.state, c.state)
+		t.Run(string(c.state), func(t *testing.T) {
+			leaseID, id := leased(t, string(c.state), c.state)
 
 			var err error
 			inTx(t, s, func(tx *Tx) error {
@@ -1583,7 +1583,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	// the attempt is still this lease's, and that is the half that keeps
 	// a job from being run twice.
 	t.Run("a lease that has been released", func(t *testing.T) {
-		leaseID, id := leased(t, "released-lease", "prepared")
+		leaseID, id := leased(t, "released-lease", AttemptPrepared)
 		// reserved -> failed -> cleaning -> released is the shortest real
 		// path to a released lease; the state machine refuses shortcuts.
 		inTx(t, s, func(tx *Tx) error {
@@ -1607,8 +1607,8 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	})
 
 	t.Run("a lease that never held this attempt", func(t *testing.T) {
-		_, id := leased(t, "wrong-lease-a", "prepared")
-		other, _ := leased(t, "wrong-lease-b", "prepared")
+		_, id := leased(t, "wrong-lease-a", AttemptPrepared)
+		other, _ := leased(t, "wrong-lease-b", AttemptPrepared)
 		inTx(t, s, func(tx *Tx) error {
 			if err := tx.AuthorizeStart(other, id); !errors.Is(err, ErrConflict) {
 				t.Errorf("AuthorizeStart with another lease's id = %v; want ErrConflict", err)
@@ -1651,7 +1651,7 @@ func TestEveryLeaseKeepsItsAttempt(t *testing.T) {
 		}
 		// Back to the queue and served again, which is the whole of how
 		// one attempt comes to have two leases.
-		if err := tx.Advance(id, "leased", "ready"); err != nil {
+		if err := tx.Advance(id, AttemptLeased, AttemptReady); err != nil {
 			return err
 		}
 		second, err = tx.LeaseAttempt(id, binding, "tier-a")
@@ -1769,7 +1769,7 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 	}
 	constraint := body[start : start+strings.Index(body[start:], "))")]
 
-	listed := make(map[string]bool, len(AllAttemptStates))
+	listed := make(map[AttemptState]bool, len(AllAttemptStates))
 	for _, s := range AllAttemptStates {
 		listed[s] = true
 	}
@@ -1779,7 +1779,7 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 			continue
 		}
 		found++
-		if !listed[state] {
+		if !listed[AttemptState(state)] {
 			t.Errorf("the schema allows attempt state %q and AllAttemptStates omits it", state)
 		}
 	}

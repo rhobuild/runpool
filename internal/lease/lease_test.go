@@ -158,9 +158,10 @@ func (f *fixture) attemptState() store.Attempt {
 // advanceAttemptTo walks the attempt through the real transitions the
 // serving path uses, so a test never writes a state the product cannot
 // reach.
-func (f *fixture) advanceAttemptTo(target string) {
+func (f *fixture) advanceAttemptTo(target store.AttemptState) {
 	f.t.Helper()
-	ladder := []string{"leased", "preparing", "prepared", "starting", "running"}
+	ladder := []store.AttemptState{store.AttemptLeased, store.AttemptPreparing,
+		store.AttemptPrepared, store.AttemptStarting, store.AttemptRunning}
 	f.tx(func(tx *store.Tx) error {
 		for i := 1; i < len(ladder); i++ {
 			if err := tx.Advance(assignment.AttemptID(f.attempt), ladder[i-1], ladder[i]); err != nil {
@@ -199,7 +200,7 @@ func TestFinalizeDisposesByEvidence(t *testing.T) {
 		toState        store.LeaseState
 		startObs       assignment.ExecutionObservation
 		wantErr        bool
-		wantState      string
+		wantState      store.AttemptState
 		wantResolution string
 	}{
 		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, "", false, "settled", assignment.ResolutionCompletedObserved},
@@ -511,7 +512,7 @@ func TestAHeldAttemptDoesNotPinItsLease(t *testing.T) {
 // decision is one function now; this is what says so.
 func TestBothDispositionPathsAgree(t *testing.T) {
 	for name, tc := range map[string]struct {
-		state    string
+		state    store.AttemptState
 		evidence store.Evidence
 		obs      assignment.ExecutionObservation
 		want     disposition
@@ -601,7 +602,7 @@ func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
 			continue
 		}
 		walked++
-		t.Run(state, func(t *testing.T) {
+		t.Run(string(state), func(t *testing.T) {
 			f := newFixture(t, nopRemover{})
 			f.driveTo(store.LeaseCleaning)
 			if state != "leased" {

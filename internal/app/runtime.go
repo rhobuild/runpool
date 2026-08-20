@@ -35,11 +35,11 @@ func (s *Controller) createLease(ctx context.Context, b *binding, attempt store.
 // walk is what an operator watches, while disposition rests on evidence
 // and the terminal transitions, so a conflict is logged rather than
 // fatal.
-func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.AttemptID, from, to string) {
+func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.AttemptID, from, to store.AttemptState) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		return tx.Advance(assignment.AttemptID(attemptID), from, to)
+		return tx.Advance(attemptID, from, to)
 	}); err != nil {
 		s.log.Warn("attempt did not advance", "attempt", attemptID,
 			"from", from, "to", to, "error", err)
@@ -134,7 +134,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	}
 
 	recorder := s.leases.Recorder(ctx, lease.ID)
-	s.advanceAttempt(ctx, attemptID, "leased", "preparing")
+	s.advanceAttempt(ctx, attemptID, store.AttemptLeased, store.AttemptPreparing)
 	sandbox, err := s.netSandbox.forLaunch(prepCtx)
 	if err != nil {
 		log.Error("network sandbox refresh failed", "error", err)
@@ -175,7 +175,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
-	s.advanceAttempt(ctx, attemptID, "preparing", "prepared")
+	s.advanceAttempt(ctx, attemptID, store.AttemptPreparing, store.AttemptPrepared)
 	// This one edge is authoritative, unlike every other in the walk. It
 	// is the last point before an effect that can begin execution, and
 	// by here the attempt has been out of this goroutine's sight for the
@@ -249,7 +249,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRunningObserved); err != nil {
 		log.Error("cannot record that the runner is running", "error", err)
 	}
-	s.advanceAttempt(ctx, attemptID, "starting", "running")
+	s.advanceAttempt(ctx, attemptID, store.AttemptStarting, store.AttemptRunning)
 	if err := s.leases.Transition(ctx, lease.ID, store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning); err != nil {
 		log.Error("transition to running failed", "error", err)
 		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
