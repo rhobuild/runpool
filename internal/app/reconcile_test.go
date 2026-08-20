@@ -171,7 +171,7 @@ func TestPrunePeriodicallyHonoursTheWindow(t *testing.T) {
 				return err
 			}
 		}
-		return tx.Settle(lease.AttemptID, "leased", "completed_observed")
+		return tx.Settle(lease.AttemptID, store.AttemptLeased, "completed_observed")
 	})
 
 	for _, window := range []time.Duration{0, 24 * time.Hour} {

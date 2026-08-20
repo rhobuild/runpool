@@ -50,7 +50,7 @@ func (a WorkloadAssignment) Validate() error {
 
 // DeliveryKeyVersion prefixes the delivery key. It is named, and named
 // separately from the binding key's version, because the two are
-// unrelated encodings that happen to be at the same number — and the
+// unrelated encodings that happen to be at the same number, and the
 // cost of bumping them is not the same.
 //
 // Bumping this one re-keys deliveries. A message already recorded stops

@@ -398,7 +398,7 @@ func TestPurgeLeaseRefusesWhileItsAttemptIsUnresolved(t *testing.T) {
 	}
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(attempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(attempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
 		return tx.PurgeLease(leaseID)
@@ -742,10 +742,10 @@ func TestRetentionMeasuresFromTheFinish(t *testing.T) {
 	backdateLease(t, s, resolved, longAgo, time.Now().Add(-time.Minute))
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(settledAttempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(settledAttempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
-		return tx.Settle(resolvedAttempt, "leased", "completed_observed")
+		return tx.Settle(resolvedAttempt, AttemptLeased, "completed_observed")
 	})
 
 	var removed int
@@ -802,13 +802,13 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	prunable, prunableAttempt := releasedLease(t, s, binding, "old")
 	backdateLease(t, s, prunable, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(prunableAttempt, "leased", "completed_observed")
+		return tx.Settle(prunableAttempt, AttemptLeased, "completed_observed")
 	})
 
 	// Finished, but recent: outside the window.
 	recent, recentAttempt := releasedLease(t, s, binding, "recent")
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(recentAttempt, "leased", "completed_observed")
+		return tx.Settle(recentAttempt, AttemptLeased, "completed_observed")
 	})
 
 	// Old and released, but its attempt is still open — the crash window.
@@ -819,7 +819,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	wedged, wedgedAttempt := releasedLease(t, s, binding, "wedged")
 	backdateLease(t, s, wedged, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(wedgedAttempt, "leased", "completed_observed"); err != nil {
+		if err := tx.Settle(wedgedAttempt, AttemptLeased, "completed_observed"); err != nil {
 			return err
 		}
 		_, err := tx.PlanResource(wedged, ResourceContainer, "runner", "runpool-wedged")
@@ -867,7 +867,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the pruned lease's attempt disappeared with it: %v", err)
 		}
-		if attempt.State != "settled" {
+		if attempt.State != AttemptSettled {
 			t.Errorf("attempt state = %q; want the disposition preserved", attempt.State)
 		}
 		events, err := tx.Events(prunableAttempt)
@@ -1092,7 +1092,7 @@ func TestAnOperatorRetryIsNotOverruledByTheBudget(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if a.State != "ready" {
+		if a.State != AttemptReady {
 			t.Errorf("after an operator retry the attempt is %q; the budget overruled a human", a.State)
 		}
 		if a.Evidence != EvidenceNotStarted {
@@ -1195,7 +1195,7 @@ func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 		}},
 		{"proven inert from starting", "starting", func(tx *Tx, id string) error {
 			for _, step := range [][2]AttemptState{
-				{"leased", "preparing"}, {"preparing", "prepared"}, {"prepared", "starting"},
+				{AttemptLeased, AttemptPreparing}, {AttemptPreparing, AttemptPrepared}, {AttemptPrepared, AttemptStarting},
 			} {
 				if err := tx.Advance(assignment.AttemptID(id), step[0], step[1]); err != nil {
 					return err
@@ -1364,7 +1364,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 				if err != nil {
 					t.Fatalf("the redelivery was refused: %v", err)
 				}
-				if got.State != "superseded" {
+				if got.State != AttemptSuperseded {
 					t.Errorf("held attempt = %s; want superseded so the queue moves", got.State)
 				}
 				return
@@ -1372,7 +1372,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 			if err == nil {
 				t.Fatal("the redelivery replaced an attempt whose start was authorized")
 			}
-			if got.State != "manual_review" {
+			if got.State != AttemptManualReview {
 				t.Errorf("held attempt = %s; want it left in manual_review", got.State)
 			}
 		})

@@ -76,7 +76,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 			var knownSetID int64
 			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 				var err error
-				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID), "github_actions", assignment.SourceBindingKey(sourceBindingKey)); err != nil {
+				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID), "github_actions", sourceBindingKey); err != nil {
 					return err
 				}
 				// The scale set id recorded against this binding is the

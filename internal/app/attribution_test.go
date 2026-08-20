@@ -239,7 +239,7 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 		after, err = tx.Get(assignment.AttemptID(successor))
 		return err
 	})
-	if after.State != "ready" {
+	if after.State != store.AttemptReady {
 		t.Errorf("the successor is %q/%q; it was never cancelled, and closing it "+
 			"destroys work the provider is still waiting for a runner on",
 			after.State, after.Resolution)

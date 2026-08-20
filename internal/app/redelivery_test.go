@@ -152,7 +152,7 @@ func TestReassignmentSupersedesAReadyPredecessor(t *testing.T) {
 	if len(ready) != 1 || ready[0].ID == old.ID {
 		t.Fatalf("ready = %+v; want exactly the new attempt", ready)
 	}
-	if got := attemptState(t, h, old.ID); got.State != "superseded" || got.Resolution != assignment.ResolutionSuperseded {
+	if got := attemptState(t, h, old.ID); got.State != store.AttemptSuperseded || got.Resolution != assignment.ResolutionSuperseded {
 		t.Errorf("predecessor = %s/%s; want superseded/%s", got.State, got.Resolution, assignment.ResolutionSuperseded)
 	}
 }
@@ -405,7 +405,7 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 		attempt = attempts[0]
 		return nil
 	})
-	if attempt.State != "canceled" || attempt.Resolution != assignment.ResolutionRemoteCanceled {
+	if attempt.State != store.AttemptCanceled || attempt.Resolution != assignment.ResolutionRemoteCanceled {
 		t.Errorf("the attempt is %q/%q; want canceled/remote_canceled - the hint in the "+
 			"wedged redelivery never landed, and the binding will burn a capsule on a "+
 			"job the provider already cancelled", attempt.State, attempt.Resolution)
@@ -537,7 +537,7 @@ func TestACancellationIsDurableBeforeTheMessageIsAcknowledged(t *testing.T) {
 		}
 		return nil
 	})
-	if got.State != "canceled" {
+	if got.State != store.AttemptCanceled {
 		t.Errorf("the cancelled workload is %q; want canceled — the cancellation was lost "+
 			"with the message that carried it", got.State)
 	}

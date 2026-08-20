@@ -38,7 +38,7 @@ func TestLateRedeliveryDoesNotRecreateWork(t *testing.T) {
 	if got := h.ready(); len(got) != 0 {
 		t.Errorf("a completed job was queued again by a late redelivery: %+v", got)
 	}
-	if got := attemptState(t, h, attemptID); got.State != "settled" || got.Resolution != assignment.ResolutionCompletedObserved {
+	if got := attemptState(t, h, attemptID); got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionCompletedObserved {
 		t.Errorf("attempt = %s/%s; want settled/completed_observed", got.State, got.Resolution)
 	}
 }

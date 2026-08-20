@@ -159,67 +159,67 @@ func TestStartFaultMatrix(t *testing.T) {
 			// nothing could have run.
 			name: "jit generation fails",
 			caps: &fakeCapsule{}, reg: &fakeRegistry{jitErr: boom}, wait: &fakeWaiter{},
-			want: "ready",
+			want: store.AttemptReady,
 		},
 		{
 			// Preparation died building the capsule: by construction no
 			// start was possible.
 			name: "prepare fails",
 			caps: &fakeCapsule{prepareErr: boom}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
-			want: "ready",
+			want: store.AttemptReady,
 		},
 		{
 			// Start errored and the daemon shows the container never left
 			// created: the one provable requeue past the authorization.
 			name: "start error, runtime proven inert",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedCreated}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
-			want: "ready",
+			want: store.AttemptReady,
 		},
 		{
 			// Start errored but the container ran and exited: the error
 			// was noise, the execution was real.
 			name: "start error, runtime ran and exited",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedExited}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
-			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+			want: store.AttemptSettled, wantRes: assignment.ResolutionCompletedObserved,
 		},
 		{
 			// Start errored but the container is running: continue as if
 			// the start succeeded, await it, settle on its exit.
 			name: "start error, runtime running",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedRunning}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 0},
-			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+			want: store.AttemptSettled, wantRes: assignment.ResolutionCompletedObserved,
 		},
 		{
 			// Start errored and the container is gone: nothing can be
 			// proven in either direction, so a person decides.
 			name: "start error, runtime absent",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
-			want: "manual_review",
+			want: store.AttemptManualReview,
 		},
 		{
 			// Start errored and the daemon cannot be asked: same ruling.
 			name: "start error, daemon unavailable",
 			caps: &fakeCapsule{startErr: boom, obs: assignment.ObservedUnavailable, obsErr: boom}, reg: &fakeRegistry{}, wait: &fakeWaiter{},
-			want: "manual_review",
+			want: store.AttemptManualReview,
 		},
 		{
 			// The runner started and the daemon was lost mid-run: running
 			// was observed, so the attempt settles as exactly that.
 			name: "wait fails after a clean start",
 			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{waitErr: boom},
-			want: "settled", wantRes: assignment.ResolutionStartedObserved,
+			want: store.AttemptSettled, wantRes: assignment.ResolutionStartedObserved,
 		},
 		{
 			// A non-zero exit is the job's business, not the machine's:
 			// the runner ran and completed.
 			name: "runner exits non-zero",
 			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 7},
-			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+			want: store.AttemptSettled, wantRes: assignment.ResolutionCompletedObserved,
 		},
 		{
 			name: "happy path",
 			caps: &fakeCapsule{}, reg: &fakeRegistry{}, wait: &fakeWaiter{exit: 0},
-			want: "settled", wantRes: assignment.ResolutionCompletedObserved,
+			want: store.AttemptSettled, wantRes: assignment.ResolutionCompletedObserved,
 		},
 	}
 	for _, tc := range cases {
@@ -270,7 +270,7 @@ func TestOperatorResolvesHeldAttempts(t *testing.T) {
 			_, attemptID := runFaulted(t, h,
 				&fakeCapsule{startErr: boom, obs: assignment.ObservedAbsent},
 				&fakeRegistry{}, &fakeWaiter{}, "job-held")
-			if got := attemptState(t, h, assignment.AttemptID(attemptID)); got.State != "manual_review" {
+			if got := attemptState(t, h, assignment.AttemptID(attemptID)); got.State != store.AttemptManualReview {
 				t.Fatalf("attempt = %s; want manual_review", got.State)
 			}
 
@@ -285,14 +285,14 @@ func TestOperatorResolvesHeldAttempts(t *testing.T) {
 			got := attemptState(t, h, assignment.AttemptID(attemptID))
 			switch decision {
 			case "retry":
-				if got.State != "ready" {
+				if got.State != store.AttemptReady {
 					t.Errorf("attempt = %s; want ready", got.State)
 				}
 				if len(h.ready()) != 1 {
 					t.Error("a retried attempt is not servable")
 				}
 			case "settle":
-				if got.State != "settled" || got.Resolution != assignment.ResolutionMayHaveExecuted {
+				if got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionMayHaveExecuted {
 					t.Errorf("attempt = %s/%s; want settled/%s", got.State, got.Resolution, assignment.ResolutionMayHaveExecuted)
 				}
 			}
@@ -399,7 +399,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
 		t.Errorf("lease = %s after the periodic pass; want released", got.State)
 	}
-	if got := attemptState(t, h, attempt); got.State != "ready" {
+	if got := attemptState(t, h, attempt); got.State != store.AttemptReady {
 		t.Errorf("attempt = %s; want ready — nothing was ever authorized", got.State)
 	}
 }
@@ -429,7 +429,7 @@ func TestRemoteCancellationClosesOnlyReadyWork(t *testing.T) {
 	if len(idle) != 0 {
 		t.Errorf("a cancelled ready attempt is still servable: %+v", idle)
 	}
-	if got := attemptState(t, h, busyAttempt); got.State != "leased" {
+	if got := attemptState(t, h, busyAttempt); got.State != store.AttemptLeased {
 		t.Errorf("a serving attempt was touched by a remote cancellation: %s", got.State)
 	}
 }
@@ -468,7 +468,7 @@ func TestPeriodicReconcileConvergesAStrandedCleaningLease(t *testing.T) {
 	if !h.srv.alloc.TryReserve(h.bind.key) {
 		t.Error("the stranded lease's admission credit was never returned")
 	}
-	if got := attemptState(t, h, attempt); got.State == "leased" {
+	if got := attemptState(t, h, attempt); got.State == store.AttemptLeased {
 		t.Error("the attempt was left leased to a lease that no longer exists")
 	}
 }
