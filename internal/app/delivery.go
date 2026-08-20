@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -90,30 +91,35 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 					// past that the binding serves nothing for a reason
 					// nothing else would carry.
 					b.conflictSince = firstOf(b.conflictSince, time.Now())
-					held := time.Since(b.conflictSince)
-					switch {
-					case held > s.conflictDeadline():
-						// Past here the wait has stopped being useful.
-						// The binding serves nothing either way, and a
-						// loop that keeps saying so on a schedule is a
-						// process that looks alive to whatever supervises
-						// it. It stops, and the report carries why.
-						s.log.Error("the broker has held this binding's session beyond the point "+
-							"waiting can help; the binding stops trying",
-							"binding", b.key, "held", held.Round(time.Second),
-							"deadline", s.conflictDeadline())
-						s.recordProviderFailure(ctx, b, err)
-						b.gaveUpOnSession = true
-						return
-					case held > sessionConflictGrace:
+					if held := time.Since(b.conflictSince); held > s.sessionGrace() {
 						s.log.Error("the broker has held this binding's session past the point it expires by inactivity",
 							"binding", b.key, "held", held.Round(time.Second))
-						s.recordProviderFailure(ctx, b, err)
-					default:
+						// A different reason, not the same 409 the wait
+						// has been recording. The report is one string
+						// per binding, so an operator reading it sees
+						// what the log level already said only if the
+						// two states say different things: waiting one
+						// out is ordinary, and a session that outlasts
+						// what a session can outlast is not. It carries
+						// no elapsed time on purpose -- the record is
+						// written when the reason changes, and a reason
+						// that changes every pass would be written every
+						// pass.
+						s.recordProviderFailure(ctx, b, fmt.Errorf(
+							"the broker has held this binding's session past the point one expires "+
+								"by inactivity, so it is not clearing on its own; only work already "+
+								"queued is being served: %w", err))
+					} else {
 						s.log.Info("the broker still holds this binding's previous session; waiting for it to expire",
 							"binding", b.key)
 					}
 				} else {
+					// Not a conflict, so the run of conflicts is over
+					// whatever else is wrong. Left standing, an outage
+					// between two conflicts counts toward the run, and a
+					// binding that has waited out nothing reports a
+					// session that will not clear.
+					b.conflictSince = time.Time{}
 					s.log.Error("cannot open a message session; the binding keeps retrying",
 						"binding", b.key, "error", err)
 					s.recordProviderFailure(ctx, b, err)
@@ -518,6 +524,16 @@ func (s *Controller) scheduleReadyAttempts(ctx context.Context, b *binding) {
 		s.wg.Add(1)
 		go s.launch(b, lease)
 	}
+}
+
+// sessionGrace is how long a run of broker session conflicts stays the
+// ordinary shape of a restart. Held on the controller for the same
+// reason as backoff below.
+func (s *Controller) sessionGrace() time.Duration {
+	if s.conflictGrace != 0 {
+		return s.conflictGrace
+	}
+	return sessionConflictGrace
 }
 
 // backoff is the pause between failed polls. Held on the controller so a

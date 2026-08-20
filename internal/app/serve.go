@@ -117,23 +117,6 @@ const (
 	// session by inactivity well inside this, so past it the binding is
 	// serving nothing for a reason no report would otherwise carry.
 	sessionConflictGrace = 5 * time.Minute
-	// sessionConflictDeadline is how long a binding waits for a session
-	// it cannot open before it stops waiting.
-	//
-	// Three times the point at which the wait stopped being ordinary.
-	// The broker expires a session by inactivity in well under a minute,
-	// so a run of conflicts lasting a quarter of an hour is not a
-	// predecessor's session clearing slowly; it is one that is not going
-	// to clear. Long enough that a broker recovering slowly is not
-	// mistaken for that, short enough that an operator is not an hour
-	// into an outage before anything says so.
-	//
-	// Giving up does not fix it: a restart does not clear the broker's
-	// session either. What it buys is a signal. A process that is up and
-	// serving nothing is invisible to whatever supervises it, and one
-	// that exits is not -- so a controller whose every binding has given
-	// up ends, rather than logging into a void on a schedule.
-	sessionConflictDeadline = 15 * time.Minute
 )
 
 type Options struct {
@@ -190,13 +173,9 @@ type binding struct {
 	// broker expires a session on is not, and only elapsed time tells the
 	// two apart. Owned by the binding's own loop.
 	conflictSince time.Time
-	// gaveUpOnSession records that this binding stopped waiting for a
-	// session it could not open. Written by the binding's own loop as it
-	// returns, read after every loop has, which is what makes it safe.
-	gaveUpOnSession bool
-	bindingID       assignment.BindingID
-	cacheEnabled    bool
-	generation      string
+	bindingID     assignment.BindingID
+	cacheEnabled  bool
+	generation    string
 	// capsuleImage is what this binding launches: its tier's image where
 	// one is configured, and the image this build ships otherwise. It is
 	// resolved once, per binding, so the launch path never re-decides it.
@@ -401,39 +380,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		}(b)
 	}
 	loops.Wait()
-	if err := s.drain(); err != nil {
-		return err
-	}
-	return s.everyBindingGaveUp()
-}
-
-func (s *Controller) conflictDeadline() time.Duration {
-	if s.conflictDeadlineOverride != 0 {
-		return s.conflictDeadlineOverride
-	}
-	return sessionConflictDeadline
-}
-
-// everyBindingGaveUp reports the controller serving nothing, which is
-// the one shape a restart is the right answer to.
-//
-// A binding that stops waiting for a session it cannot open leaves its
-// own work unserved and says so durably, which is enough while another
-// binding is still working: the loops that remain keep this process
-// alive and the report names the one that does not. When none remain,
-// the process is up and serving nothing, and nothing supervising it can
-// tell -- so it ends instead.
-func (s *Controller) everyBindingGaveUp() error {
-	if len(s.bindings) == 0 {
-		return nil
-	}
-	for _, b := range s.bindings {
-		if !b.gaveUpOnSession {
-			return nil
-		}
-	}
-	return fmt.Errorf("no binding could open a message session within %s; "+
-		"the broker still holds a session for each of them", sessionConflictDeadline)
+	return s.drain()
 }
 
 func newAllocator(cfg *config.Config) *allocator.Allocator {
@@ -528,11 +475,12 @@ type Controller struct {
 	// reopen path; zero means the package default. Held for the same
 	// reason as pollBackoff: ten seconds is not something a test waits.
 	conflictBackoff time.Duration
-	// conflictDeadlineOverride overrides sessionConflictDeadline; zero
-	// means the package default. A quarter of an hour is not something a
-	// test waits either, and the behaviour past it is a return.
-	conflictDeadlineOverride time.Duration
-	store                    *store.Store
+	// conflictGrace overrides sessionConflictGrace; zero means the
+	// package default. Held for the same reason as the two above: five
+	// minutes is not something a test waits, and what happens past it is
+	// the whole of this behaviour.
+	conflictGrace time.Duration
+	store         *store.Store
 	// objects is the daemon as reconciliation sees it: an inventory and
 	// a way to remove from it. Creating capsules goes through caps, and
 	// awaiting them through wait.

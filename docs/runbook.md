@@ -191,19 +191,21 @@ Conflict` on every attempt to open one. This is ordinary on a restart:
 the binding logs that it is waiting, and the wait costs nothing, because
 adopted capsules are recovered before session creation is reached.
 
-Past five minutes the wait stops being ordinary and the binding reports
-a provider failure, which `runpool status` shows against it. Past fifteen
-it stops waiting: that binding serves nothing until the controller is
-restarted, and the reason stays in the report. Other bindings are
-unaffected and keep serving.
+Past five minutes it stops being ordinary. The log moves to error level
+and the reason recorded against the binding changes to say the session is
+not clearing on its own — which is what `runpool status` shows, so
+waiting and stuck are distinguishable there rather than only in the log.
 
-If **every** binding reaches that point the controller exits non-zero,
-so whatever supervises it can act. Restarting does not clear the
-broker's session — nothing on this side can — but a process that is up
-and serving nothing is invisible, and one that has exited is not. If a
-restart loops, the session is genuinely stuck on the provider's side:
-check whether another controller is running against the same scale set,
-and otherwise wait the broker out rather than restarting into it.
+The binding keeps waiting, and keeps serving what it already holds: work
+already delivered and queued is launched without the broker. What it
+cannot do is take new work, because that arrives over the session.
+
+Nothing times this out, and nothing restarts on it. Restarting does not
+clear the broker's session — only inactivity on the provider's side
+does — so a controller reporting this needs a decision rather than a
+kick. Check whether another controller is running against the same scale
+set; if none is, the session expires on the provider's schedule and the
+binding recovers on its next attempt.
 
 ## Manual review
 

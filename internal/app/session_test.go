@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+
+	"github.com/rhobuild/runpool/internal/store"
 )
 
 // stubSession is a message session a test can break on purpose. The
@@ -410,62 +413,103 @@ func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 	<-done
 }
 
-// TestABindingStopsWaitingForASessionThatWillNotClear: waiting past the
-// point it can help is a process that looks alive to whatever supervises
-// it while serving nothing.
+// TestASessionThatWillNotClearReportsSomethingElse: the report is one
+// string per binding, so waiting a conflict out and being stuck behind
+// one have to say different things in it.
 //
-// A conflict is the ordinary shape of a restart, and the loop is right
-// to wait one out. What it must not do is wait forever: the broker
-// expires a session by inactivity in well under a minute, so a run of
-// conflicts lasting past the deadline is not a predecessor's session
-// clearing slowly. The binding stops, records why, and says so where the
-// serve loop can act on it.
-func TestABindingStopsWaitingForASessionThatWillNotClear(t *testing.T) {
+// A conflict is the ordinary shape of a restart, and the binding says so
+// while it waits. Past the point a session expires by inactivity it is
+// not ordinary any more — but the log level is the only place that ever
+// changed, and an operator reading `runpool status` saw the same 409
+// either way. The binding is still serving what was already queued,
+// which is the part the report has to be able to say.
+func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
 	h := newHarness(t, 1)
 	h.srv.pollBackoff = time.Hour
 	h.srv.conflictBackoff = time.Millisecond
-	h.srv.conflictDeadlineOverride = 50 * time.Millisecond
+	h.srv.conflictGrace = 30 * time.Millisecond
 
-	var attempts int
 	h.bind.newSession = func(context.Context) (providerSession, error) {
-		attempts++
 		return nil, errors.New(`the session "abc" already exists, status="409 Conflict"`)
 	}
 
+	read := func() string {
+		t.Helper()
+		var reason string
+		if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
+			bindings, err := tx.Bindings()
+			for _, b := range bindings {
+				if b.ID == h.bind.bindingID {
+					reason = b.Contact.LastError
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return reason
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(t.Context(), h.bind)
+		h.srv.loop(ctx, h.bind)
 	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the binding never stopped waiting for a session it could not open; " +
-			"the process stays up serving nothing and nothing supervising it can tell")
-	}
 
-	if attempts < 2 {
-		t.Errorf("the loop tried %d time(s) before giving up; a conflict is the ordinary "+
-			"shape of a restart and has to be waited out first", attempts)
+	var stuck string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if r := read(); strings.Contains(r, "not clearing on its own") {
+			stuck = r
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	if !h.bind.gaveUpOnSession {
-		t.Error("the binding returned without recording that it stopped waiting, so a " +
-			"controller left with nothing to serve cannot tell it is in that state")
+	cancel()
+	<-done
+
+	if stuck == "" {
+		t.Fatalf("the report never distinguished a session that will not clear from one being "+
+			"waited out; it says %q either way", read())
+	}
+	if !strings.Contains(stuck, "already queued") {
+		t.Errorf("the reason is %q; it has to say the binding is still serving what it has, "+
+			"because an operator reading it decides whether to act", stuck)
 	}
 }
 
-// TestAControllerThatCanServeNothingEnds: one binding that gave up is a
-// report, and every binding that gave up is a process that should not be
-// running.
-func TestAControllerThatCanServeNothingEnds(t *testing.T) {
+// TestAnUnrelatedOutageDoesNotAgeTheConflict: the run of conflicts is a
+// run of conflicts.
+//
+// Whether a session is clearing is judged from how long this binding has
+// been conflicting. A failure that is not a conflict says nothing about
+// that, and counting the time it lasted would have a binding report a
+// session that will not clear before it has waited out a single one.
+func TestAnUnrelatedOutageDoesNotAgeTheConflict(t *testing.T) {
 	h := newHarness(t, 1)
+	h.srv.pollBackoff = time.Millisecond
+	h.srv.conflictBackoff = time.Millisecond
+	h.srv.conflictGrace = time.Hour
 
-	if err := h.srv.everyBindingGaveUp(); err != nil {
-		t.Errorf("a controller whose binding is working reported %v", err)
+	// One conflict starts the run; an unrelated failure has to end it.
+	h.bind.conflictSince = time.Now().Add(-2 * time.Hour)
+	h.bind.newSession = func(context.Context) (providerSession, error) {
+		return nil, errors.New("the broker is unreachable")
 	}
-	h.bind.gaveUpOnSession = true
-	if err := h.srv.everyBindingGaveUp(); err == nil {
-		t.Error("every binding gave up and the controller reported nothing; it stays up " +
-			"serving nothing, which is the one shape a restart answers")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(ctx, h.bind)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if !h.bind.conflictSince.IsZero() {
+		t.Error("a failure that was not a conflict left the run of conflicts standing, so the " +
+			"next conflict is judged against time this binding spent not conflicting")
 	}
 }

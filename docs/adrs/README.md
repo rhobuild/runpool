@@ -8,7 +8,7 @@ justified it usually still holds even when the remedy does not.
 | Date | Decision | Status |
 | --- | --- | --- |
 | 2026-08-11 | [SQLite driver](2026-08-11-sqlite-driver.md) — modernc, pinned and tested on a Linux named volume | accepted |
-| 2026-08-11 | [Session conflict](2026-08-11-session-conflict.md) — one session per scale set, and what a conflict means | accepted |
+| 2026-08-11 | [Session conflict](2026-08-11-session-conflict.md) — one session per scale set, and what a conflict means | accepted; its retry deadline superseded |
 | 2026-08-11 | [Shared network namespace](2026-08-11-shared-network-namespace.md) — the runner joins dind rather than attaching itself | accepted |
 | 2026-08-11 | [Advertised capacity](2026-08-11-advertised-capacity.md) — capacity is a total, not a delta | accepted |
 | 2026-08-11 | [Capacity floor](2026-08-11-capacity-floor.md) — every binding floored at one | superseded by admission credits |
@@ -23,3 +23,4 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-17 | [Job timeout](2026-08-17-job-timeout.md) — the lease ceiling is a backstop above the provider's own maximum | accepted |
 | 2026-08-17 | [Multiplatform locks](2026-08-17-multiplatform-locks.md) — a lock records the platforms qualified, not the only one that works | accepted; implementation pending |
 | 2026-08-17 | [Target hosts and scopes](2026-08-17-target-hosts-and-scopes.md) — any host the protocol serves, at any scope it defines | accepted |
+| 2026-08-20 | [The session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md) — why giving up costs more than waiting, and what the report says instead | accepted |
