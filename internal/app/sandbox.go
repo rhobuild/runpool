@@ -50,17 +50,29 @@ type sandboxDaemon interface {
 
 // sandboxState owns the current restricted-network snapshot. Capsule
 // launches receive deep copies, so a rediscovery cannot mutate policy while
-// a concurrent launch is serializing it. refreshMu also serializes the
+// a concurrent launch is serializing it. refreshing also serializes the
 // external discovery/reload operation: policy changes must be applied in the
 // same order in which they are observed.
+//
+// It is a channel rather than a mutex because waiting for it has to be
+// abandonable. What that costs is ownership: the token is bare, so a
+// drain anywhere other than the send's own defer releases it whoever
+// holds it, and two refreshes then run at once with nothing to say so.
+// refresh is the only place that takes it. A launch holds it for as long as a discovery and a
+// gateway fan-out take, on a context that deliberately outlives the
+// serve loop so cleanup can still run; a mutex would park the shutdown
+// pass on that launch with no way to give up, and the wait for the serve
+// loops is unbounded by design. Past the grace period that is a SIGKILL,
+// which leaves every message session open for the next start to wait out
+// as a conflict.
 type sandboxState struct {
-	mu        sync.RWMutex
-	refreshMu sync.Mutex
-	current   *capsule.Sandbox
+	mu         sync.RWMutex
+	refreshing chan struct{}
+	current    *capsule.Sandbox
 }
 
 func newSandboxState(initial *capsule.Sandbox) *sandboxState {
-	return &sandboxState{current: cloneSandbox(initial)}
+	return &sandboxState{current: cloneSandbox(initial), refreshing: make(chan struct{}, 1)}
 }
 
 func (s *sandboxState) snapshot() *capsule.Sandbox {
@@ -186,14 +198,15 @@ const rediscoverInterval = 5 * time.Minute
 //
 // They differ because their callers do. The first build runs from
 // newNetworkSandbox, before the state exists and before any binding does:
-// nothing holds the refresh lock, nothing waits on it, and the probe
+// nothing holds the refresh slot, nothing waits for it, and the probe
 // image may still have to be pulled — it is the capsule image, which is
 // hundreds of megabytes. Failing that for being slow is a controller
 // that will not start on a cold host with an ordinary link.
 //
-// Every later build runs from refresh, under the lock that every launch
-// takes with a plain mutex — no context, no way out — so an unbounded
-// step there is a host on which nothing new can start. By then the image
+// Every later build runs from refresh, holding the slot every launch
+// waits for — and a launch waits without a bound on purpose, since one
+// that skipped the policy would run unconfined — so an unbounded step
+// there is a host on which nothing new can start. By then the image
 // is present, so what remains is creating a network, inspecting it,
 // running a small container to completion and listing subnets. The bound
 // stays under rediscoverInterval so a build that hangs cannot leave two
@@ -328,8 +341,16 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 }
 
 func (n *networkSandbox) refresh(ctx context.Context) error {
-	n.state.refreshMu.Lock()
-	defer n.state.refreshMu.Unlock()
+	select {
+	case n.state.refreshing <- struct{}{}:
+	case <-ctx.Done():
+		// Whoever holds it is a launch, running on a context of its own,
+		// and it will finish in its own time. This caller's context is
+		// what says the wait is over.
+		return ctx.Err()
+	}
+	defer func() { <-n.state.refreshing }()
+
 	next, err := n.build(ctx, sandboxRefreshBudget)
 	if err != nil {
 		return err
@@ -341,6 +362,16 @@ func (n *networkSandbox) refresh(ctx context.Context) error {
 func (n *networkSandbox) rediscover(ctx context.Context) {
 	err := n.refresh(ctx)
 	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		// The pass is being stopped, not failing. Closing every gateway
+		// needs the same context to reach the daemon, so the attempt
+		// below could not do anything even if it were right to try -- and
+		// what it would leave behind is an error line announcing that all
+		// egress was cut, on an ordinary shutdown, for a thing that
+		// provably did not happen.
+		n.log.Info("sandbox rediscovery stopped", "reason", ctx.Err())
 		return
 	}
 
@@ -382,7 +413,7 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 	}
 	// Recorded only now: the set has reached every gateway that could be
 	// named, so this is what is in force rather than what was intended.
-	// The refresh lock is held across both, so no launch can observe the
+	// The refresh slot is held across both, so no launch can observe the
 	// window between them.
 	n.state.replace(next)
 	if len(failed) == 0 {
@@ -410,14 +441,15 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 
 // gatewayFanout is how many gateway control commands run at once.
 //
-// A refresh pass holds the refresh lock, and every launch waits on that
-// lock with a plain mutex that takes no context and cannot be given up.
-// So the pass's duration is a launch's worst-case wait — and walking the
+// A refresh pass holds the refresh slot and every launch waits for it, so
+// the pass's duration is a launch's worst-case wait — and walking the
 // gateways one at a time made that duration the number of gateways times
 // the exec bound. There is one gateway per running capsule, so it grew
 // with exactly the parallelism the host was configured for: at
 // thirty-two in flight, sixteen minutes with every launch stopped, for
-// one policy change.
+// one policy change. A launch waiting on its own context can give that
+// wait up; a launch that still needs the policy cannot, which is why the
+// duration is bounded here rather than only survivable.
 //
 // Bounded rather than unbounded. These are execs into containers on a
 // single daemon, and a pass that opens one per capsule trades a slow
@@ -486,20 +518,21 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 
 // gatewayControlTimeout bounds one gateway control operation — an exec
 // into it, or its removal — so a refresh pass costs a known number of
-// these rather than an unknown amount. The pass holds the refresh lock
-// and every launch waits on that lock with a plain mutex, which takes no
-// context of its own, so anything unbounded under it is unbounded for
-// every launch on the host.
+// these rather than an unknown amount. The pass holds the refresh slot,
+// a launch waits for it without a bound of its own, and the context this
+// runs on carries no deadline: anything unbounded under it is unbounded
+// for every launch on the host.
 const gatewayControlTimeout = 30 * time.Second
 
 // ownedContainers asks the daemon what this instance owns, under a bound.
 //
-// Both callers run inside the refresh lock, and enumerating is the first
-// thing each does — so a daemon that accepts the request and answers
-// nothing would hold that lock before any gateway had been reached, with
-// every launch on the host waiting on it and none able to time out. It
-// is the same reason the exec and the removal below are bounded, and
-// leaving it out left the pass unbounded at its very first step.
+// Both callers run holding the refresh slot, and enumerating is the
+// first thing each does — so a daemon that accepts the request and
+// answers nothing would hold that slot before any gateway had been
+// reached, with every launch on the host waiting for it and no deadline
+// on the context to end the wait. It is the same reason the exec and the
+// removal below are bounded, and leaving it out left the pass unbounded
+// at its very first step.
 func (n *networkSandbox) ownedContainers(ctx context.Context) ([]docker.OwnedContainer, error) {
 	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
 	defer cancel()
@@ -534,12 +567,11 @@ func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) e
 			"container", containerID, "exit", code, "error", err, "output", out)
 	}
 	// Bounded like the exec above it, and for the same reason. This runs
-	// under the refresh lock, and every launch waits on that lock with a
-	// plain mutex that takes no context: a daemon that accepts the
-	// removal and then answers nothing would hold it for the life of the
-	// process, and no launch could time out of it. That is the failure
-	// the fan-out above exists to bound, and leaving it here left it in
-	// the same function.
+	// holding the refresh slot, which every launch waits for: a daemon
+	// that accepts the removal and then answers nothing would hold it for
+	// the life of the process, on a context with no deadline to end the
+	// wait. That is the failure the fan-out above exists to bound, and
+	// leaving it here left it in the same function.
 	//
 	// A removal that cannot be confirmed is reported. The gateway is
 	// still there, so the next pass finds it and closes it again.

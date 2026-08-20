@@ -245,17 +245,29 @@ type fakeObjects struct {
 	// listErr fails the container inventory, which is the failure a sweep
 	// must treat as fatal rather than as an empty daemon.
 	listErr error
+	// onList fires as the daemon answers, once per kind, which is where
+	// a lease that commits mid-sweep falls.
+	onList func()
 
 	removed []string
 }
 
 func (f *fakeObjects) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
+	if f.onList != nil {
+		f.onList()
+	}
 	return f.containers, f.listErr
 }
 func (f *fakeObjects) ListOwnedNetworks(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
+	if f.onList != nil {
+		f.onList()
+	}
 	return f.networks, nil
 }
 func (f *fakeObjects) ListOwnedVolumes(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
+	if f.onList != nil {
+		f.onList()
+	}
 	return f.volumes, nil
 }
 func (f *fakeObjects) RemoveContainer(_ context.Context, id string) error { return f.remove(id) }
