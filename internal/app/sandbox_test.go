@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
@@ -97,11 +100,72 @@ type fakeSandboxDaemon struct {
 	listErr error
 	// refuse names the containers whose exec fails, which is how a
 	// gateway that will not take a new policy is expressed.
-	refuse   map[string]bool
+	refuse map[string]bool
+	// delay is how long each gateway control command takes, which is
+	// what makes a serial pass distinguishable from a concurrent one.
+	delay time.Duration
+
+	// The pass fans out over gateways now, so what it records is written
+	// from several goroutines and in no fixed order. The mutex is the
+	// fake's own; the accessors below sort, so a test asserts what was
+	// touched rather than the order the daemon answered in.
+	mu       sync.Mutex
+	inFlight int
+	peak     int
 	reloaded []string
-	denied   []string
 	removed  []string
 }
+
+// serve models one gateway control command occupying the daemon for as
+// long as it takes, which is what the concurrency counters below see.
+func (f *fakeSandboxDaemon) serve() {
+	f.enter()
+	defer f.leave()
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
+}
+
+func (f *fakeSandboxDaemon) note(into *[]string, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*into = append(*into, id)
+}
+
+// enter and leave track how many control commands the daemon is serving
+// at once. That is what a refresh's cost turns on, and unlike wall-clock
+// time it does not change with how loaded the machine is.
+func (f *fakeSandboxDaemon) enter() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inFlight++
+	if f.inFlight > f.peak {
+		f.peak = f.inFlight
+	}
+}
+
+func (f *fakeSandboxDaemon) leave() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inFlight--
+}
+
+func (f *fakeSandboxDaemon) peakInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peak
+}
+
+func (f *fakeSandboxDaemon) sorted(from *[]string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Clone(*from)
+	slices.Sort(out)
+	return out
+}
+
+func (f *fakeSandboxDaemon) reloads() []string { return f.sorted(&f.reloaded) }
+func (f *fakeSandboxDaemon) removes() []string { return f.sorted(&f.removed) }
 
 func (f *fakeSandboxDaemon) EnsureOwnedNetwork(context.Context, docker.NetworkSpec) (string, error) {
 	return f.uplinkID, nil
@@ -122,21 +186,23 @@ func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, assignment.Inst
 	return f.containers, nil
 }
 func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, _ []string) (int, string, error) {
-	f.denied = append(f.denied, id)
+	f.serve()
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
 	return 0, "", nil
 }
 func (f *fakeSandboxDaemon) ExecWithInput(_ context.Context, id string, _ []string, _ []byte) (int, string, error) {
+	f.serve()
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
-	f.reloaded = append(f.reloaded, id)
+	f.note(&f.reloaded, id)
 	return 0, "", nil
 }
 func (f *fakeSandboxDaemon) RemoveContainer(_ context.Context, id string) error {
-	f.removed = append(f.removed, id)
+	f.serve()
+	f.note(&f.removed, id)
 	return nil
 }
 
@@ -242,11 +308,11 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 		n.applyPolicy(t.Context(), &capsule.Sandbox{
 			UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8", "192.168.0.0/16"},
 		})
-		if !slices.Equal(d.reloaded, []string{"gw-ok"}) {
-			t.Errorf("reloaded %v; only running gateways take a policy", d.reloaded)
+		if !slices.Equal(d.reloads(), []string{"gw-ok"}) {
+			t.Errorf("reloaded %v; only running gateways take a policy", d.reloads())
 		}
-		if !slices.Equal(d.removed, []string{"gw-bad"}) {
-			t.Errorf("removed %v; the gateway that refused a restriction must be closed", d.removed)
+		if !slices.Equal(d.removes(), []string{"gw-bad"}) {
+			t.Errorf("removed %v; the gateway that refused a restriction must be closed", d.removes())
 		}
 	})
 
@@ -254,8 +320,8 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 		d := &fakeSandboxDaemon{containers: gateways, refuse: map[string]bool{"gw-bad": true}}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-1"})
-		if len(d.removed) != 0 {
-			t.Errorf("removed %v; a gateway keeping a stricter policy is not a danger", d.removed)
+		if len(d.removes()) != 0 {
+			t.Errorf("removed %v; a gateway keeping a stricter policy is not a danger", d.removes())
 		}
 	})
 
@@ -263,8 +329,8 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 		d := &fakeSandboxDaemon{containers: gateways}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8"}})
-		if len(d.reloaded)+len(d.removed) != 0 {
-			t.Errorf("an unchanged policy touched %v / %v", d.reloaded, d.removed)
+		if len(d.reloads())+len(d.removes()) != 0 {
+			t.Errorf("an unchanged policy touched %v / %v", d.reloads(), d.removes())
 		}
 	})
 
@@ -272,8 +338,8 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 		d := &fakeSandboxDaemon{containers: gateways}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-2", Deny: []string{"10.0.0.0/8"}})
-		if !slices.Equal(d.reloaded, []string{"gw-ok", "gw-bad"}) {
-			t.Errorf("reloaded %v; a new uplink has to reach every gateway", d.reloaded)
+		if !slices.Equal(d.reloads(), []string{"gw-bad", "gw-ok"}) {
+			t.Errorf("reloaded %v; a new uplink has to reach every gateway", d.reloads())
 		}
 	})
 }
@@ -294,8 +360,8 @@ func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	if err := n.closeGateways(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(d.removed, []string{"gw-1", "gw-2"}) {
-		t.Errorf("removed %v; a gateway that refuses deny-all still has to stop relaying", d.removed)
+	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
+		t.Errorf("removed %v; a gateway that refuses deny-all still has to stop relaying", d.removes())
 	}
 }
 
@@ -388,5 +454,60 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 	}
 	if len(daemon.reloaded) != 1 || daemon.reloaded[0] != "gw-1" {
 		t.Errorf("gateways reloaded on the retry = %v; want the restriction to reach gw-1", daemon.reloaded)
+	}
+}
+
+// TestARefreshCostsOneTimeoutNotN: installing a policy reaches every
+// gateway in about what one gateway costs, not that times their number.
+//
+// The pass holds the refresh lock, and every launch waits on that lock
+// with a plain mutex — no context, nothing to give up, no way to time
+// out. So the pass's duration is a launch's worst-case wait. There is
+// one gateway per running capsule, so walking them one at a time made
+// that wait grow with exactly the parallelism the host was configured
+// for: at thirty-two capsules and a thirty-second exec bound, sixteen
+// minutes during which nothing new could start, for one policy change.
+func TestARefreshCostsOneTimeoutNotN(t *testing.T) {
+	const (
+		count   = 24
+		perCall = 40 * time.Millisecond
+	)
+	containers := make([]docker.OwnedContainer, 0, count)
+	for i := range count {
+		id := fmt.Sprintf("gw-%02d", i)
+		containers = append(containers, docker.OwnedContainer{
+			ID: id, Name: id, Role: capsule.RoleGateway, Running: true,
+		})
+	}
+	d := &fakeSandboxDaemon{containers: containers, delay: perCall}
+	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
+
+	failed, err := n.reloadGateways(t.Context(), nil, []string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("gateways refused the policy: %v", failed)
+	}
+	// Every one of them, so a pass that is cheap because it skipped work
+	// cannot pass for a pass that is cheap because it fanned out.
+	if got := len(d.reloads()); got != count {
+		t.Fatalf("reloaded %d of %d gateways", got, count)
+	}
+
+	// What is asserted is how many commands the daemon served at once,
+	// not how long the pass took. Wall-clock is a machine-speed test: it
+	// passes on an idle laptop and fails under coverage instrumentation,
+	// and neither says anything about the code. Overlap is the mechanism
+	// that makes the cost one exec bound rather than as many as there
+	// are capsules.
+	peak := d.peakInFlight()
+	if peak < 2 {
+		t.Errorf("peak %d gateway command(s) in flight for %d gateways; the pass is serial, "+
+			"and every launch waits out all of it", peak, count)
+	}
+	if peak > gatewayFanout {
+		t.Errorf("peak %d in flight against a bound of %d; a pass that opens one exec per "+
+			"capsule trades a slow refresh for a slow daemon", peak, gatewayFanout)
 	}
 }

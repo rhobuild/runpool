@@ -199,7 +199,9 @@ func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
 
 	n.rediscover(t.Context())
 
-	if !slices.Equal(d.removed, []string{"gw-1", "gw-2"}) {
-		t.Errorf("removed %v; a failed rediscovery has to close every gateway", d.removed)
+	// Sorted: closing fans out, so the order is the order the daemon
+	// answered in and nothing should depend on it.
+	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
+		t.Errorf("removed %v; a failed rediscovery has to close every gateway", d.removes())
 	}
 }

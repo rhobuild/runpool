@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -365,13 +366,48 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 	// something the policy now denies. Close those gateways.
 	n.log.Error("a restriction could not be installed; closing the affected gateways",
 		"gateways", len(failed))
-	for _, id := range failed {
+	eachGateway(failed, func(id string) {
 		if err := n.closeGateway(ctx, id); err != nil {
 			n.log.Error("a gateway could not be closed and may still relay a denied address",
 				"container", id, "error", err)
 		}
-	}
+	})
 	return nil
+}
+
+// gatewayFanout is how many gateway control commands run at once.
+//
+// A refresh pass holds the refresh lock, and every launch waits on that
+// lock with a plain mutex that takes no context and cannot be given up.
+// So the pass's duration is a launch's worst-case wait — and walking the
+// gateways one at a time made that duration the number of gateways times
+// the exec bound. There is one gateway per running capsule, so it grew
+// with exactly the parallelism the host was configured for: at
+// thirty-two in flight, sixteen minutes with every launch stopped, for
+// one policy change.
+//
+// Bounded rather than unbounded. These are execs into containers on a
+// single daemon, and a pass that opens one per capsule trades a slow
+// refresh for a slow daemon, which every other caller then waits on too.
+const gatewayFanout = 8
+
+// eachGateway runs fn over every item concurrently, at most
+// gatewayFanout at a time, and returns once all of them have finished.
+// fn is called from several goroutines, so what it touches must be safe
+// for that.
+func eachGateway[T any](items []T, fn func(T)) {
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, gatewayFanout)
+	for _, item := range items {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			fn(item)
+		}()
+	}
+	wg.Wait()
 }
 
 // reloadGateways hands the new sets to every running gateway this
@@ -388,21 +424,27 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range containers {
+	var mu sync.Mutex
+	eachGateway(containers, func(c docker.OwnedContainer) {
 		if c.Role != capsule.RoleGateway || !c.Running {
-			continue
+			return
 		}
 		code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
 			return n.daemon.ExecWithInput(ctx, c.ID,
 				[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
 		})
 		if err != nil || code != 0 {
+			mu.Lock()
 			failed = append(failed, c.ID)
+			mu.Unlock()
 			n.log.Error("gateway policy reload failed", "container", c.Name, "exit", code, "error", err, "output", out)
-			continue
+			return
 		}
 		n.log.Info("gateway policy reloaded", "container", c.Name)
-	}
+	})
+	// Concurrent appends make the order the daemon answered in, which
+	// nothing should depend on. Sorted so a caller cannot start.
+	slices.Sort(failed)
 	return failed, nil
 }
 
@@ -448,16 +490,21 @@ func (n *networkSandbox) closeGateways(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var failures int
-	for _, c := range containers {
+	var (
+		mu       sync.Mutex
+		failures int
+	)
+	eachGateway(containers, func(c docker.OwnedContainer) {
 		if c.Role != capsule.RoleGateway || !c.Running {
-			continue
+			return
 		}
 		if err := n.closeGateway(ctx, c.ID); err != nil {
+			mu.Lock()
 			failures++
+			mu.Unlock()
 			n.log.Error("a gateway could not be closed", "container", c.Name, "error", err)
 		}
-	}
+	})
 	if failures > 0 {
 		return fmt.Errorf("%d gateway(s) could not be closed", failures)
 	}
