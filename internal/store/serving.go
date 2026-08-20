@@ -13,6 +13,21 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
+// AllAttemptStates lists every state an attempt can hold, terminal ones
+// included, in the order the walk reaches them.
+//
+// It exists for the reason AllLeaseStates does. Anything that has to
+// decide something for every state — a disposition, a report, a table
+// test — needs the list to come from one place, or a state added later
+// is quietly left undecided by whichever copy nobody updated.
+// TestAttemptStatesCoverTheSchema holds it against the constraint the
+// database enforces, so the list cannot drift from what a row may
+// actually contain.
+var AllAttemptStates = []string{
+	"ready", "leased", "preparing", "prepared", "starting", "running",
+	"manual_review", "superseded", "settled", "canceled",
+}
+
 // Attempt is the store's domain-facing view of one attempt row. It is a
 // translation, not the generated row: consumers never see table types,
 // so a schema change stops at this boundary.

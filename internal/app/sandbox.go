@@ -450,17 +450,19 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 	return failed, nil
 }
 
-// gatewayExecTimeout bounds one gateway control exec, so a refresh pass
-// costs at most one of these per gateway rather than an unknown amount.
-// The pass holds the refresh lock and every launch waits on that lock
-// with a plain mutex, which takes no context of its own.
-const gatewayExecTimeout = 30 * time.Second
+// gatewayControlTimeout bounds one gateway control operation — an exec
+// into it, or its removal — so a refresh pass costs a known number of
+// these rather than an unknown amount. The pass holds the refresh lock
+// and every launch waits on that lock with a plain mutex, which takes no
+// context of its own, so anything unbounded under it is unbounded for
+// every launch on the host.
+const gatewayControlTimeout = 30 * time.Second
 
 // execGateway runs one gateway control command under its own bound.
 func (n *networkSandbox) execGateway(ctx context.Context,
 	call func(context.Context) (int, string, error)) (int, string, error) {
 
-	ctx, cancel := context.WithTimeout(ctx, gatewayExecTimeout)
+	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
 	defer cancel()
 	return call(ctx)
 }
@@ -483,6 +485,18 @@ func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) e
 		n.log.Error("gateway deny-all failed; removing the gateway",
 			"container", containerID, "exit", code, "error", err, "output", out)
 	}
+	// Bounded like the exec above it, and for the same reason. This runs
+	// under the refresh lock, and every launch waits on that lock with a
+	// plain mutex that takes no context: a daemon that accepts the
+	// removal and then answers nothing would hold it for the life of the
+	// process, and no launch could time out of it. That is the failure
+	// the fan-out above exists to bound, and leaving it here left it in
+	// the same function.
+	//
+	// A removal that cannot be confirmed is reported. The gateway is
+	// still there, so the next pass finds it and closes it again.
+	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
+	defer cancel()
 	return n.daemon.RemoveContainer(ctx, containerID)
 }
 

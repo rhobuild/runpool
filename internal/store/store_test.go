@@ -1524,27 +1524,15 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 		{"manual_review", false, "held for a person who has not decided yet"},
 	}
 
-	// The universe comes from the schema, not from beside the table.
-	schema, err := migrationsFS.ReadFile("migrations/000001_initial.up.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The universe comes from the one list, which its own test holds
+	// against the schema.
 	decided := make(map[string]bool, len(cases))
 	for _, c := range cases {
 		decided[c.state] = true
 	}
-	body := string(schema)
-	start := strings.Index(body, "CHECK (state IN ('ready'")
-	if start < 0 {
-		t.Fatal("the attempt state CHECK constraint moved; this test can no longer prove it is total")
-	}
-	constraint := body[start : start+strings.Index(body[start:], "))")]
-	for _, state := range strings.Split(constraint, "'") {
-		if len(state) == 0 || strings.ContainsAny(state, "(), \n\t") || state == "CHECK " {
-			continue
-		}
+	for _, state := range AllAttemptStates {
 		if !decided[state] {
-			t.Errorf("the schema allows attempt state %q and this test decides nothing about it", state)
+			t.Errorf("an attempt can be %q and this test decides nothing about starting it", state)
 		}
 	}
 
@@ -1759,5 +1747,44 @@ func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
 
 	if generated != set {
 		t.Errorf("the two projections disagree:\n generated: %+v\n set read:  %+v", generated, set)
+	}
+}
+
+// TestAttemptStatesCoverTheSchema: the list every caller decides from is
+// the set the database actually allows.
+//
+// A list beside a constraint is a list that drifts from it, and the
+// drift is silent in the direction that matters: a state the schema
+// gains and the list does not is a state every table test skips while
+// reporting itself total.
+func TestAttemptStatesCoverTheSchema(t *testing.T) {
+	schema, err := migrationsFS.ReadFile("migrations/000001_initial.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(schema)
+	start := strings.Index(body, "CHECK (state IN ('ready'")
+	if start < 0 {
+		t.Fatal("the attempt state CHECK constraint moved; this test can no longer find it")
+	}
+	constraint := body[start : start+strings.Index(body[start:], "))")]
+
+	listed := make(map[string]bool, len(AllAttemptStates))
+	for _, s := range AllAttemptStates {
+		listed[s] = true
+	}
+	found := 0
+	for _, state := range strings.Split(constraint, "'") {
+		if len(state) == 0 || strings.ContainsAny(state, "(), \n\t") || state == "CHECK " {
+			continue
+		}
+		found++
+		if !listed[state] {
+			t.Errorf("the schema allows attempt state %q and AllAttemptStates omits it", state)
+		}
+	}
+	if found != len(AllAttemptStates) {
+		t.Errorf("the constraint names %d states and AllAttemptStates has %d; "+
+			"one of them lists something the other does not", found, len(AllAttemptStates))
 	}
 }
