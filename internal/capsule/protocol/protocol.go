@@ -43,8 +43,11 @@ const (
 	// not started: the state in which a credential is delivered and a
 	// start is authorized.
 	StateWaiting = "waiting"
-	// StateRunning is written immediately before the runner is executed,
-	// so its presence is the proof that the job was handed over.
+	// StateRunning is written once fork/exec has returned, so its
+	// presence is the proof that the job was handed over — not that the
+	// supervisor was about to try. Writing it before the exec would make
+	// a fork that failed indistinguishable from a runner that took the
+	// job and died, and the two settle an attempt differently.
 	StateRunning = "running"
 	// StateReady is the gateway's: ruleset installed and relay listening.
 	StateReady = "ready"

@@ -291,4 +291,13 @@ func TestEveryControlFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
 				"a reader landing in that window gets an empty file from a call that succeeded", name)
 		}
 	}
+	// And no write-then-chown left anywhere: naming the four control
+	// files could not see the two that materialize the credential and
+	// the proxy config, whose targets are locals. The pairing is the
+	// shape — a file that exists before its owner does, and before its
+	// contents do.
+	if n := strings.Count(string(src), "os.WriteFile("); n != 1 {
+		t.Errorf("%d os.WriteFile calls; want 1, the in-place fallback replaceState takes when "+
+			"the atomic replacement cannot be made. Every other write goes through atomicfile", n)
+	}
 }
