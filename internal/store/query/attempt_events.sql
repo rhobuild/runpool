@@ -22,10 +22,19 @@ ON CONFLICT (attempt_id, idempotency_key) DO NOTHING;
 -- is lost is precisely the history -- who decided what, and why, the
 -- time before.
 --
--- The key carries how many of this kind the attempt already has. That is
--- stable across a retry of the same transaction, because a transaction
--- that failed rolled its insert back and the count is unchanged, and it
--- differs for a decision genuinely made again.
+-- The key carries how many of this kind the attempt already has.
+--
+-- What the conflict clause protects in this table is a redelivered
+-- message: those events key by delivery id, which is the identity the
+-- outside world repeats. A hold or a resolve has no such identity. The
+-- command runs once, and a second run finds the compare-and-swap
+-- refusing, so a fixed key was protecting against nothing and dropping
+-- every later decision to do it.
+--
+-- The clause still means something here. Two writes of this kind inside
+-- one transaction would compute the same count and the second would be
+-- dropped, so the invariant a caller owes is one such decision per
+-- transaction, which is what each disposition does.
 INSERT INTO attempt_events (attempt_id, idempotency_key, kind, detail_json)
 SELECT @attempt_id,
        @kind || ':' || (SELECT count(*) FROM attempt_events prior

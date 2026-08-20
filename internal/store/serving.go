@@ -435,6 +435,11 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error 
 // served again, held again. RecordEvent is for the rest, where the key
 // already carries what makes the write distinct — a lease id, a delivery
 // id — or where the thing can only happen once.
+//
+// One such event per transaction. The count that forms the key is read
+// inside the transaction, so two of the same kind in one would collide
+// and the second would be dropped; every caller here writes one, as the
+// terminal act of a disposition.
 func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind string, detail map[string]string) error {
 	encoded, err := json.Marshal(detail)
 	if err != nil {
