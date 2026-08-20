@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 
@@ -31,7 +32,7 @@ func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 		{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"},
 	}
 
-	if err := h.srv.sweepOrphans(t.Context(), map[string]bool{"lse-adopted": true}); err != nil {
+	if err := h.srv.sweepOrphans(t.Context(), map[assignment.LeaseID]bool{"lse-adopted": true}); err != nil {
 		t.Fatal(err)
 	}
 

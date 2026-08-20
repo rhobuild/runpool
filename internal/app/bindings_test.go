@@ -380,7 +380,7 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 			log:       slog.New(slog.NewTextHandler(&buf, nil)),
 			store:     st,
 			alloc:     allocator.New(),
-			byBinding: map[int64]*binding{},
+			byBinding: map[assignment.BindingID]*binding{},
 		}
 		cfg := &config.Config{
 			Instance:    config.Instance{Name: "test"},

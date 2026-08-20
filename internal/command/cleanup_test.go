@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -38,7 +39,7 @@ func TestExcludeSparesTheInstancesOwnObjects(t *testing.T) {
 		},
 	}
 
-	got := plan.exclude(map[string]bool{"lse-live": true})
+	got := plan.exclude(map[assignment.LeaseID]bool{"lse-live": true})
 
 	want := map[string]bool{"c2": true, "c4": true, "n2": true, "v2": true}
 	for _, id := range collectIDs(got) {

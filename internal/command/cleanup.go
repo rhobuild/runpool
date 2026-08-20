@@ -41,14 +41,14 @@ func runCleanup(streams IO, apply bool) error {
 	// Cleanup removes what no live lease needs: resources belonging to
 	// released leases, and objects the books never recorded. A running
 	// capsule is left alone — stopping work is what drain is for.
-	keep := map[string]bool{}
+	keep := map[assignment.LeaseID]bool{}
 	snap, err := st.Snapshot()
 	if err != nil {
 		return err
 	}
 	for _, l := range snap.Leases {
 		if !l.State.Terminal() {
-			keep[string(l.ID)] = true
+			keep[l.ID] = true
 		}
 	}
 	removable := plan.exclude(keep)
@@ -232,7 +232,7 @@ func planOwnedResources(ctx context.Context, st *store.Store, dock *docker.Clien
 	return p, err
 }
 
-func (p ownedPlan) exclude(keep map[string]bool) ownedPlan {
+func (p ownedPlan) exclude(keep map[assignment.LeaseID]bool) ownedPlan {
 	out := ownedPlan{instanceID: p.instanceID}
 	for _, c := range p.containers {
 		// A helper the instance is still running is not garbage. Apply
@@ -297,17 +297,17 @@ func (p ownedPlan) describe(verb string, applying bool) string {
 // held open.
 func (p ownedPlan) remove(ctx context.Context, dock *docker.Client) error {
 	for _, c := range p.containers {
-		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(c.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), c.LeaseID); err != nil {
 			return fmt.Errorf("remove container %s: %w", c.Name, err)
 		}
 	}
 	for _, n := range p.networks {
-		if err := dock.RemoveOwnedNetwork(ctx, n.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(n.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedNetwork(ctx, n.ID, assignment.InstanceID(p.instanceID), n.LeaseID); err != nil {
 			return fmt.Errorf("remove network %.12s: %w", n.ID, err)
 		}
 	}
 	for _, v := range p.volumes {
-		if err := dock.RemoveOwnedVolume(ctx, v.ID, assignment.InstanceID(p.instanceID), assignment.LeaseID(v.LeaseID)); err != nil {
+		if err := dock.RemoveOwnedVolume(ctx, v.ID, assignment.InstanceID(p.instanceID), v.LeaseID); err != nil {
 			return fmt.Errorf("remove volume %s: %w", v.ID, err)
 		}
 	}

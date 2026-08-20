@@ -148,7 +148,7 @@ func (c *Client) AllNetworkSubnets(ctx context.Context) ([]string, error) {
 // delete every warm cache it finds.
 type OwnedResource struct {
 	ID      string
-	LeaseID string
+	LeaseID assignment.LeaseID
 	Role    string
 }
 
@@ -159,7 +159,7 @@ func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID assignment.In
 	}
 	out := make([]OwnedResource, 0, len(nets.Items))
 	for _, n := range nets.Items {
-		out = append(out, OwnedResource{ID: n.ID, LeaseID: n.Labels[LabelLease], Role: n.Labels[LabelRole]})
+		out = append(out, OwnedResource{ID: n.ID, LeaseID: assignment.LeaseID(n.Labels[LabelLease]), Role: n.Labels[LabelRole]})
 	}
 	return out, nil
 }

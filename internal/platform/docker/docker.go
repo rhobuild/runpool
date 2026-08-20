@@ -435,7 +435,7 @@ type OwnedContainer struct {
 	Name    string
 	Kind    string
 	Role    string
-	LeaseID string
+	LeaseID assignment.LeaseID
 	Running bool
 }
 
@@ -472,11 +472,13 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.
 			name = strings.TrimPrefix(s.Names[0], "/")
 		}
 		out = append(out, OwnedContainer{
-			ID:      s.ID,
-			Name:    name,
-			Kind:    s.Labels[LabelKind],
-			Role:    s.Labels[LabelRole],
-			LeaseID: s.Labels[LabelLease],
+			ID:   s.ID,
+			Name: name,
+			Kind: s.Labels[LabelKind],
+			Role: s.Labels[LabelRole],
+			// The one conversion: a label is a string until it is read,
+			// and this is where it is read.
+			LeaseID: assignment.LeaseID(s.Labels[LabelLease]),
 			Running: s.State == container.StateRunning,
 		})
 	}

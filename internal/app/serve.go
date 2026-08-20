@@ -324,7 +324,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		leaseHistory:        cfg.Retention.Window(),
 		netSandbox:          netSandbox,
 		cgroupDriver:        hostInfo.CgroupDriver,
-		byBinding:           map[int64]*binding{},
+		byBinding:           map[assignment.BindingID]*binding{},
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: resuming an emergency is what holds the
@@ -341,10 +341,14 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		return fmt.Errorf("startup reconciliation: %w", err)
 	}
 
-	owner := "runpool-" + st.InstanceID()[:8]
+	// A session owner name, not an instance id. Concatenating an
+	// untyped constant onto a typed string keeps the type, so this local
+	// was an assignment.InstanceID that had to be converted back at the
+	// call — a name derived from an id is not that id.
+	owner := "runpool-" + string(st.InstanceID())[:8]
 	for _, b := range s.bindings {
 		b.newSession = func(ctx context.Context) (providerSession, error) {
-			return b.gh.OpenSession(ctx, b.scaleSetID, string(owner))
+			return b.gh.OpenSession(ctx, b.scaleSetID, owner)
 		}
 	}
 	// A session the broker still holds is one the next start has to wait
@@ -522,7 +526,7 @@ type Controller struct {
 	cgroupDriver string
 
 	bindings  []*binding
-	byBinding map[int64]*binding // store binding id -> binding
+	byBinding map[assignment.BindingID]*binding
 
 	// launch runs one served attempt. Production points it at
 	// runCapsule; tests replace it to drive the assignment machine

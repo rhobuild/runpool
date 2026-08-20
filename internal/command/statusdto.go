@@ -3,6 +3,7 @@ package command
 import (
 	"time"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
@@ -209,7 +210,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		})
 	}
 	for _, l := range snap.Leases {
-		attempt := snap.Attempts[string(l.ID)]
+		attempt := snap.Attempts[l.ID]
 		project := ""
 		if attempt.TenantKey != "" || attempt.ProjectKey != "" {
 			project = attempt.TenantKey + "/" + attempt.ProjectKey
@@ -225,7 +226,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 			CreatedAt:   rfc3339(l.CreatedAt),
 			Resources:   []resourceDTO{},
 		}
-		for _, in := range snap.Resources[string(l.ID)] {
+		for _, in := range snap.Resources[l.ID] {
 			lease.Resources = append(lease.Resources, resourceDTO{
 				Kind: string(in.Kind), Role: in.Role, Name: in.Name, LeaseID: string(in.LeaseID), State: in.State,
 			})
@@ -235,20 +236,20 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	for _, c := range snap.CacheLanes {
 		doc.CacheLanes = append(doc.CacheLanes, laneDTO{
 			ID: c.ID, SourceProjectKey: c.SourceProjectKey, Generation: c.Generation,
-			LeasedBy: c.LeasedBy, LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
+			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
 		})
 	}
 	doc.ManualReview = append(doc.ManualReview, review...)
 	for _, c := range obs.containers {
 		doc.Containers = append(doc.Containers, containerDTO{
-			Name: c.Name, Role: c.Role, LeaseID: c.LeaseID, Running: c.Running,
+			Name: c.Name, Role: c.Role, LeaseID: string(c.LeaseID), Running: c.Running,
 		})
 	}
 	for _, n := range obs.networks {
-		doc.Networks = append(doc.Networks, resourceDTO{Kind: "network", Role: n.Role, Name: n.ID, LeaseID: n.LeaseID})
+		doc.Networks = append(doc.Networks, resourceDTO{Kind: "network", Role: n.Role, Name: n.ID, LeaseID: string(n.LeaseID)})
 	}
 	for _, v := range obs.volumes {
-		doc.Volumes = append(doc.Volumes, resourceDTO{Kind: "volume", Role: v.Role, Name: v.ID, LeaseID: v.LeaseID})
+		doc.Volumes = append(doc.Volumes, resourceDTO{Kind: "volume", Role: v.Role, Name: v.ID, LeaseID: string(v.LeaseID)})
 	}
 	if obs.err != nil {
 		doc.DockerError = obs.err.Error()
@@ -259,14 +260,14 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 }
 
 func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64]int, shippedCapsule string) *schedulingDTO {
-	activeByTier := make(map[string]int, len(cfg.Tiers))
+	activeByTier := make(map[assignment.TierID]int, len(cfg.Tiers))
 	active := 0
 	for _, lease := range leases {
 		if lease.State.Terminal() {
 			continue
 		}
 		active++
-		activeByTier[string(lease.TierID)]++
+		activeByTier[lease.TierID]++
 	}
 
 	mode := "independent-tiers"
@@ -289,7 +290,7 @@ func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64
 		dto.Available = 0
 	}
 	for _, tier := range cfg.Tiers {
-		tierActive := activeByTier[tier.ID]
+		tierActive := activeByTier[assignment.TierID(tier.ID)]
 		available := tier.Parallelism - tierActive
 		if available < 0 {
 			available = 0
@@ -320,15 +321,15 @@ type daemonObservation struct {
 // container and used to be invisible here. An empty (non-nil) result
 // means the comparison ran and found agreement.
 func discrepancies(leases []store.Lease, obs daemonObservation) []string {
-	live := map[string]bool{}
+	live := map[assignment.LeaseID]bool{}
 	for _, l := range leases {
 		if !l.State.Terminal() {
-			live[string(l.ID)] = true
+			live[l.ID] = true
 		}
 	}
 	out := []string{}
 
-	withContainer := map[string]bool{}
+	withContainer := map[assignment.LeaseID]bool{}
 	for _, c := range obs.containers {
 		// A helper the instance is measuring with belongs to no lease by
 		// design, so judging it against the lease set reports a
@@ -343,7 +344,7 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 		}
 	}
 	for _, l := range leases {
-		if live[string(l.ID)] && l.State == store.LeaseWorkloadRunning && !withContainer[string(l.ID)] {
+		if live[l.ID] && l.State == store.LeaseWorkloadRunning && !withContainer[l.ID] {
 			out = append(out, "lease "+string(l.ID)+" claims to be running with no container")
 		}
 	}
