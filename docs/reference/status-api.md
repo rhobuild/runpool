@@ -55,14 +55,15 @@ absent state, because the attempt it was asked about cannot exist.
 | `disk_pressure` | object or null | `level`, `free_bytes`, `free_inodes`, `managed_bytes`, `measured_at` |
 | `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, and the provider reach fields below |
 | `leases` | array | `id`, `state`, `terminal`, `attempt_id`, `project`, `runtime_name`, `evidence`, `created_at`, `resources[]`. Every live lease, plus recent finished ones — see below |
+| `leases[].resources` | array | What the lease owns on the daemon: `kind`, `role`, `name`, `lease_id`, and `state` — one of `planned`, `creating`, `present`, `cleanup_pending`, `deleting`, which is the books' account of the object rather than the daemon's |
 | `released_total` | number | How many finished leases the store holds, which is more than the `leases` array carries |
 | `cache_lanes` | array | `id`, `source_project_key`, `generation`, `leased_by`, `last_used` |
 | `manual_review` | array | Attempts held for a person: `id`, `workload`, `project`, `state`, `review_reason`, `age_seconds`, and once resolved `resolution` and `reviewed_by` |
 | `containers` | array | Owned containers: `name`, `role`, `lease_id`, `running` |
-| `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id` |
+| `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id`. No `state` — it is recorded per lease, and these are reported from the daemon |
 | `discrepancies` | array or null | Where the books and the daemon disagree; `null` if the daemon could not be asked |
 | `docker_error` | string, optional | Why the daemon could not be asked |
-| `capsule_image_error` | string, optional | Why the capsule image could not be resolved. Present means the `capsule_image` on every tier is what this build ships, not what a launch would run |
+| `capsule_image_error` | string, optional | Why the shipped capsule image could not be resolved. It concerns only the tiers that name no `capsule_image` of their own: those report what the build ships rather than what a launch would run, while a tier naming its own image reports that one |
 
 Each binding reports what its own loop last managed with its provider:
 `last_contact_at` when a provider call last succeeded, and `last_error`
@@ -119,9 +120,12 @@ knowing what any of it means.
 
 One consequence an operator needs, because it is not visible from the
 key: renaming a `targets[].id` in configuration produces a different
-binding. The new key has no row, so a new one is written and the old row
-is left behind holding the scale set id that was registered under it. It
-is a rename of the binding, not of a label on it.
+binding, and the old one is forgotten on the same startup — with the
+scale set id recorded against it. The renamed binding then meets a
+refusal on its first pass, adopts on the next, and does not get its
+contact history back. It is a rename of the binding, not of a label on
+it; `docs/adrs/2026-08-17-target-hosts-and-scopes.md` has the whole of
+it.
 
 Lease states are `reserved`, `provisioning`, `runtime_registered`,
 `workload_running`, `draining`, `cleaning`, `released`, `failed`,
