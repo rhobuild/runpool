@@ -625,9 +625,9 @@ func replaceState(path, state string, replace func(string, []byte, os.FileMode, 
 
 func setState(s string) { replaceState(stateFile, s, atomicfile.Replace) }
 
-// terminalFailure names a failure by whether the runner ever started, which
-// is the one thing the controller cannot infer from the outside. `running` is
-// written once fork/exec has returned, so its presence is the
+// terminalFailure names a failure by whether the runner ever started,
+// which is the one thing the controller cannot infer from the outside.
+// `running` is written once fork/exec has returned, so its presence is the
 // proof that the job was handed over: after it, a failure is an execution
 // outcome. Before it — no credential delivered, configuration unprepared,
 // dockerd never ready — the job never ran, and reporting an exit would settle

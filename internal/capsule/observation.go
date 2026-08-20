@@ -57,9 +57,9 @@ func ClassifyExit(code int) assignment.ExecutionObservation {
 
 // classifySupervisorState reads the supervisor's own account of itself. The
 // distinction that matters is whether the runner ever started: the supervisor
-// writes `running` immediately before executing it, so `aborted` means the job
-// was never handed over and `failed` means it was. Collapsing the two settles
-// an attempt that never ran as complete, and nothing requeues it.
+// writes `running` once fork/exec has returned, so `aborted` means the job was
+// never handed over and `failed` means it was. Collapsing the two settles an
+// attempt that never ran as complete, and nothing requeues it.
 func classifySupervisorState(state string) (assignment.ExecutionObservation, error) {
 	switch {
 	case state == protocol.StateBooting, state == protocol.StateWaiting:
