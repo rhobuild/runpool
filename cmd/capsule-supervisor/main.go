@@ -128,7 +128,7 @@ func runSubcommand(args []string) int {
 		// Writing it here rather than in PID 1 is what keeps the other
 		// direction true: an authorization that never landed leaves
 		// `waiting` behind, and that assignment is still retried.
-		if err := authorizeStart(stateFile, startFile, atomicfile.Replace); err != nil {
+		if err := authorizeStart(atomicfile.Replace); err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)
 			return 1
 		}
@@ -625,19 +625,38 @@ func prepareRunnerConfig(encoded, runnerRoot, volatileRoot string, uid, gid int)
 // A file that does not land undoes the record. This is the one place
 // that knows nothing took effect -- PID 1 is still waiting for a file
 // that will never appear -- and it is the likely shape of a full control
-// tmpfs rather than a remote one, because the replacement below needs an
-// inode that the state's own in-place fallback does not. Left saying
-// `starting`, an assignment that could simply be served again would be
-// held for a person instead.
+// tmpfs rather than a remote one. On a full one the temporary file is
+// still created; what fails is writing the bytes into it. The state gets
+// through anyway because its fallback truncates the file already there,
+// which frees the page the old value held and leaves room for the new
+// one, where the authorization has no old value to reclaim. So the write
+// that fails is the authorization and the write that succeeds is the
+// record. Left saying `starting`, an assignment that could simply be
+// served again would be held for a person instead.
 //
-// replace is a parameter for the same reason replaceState takes one: the
-// order of these writes, and the undo, are what this does, and neither
-// is observable through a control directory a test cannot create.
-func authorizeStart(statePath, startPath string,
-	replace func(string, []byte, os.FileMode, int, int) error) error {
-	replaceState(statePath, protocol.StateStarting, replace)
-	if err := replace(startPath, []byte(protocolVersion), 0o600, -1, -1); err != nil {
-		replaceState(statePath, protocol.StateWaiting, replace)
+// It names the two files itself. They were parameters until it became
+// clear what that costs: two adjacent strings, and one call site passing
+// two constants a letter apart. Exchanged, it writes the protocol
+// version into the state and the word `starting` into the authorization
+// -- and the in-place fallback creates the file it cannot fill, so the
+// capsule ends up saying `waiting` with a start file present. PID 1
+// forks the runner and the launcher requeues, which is the double
+// execution this exists to stop, arrived at through the thing that stops
+// it. Nothing about the swap is visible to a compiler or to a capsule
+// running against a real daemon.
+//
+// What is a parameter is the writer, for the same reason replaceState
+// takes one: the order of these writes and the undo are what this does,
+// and neither is observable through a control directory a test cannot
+// create.
+//
+// One authorization per capsule. It writes over whatever state is there,
+// so a second one against a running capsule would say `waiting` while a
+// runner holds the job.
+func authorizeStart(replace func(string, []byte, os.FileMode, int, int) error) error {
+	replaceState(stateFile, protocol.StateStarting, replace)
+	if err := replace(startFile, []byte(protocolVersion), 0o600, -1, -1); err != nil {
+		replaceState(stateFile, protocol.StateWaiting, replace)
 		return err
 	}
 	return nil

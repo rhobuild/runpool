@@ -364,7 +364,7 @@ func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
 		wrote = append(wrote, filepath.Base(path)+"="+string(body))
 		return nil
 	}
-	if err := authorizeStart("/c/state", "/c/start", record); err != nil {
+	if err := authorizeStart(record); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"state=" + protocol.StateStarting, "start=" + protocolVersion}
@@ -378,10 +378,11 @@ func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
 // leaves the state where an assignment can still be served again.
 //
 // This is the one place that knows nothing took effect, and it is the
-// likely shape of a full control tmpfs rather than a remote one: the
-// start file needs a fresh inode, and the state's own in-place fallback
-// does not. Left saying `starting`, an assignment that could simply be
-// requeued is held for a person instead.
+// likely shape of a full control tmpfs rather than a remote one: on a
+// full one the state's fallback truncates the file already there and
+// writes into the page that frees, where the authorization has no old
+// value to reclaim. Left saying `starting`, an assignment that could
+// simply be requeued is held for a person instead.
 func TestAnAuthorizationThatCannotLandSaysSo(t *testing.T) {
 	full := errors.New("no space left on device")
 	var wrote []string
@@ -392,7 +393,7 @@ func TestAnAuthorizationThatCannotLandSaysSo(t *testing.T) {
 		wrote = append(wrote, string(body))
 		return nil
 	}
-	if err := authorizeStart("/c/state", "/c/start", record); !errors.Is(err, full) {
+	if err := authorizeStart(record); !errors.Is(err, full) {
 		t.Fatalf("authorize returned %v; want the write's own failure", err)
 	}
 	if len(wrote) == 0 || wrote[len(wrote)-1] != protocol.StateWaiting {
@@ -437,10 +438,22 @@ func TestTheStartSubcommandAuthorizesThroughTheOrderedPath(t *testing.T) {
 	if clause == nil {
 		t.Fatal("no `start` subcommand in the dispatcher; there is nothing here to authorize with")
 	}
-	authorizes := false
+	authorizes, writesTheFileItself := false, false
 	ast.Inspect(clause, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && id.Name == "authorizeStart" {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch id.Name {
+		case "authorizeStart":
 			authorizes = true
+		case "startFile", "stateFile":
+			// The authorization owns both names. A clause that still
+			// reaches for one is writing the control surface beside the
+			// function that orders those writes -- which is how a call
+			// left in a branch nothing takes reads as authorizing while
+			// the line below it does the real work, unordered.
+			writesTheFileItself = true
 		}
 		return true
 	})
@@ -448,5 +461,10 @@ func TestTheStartSubcommandAuthorizesThroughTheOrderedPath(t *testing.T) {
 		t.Errorf("%s: the start subcommand does not authorize through authorizeStart, so the "+
 			"order of the state and the file, and the undo when the file cannot land, are "+
 			"whatever this clause happens to do", fset.Position(clause.Pos()))
+	}
+	if writesTheFileItself {
+		t.Errorf("%s: the start subcommand names the control files itself. Whatever it does with "+
+			"them is outside the order authorizeStart exists to keep, and a call to it can sit "+
+			"beside that and prove nothing", fset.Position(clause.Pos()))
 	}
 }
