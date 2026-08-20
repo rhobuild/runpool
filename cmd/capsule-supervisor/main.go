@@ -253,14 +253,15 @@ func writeDockerProxyConfig(environ func(string) string, home string, uid, gid i
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return false, fmt.Errorf("create %s: %w", dir, err)
 	}
+	// The file goes through the same door as the rest, so it is never
+	// visible half written and never visible to its owner empty. The
+	// directory keeps its own chown: a rename cannot create one.
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, body, 0o644); err != nil {
+	if err := atomicfile.Replace(path, body, 0o644, uid, gid); err != nil {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
-	for _, target := range []string{dir, path} {
-		if err := os.Chown(target, uid, gid); err != nil {
-			return false, fmt.Errorf("chown %s: %w", target, err)
-		}
+	if err := os.Chown(dir, uid, gid); err != nil {
+		return false, fmt.Errorf("chown %s: %w", dir, err)
 	}
 	return true, nil
 }
@@ -577,11 +578,14 @@ func prepareRunnerConfig(encoded, runnerRoot, volatileRoot string, uid, gid int)
 			cleanup()
 			return nil, fmt.Errorf("decode JIT bundle file %q: %w", clean, err)
 		}
-		if err := os.WriteFile(target, decoded, 0o600); err != nil {
-			cleanup()
-			return nil, err
-		}
-		if err := os.Chown(target, uid, gid); err != nil {
+		// Through the same door as the control surface, and for the
+		// reason the comment above already gives: the runner aborts on
+		// a file that exists empty, and a write that truncates first is
+		// a window in which this file exists empty. Nothing reads it
+		// before the runner is started today, so this is the window
+		// closed rather than a race fixed — and the owner lands with the
+		// contents rather than after them.
+		if err := atomicfile.Replace(target, decoded, 0o600, uid, gid); err != nil {
 			cleanup()
 			return nil, err
 		}
@@ -621,9 +625,9 @@ func replaceState(path, state string, replace func(string, []byte, os.FileMode, 
 
 func setState(s string) { replaceState(stateFile, s, atomicfile.Replace) }
 
-// terminalFailure names a failure by whether the runner ever started, which
-// is the one thing the controller cannot infer from the outside. `running` is
-// written immediately before the runner is executed, so its presence is the
+// terminalFailure names a failure by whether the runner ever started,
+// which is the one thing the controller cannot infer from the outside.
+// `running` is written once fork/exec has returned, so its presence is the
 // proof that the job was handed over: after it, a failure is an execution
 // outcome. Before it — no credential delivered, configuration unprepared,
 // dockerd never ready — the job never ran, and reporting an exit would settle

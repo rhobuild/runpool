@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,8 +88,8 @@ func TestPrepareRunnerConfigRejectsPathsAndCollisions(t *testing.T) {
 }
 
 // TestTerminalFailureDistinguishesUnstartedRunners: `running` is written
-// immediately before the runner is executed, so it is the only proof the
-// supervisor has that the job was handed over. A failure before it must not
+// once fork/exec has returned, so it is the only proof the supervisor has
+// that the job was handed over. A failure before it must not
 // be reported as an execution, or the controller settles a job that never ran.
 func TestTerminalFailureDistinguishesUnstartedRunners(t *testing.T) {
 	err := errors.New("no credential was delivered")
@@ -271,24 +274,74 @@ func TestAStateThatCannotBeReplacedIsStillWritten(t *testing.T) {
 	}
 }
 
-// TestEveryControlFileIsWrittenThroughTheAtomicHelper: the helper only
-// helps the writes that use it.
+// TestEveryFileIsWrittenThroughTheAtomicHelper: the supervisor creates
+// no file except through atomicfile, save one deliberate exception.
 //
-// A test of the helper passes with none of the call sites converted, so
-// it cannot say whether one was missed — and a control file left on
-// os.WriteFile is exactly the defect, still present, in a change whose
-// evidence says it is gone. The only exception is replaceState's
-// fallback, which writes in place on purpose and by way of a parameter,
-// never by naming the file.
-func TestEveryControlFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+// A helper only helps the writes that use it, and a test of the helper
+// passes with none of them converted — so this checks the call sites.
+//
+// It parses rather than greps, because grepping was tried and did both
+// things wrong. It named the four control-file constants, so the two
+// writes whose target is a local variable were invisible to it. Counting
+// the string instead saw those, and then could not tell a call from a
+// comment naming one, so the file could not describe its own rule.
+//
+// The exception is replaceState's in-place fallback, which exists
+// because a state that cannot be written is worse than one written
+// half-way; it is named here so adding a second exception is a decision
+// somebody makes rather than a count that still passes.
+func TestEveryFileIsWrittenThroughTheAtomicHelper(t *testing.T) {
+	const allowedIn = "replaceState"
+	creators := map[string]bool{"WriteFile": true, "Create": true, "OpenFile": true}
+
+	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"protocolFile", "stateFile", "startFile", "jitFile"} {
-		if strings.Contains(string(src), "os.WriteFile("+name) {
-			t.Errorf("%s is written with os.WriteFile, which truncates before it writes; "+
-				"a reader landing in that window gets an empty file from a call that succeeded", name)
+	fset := token.NewFileSet()
+
+	var found int
+	for _, src := range sources {
+		if strings.HasSuffix(src, "_test.go") {
+			continue
 		}
+		file, err := parser.ParseFile(fset, src, nil, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkgName, ok := sel.X.(*ast.Ident)
+				if !ok || pkgName.Name != "os" || !creators[sel.Sel.Name] {
+					return true
+				}
+				found++
+				if fn.Name.Name != allowedIn {
+					t.Errorf("%s: os.%s in %s. Every file this binary writes is read by "+
+						"something that did not wait for it, so it goes through "+
+						"atomicfile.Replace; %s is the one exception and says why",
+						fset.Position(call.Pos()), sel.Sel.Name, fn.Name.Name, allowedIn)
+				}
+				return true
+			})
+		}
+	}
+	if len(sources) == 0 {
+		t.Fatal("no sources found; this test asserted nothing")
+	}
+	if found == 0 {
+		t.Error("no file-creating call found at all; this test asserted nothing")
 	}
 }

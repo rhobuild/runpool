@@ -16,6 +16,7 @@
 package atomicfile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -33,6 +34,17 @@ import (
 // so it never appears to that owner empty either. -1 leaves the owner
 // alone, as os.Chown does.
 func Replace(path string, data []byte, perm os.FileMode, uid, gid int) error {
+	if err := replace(path, data, perm, uid, gid); err != nil {
+		// The temporary name is an implementation detail, and it is gone
+		// by the time anyone reads the error. Naming the target is what
+		// a caller can act on — and in the capsule this text lands in
+		// the state file an operator reads.
+		return fmt.Errorf("replace %s: %w", path, err)
+	}
+	return nil
+}
+
+func replace(path string, data []byte, perm os.FileMode, uid, gid int) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
 	if err != nil {
 		return err
