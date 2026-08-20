@@ -394,9 +394,6 @@ func (v *validator) appCredential(path string, cr Credential) {
 	}
 }
 
-// secretPath refuses a reference that names a different file depending on
-// how the process was started. The controller's working directory is not
-// part of the contract.
 // secretRef holds every env-xor-file secret reference to one rule:
 // exactly one side set, a well-formed variable name, a reviewable file
 // path. The field names arrive as parameters so the third credential
@@ -415,6 +412,9 @@ func (v *validator) secretRef(path, envField, fileField, envName, filePath strin
 	}
 }
 
+// secretPath refuses a reference that names a different file depending on
+// how the process was started. The controller's working directory is not
+// part of the contract.
 func (v *validator) secretPath(path, ref string) {
 	switch {
 	case ref == "":

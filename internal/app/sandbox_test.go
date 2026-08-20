@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/capsule"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 
@@ -121,13 +123,19 @@ type fakeSandboxDaemon struct {
 	// unbounded one there is unbounded for every launch on the host.
 	buildDeadline time.Time
 	buildBounded  bool
-	reloaded      []string
-	removed       []string
-	// denied names the gateways asked to revoke their own policy.
-	// Removing one is not the same as trying to revoke it first: the
-	// removal is the fallback, and a close that skipped straight to it
-	// would leave the gateway relaying until the daemon answered.
-	denied []string
+	// listDeadline is the bound the gateway enumeration ran under. It is
+	// the first thing a refresh pass does, so an unbounded one there
+	// holds the lock before any gateway has been reached.
+	listDeadline time.Time
+	listBounded  bool
+	reloaded     []string
+	removed      []string
+	// events is what the daemon was asked to do, in order, as
+	// "<verb>:<container>". Two sorted sets cannot say that the
+	// revocation came before the removal, and per-gateway order is
+	// deterministic even under the fan-out, so one ordered log is both
+	// smaller and stronger.
+	events []string
 }
 
 // serve models one gateway control command occupying the daemon for as
@@ -178,8 +186,20 @@ func (f *fakeSandboxDaemon) sorted(from *[]string) []string {
 	return out
 }
 
-func (f *fakeSandboxDaemon) denies() []string  { return f.sorted(&f.denied) }
 func (f *fakeSandboxDaemon) reloads() []string { return f.sorted(&f.reloaded) }
+
+// eventsFor is the ordered record for one container.
+func (f *fakeSandboxDaemon) eventsFor(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, e := range f.events {
+		if strings.HasSuffix(e, ":"+id) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 func (f *fakeSandboxDaemon) removes() []string { return f.sorted(&f.removed) }
 
 func (f *fakeSandboxDaemon) EnsureOwnedNetwork(context.Context, docker.NetworkSpec) (string, error) {
@@ -197,15 +217,20 @@ func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ docker.ContainerSpec)
 	f.mu.Unlock()
 	return 0, f.probeOut, f.probeErr
 }
-func (f *fakeSandboxDaemon) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
+func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]docker.OwnedContainer, error) {
+	f.mu.Lock()
+	f.listDeadline, f.listBounded = ctx.Deadline()
+	f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return f.containers, nil
 }
-func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, _ []string) (int, string, error) {
+func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, cmd []string) (int, string, error) {
 	f.serve()
-	f.note(&f.denied, id)
+	// The command, not merely that some exec happened: closing a gateway
+	// and reloading one are both execs, and only one of them revokes.
+	f.note(&f.events, cmd[len(cmd)-1]+":"+id)
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
@@ -224,6 +249,7 @@ func (f *fakeSandboxDaemon) RemoveContainer(ctx context.Context, id string) erro
 	f.removeDeadline, f.removeBounded = ctx.Deadline()
 	f.mu.Unlock()
 	f.serve()
+	f.note(&f.events, "remove:"+id)
 	f.note(&f.removed, id)
 	return nil
 }
@@ -274,7 +300,7 @@ func TestBuildRefusesABlindDenySet(t *testing.T) {
 	n := newTestSandbox(t, &fakeSandboxDaemon{
 		uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24", probeOut: "",
 	}, nil)
-	if _, err := n.build(t.Context()); err == nil {
+	if _, err := n.build(t.Context(), sandboxRefreshBudget); err == nil {
 		t.Fatal("a sandbox was built from a probe that saw no global network")
 	}
 }
@@ -293,7 +319,7 @@ func TestBuildDeniesEverythingItDiscovered(t *testing.T) {
 	n.denies = []string{"203.0.113.0/24"}
 	n.allow = []string{"10.9.0.0/16"}
 
-	sb, err := n.build(t.Context())
+	sb, err := n.build(t.Context(), sandboxRefreshBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,9 +418,16 @@ func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
 		t.Errorf("removed %v; a gateway that refuses deny-all still has to stop relaying", d.removes())
 	}
-	if !slices.Equal(d.denies(), []string{"gw-1", "gw-2"}) {
-		t.Errorf("asked %v to revoke their own policy; want both, before either was removed. "+
-			"A close that skips it relays until the daemon answers the removal", d.denies())
+	// Ordered, and naming the command. A close that removed first and
+	// revoked afterwards, or that ran some other exec, leaves the
+	// gateway relaying until the daemon answers — which is the window
+	// the revocation exists to close, and neither shape is visible in a
+	// sorted set of container ids.
+	for _, id := range []string{"gw-1", "gw-2"} {
+		want := []string{protocol.GatewayDenyAllCommand + ":" + id, "remove:" + id}
+		if got := d.eventsFor(id); !slices.Equal(got, want) {
+			t.Errorf("%s saw %v; want %v", id, got, want)
+		}
 	}
 }
 
@@ -629,7 +662,7 @@ func TestDiscoveringTheEnvironmentIsBounded(t *testing.T) {
 
 	// A context with no deadline of its own, which is what the watch
 	// loop and a launch both hand this path.
-	if _, err := n.build(context.Background()); err != nil {
+	if _, err := n.build(context.Background(), sandboxRefreshBudget); err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
@@ -640,12 +673,60 @@ func TestDiscoveringTheEnvironmentIsBounded(t *testing.T) {
 		t.Fatal("the host probe ran on a context with no deadline; a probe that never exits " +
 			"holds the refresh lock, and every launch waits on it uninterruptibly")
 	}
-	if left := time.Until(deadline); left <= 0 || left > sandboxBuildBudget {
+	if left := time.Until(deadline); left <= 0 || left > sandboxRefreshBudget {
 		t.Errorf("the probe had %v left; want a positive bound no larger than %v",
-			left, sandboxBuildBudget)
+			left, sandboxRefreshBudget)
 	}
-	if sandboxBuildBudget >= rediscoverInterval {
+	if sandboxRefreshBudget >= rediscoverInterval {
 		t.Errorf("the build budget is %v against a %v rediscovery interval; a build that "+
-			"hangs would leave two passes overlapping", sandboxBuildBudget, rediscoverInterval)
+			"hangs would leave two passes overlapping", sandboxRefreshBudget, rediscoverInterval)
+	}
+}
+
+// TestEnumeratingGatewaysIsBounded: asking the daemon what this instance
+// owns runs under a deadline.
+//
+// It is the first thing both passes over the gateways do, and both run
+// inside the refresh lock. A daemon that accepts the request and answers
+// nothing would hold that lock before a single gateway had been reached,
+// with every launch on the host waiting on a plain mutex it cannot time
+// out of. Bounding the exec and the removal further in, and not this,
+// left the pass unbounded at its very first step.
+func TestEnumeratingGatewaysIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*networkSandbox) error
+	}{
+		{"reloading", func(n *networkSandbox) error {
+			_, err := n.reloadGateways(context.Background(), nil, []string{"10.0.0.0/8"})
+			return err
+		}},
+		{"closing", func(n *networkSandbox) error {
+			return n.closeGateways(context.Background())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeSandboxDaemon{containers: []docker.OwnedContainer{
+				{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
+			}}
+			n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
+
+			// A context with no deadline of its own, which is what the
+			// watch loop hands this path.
+			if err := tc.run(n); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			d.mu.Lock()
+			bounded, deadline := d.listBounded, d.listDeadline
+			d.mu.Unlock()
+			if !bounded {
+				t.Fatal("the enumeration ran on a context with no deadline; a daemon that " +
+					"stops answering holds the refresh lock before any gateway is reached")
+			}
+			if left := time.Until(deadline); left <= 0 || left > gatewayControlTimeout {
+				t.Errorf("the enumeration had %v left; want a positive bound no larger than %v",
+					left, gatewayControlTimeout)
+			}
+		})
 	}
 }

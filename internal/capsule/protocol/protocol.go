@@ -84,3 +84,14 @@ func Terminal(state string) bool {
 // be read. Without it, every abort read as an ordinary exit — and an
 // attempt that never ran was settled as complete and never requeued.
 const AbortedExitCode = 79
+
+// GatewayDenyAllCommand is the supervisor subcommand that revokes a
+// gateway's own egress policy from inside it.
+//
+// It lives here for the reason the rest of this package does: the
+// controller spells it to ask and the supervisor spells it to answer,
+// and they are two binaries. A typo on either side is a gateway that
+// keeps relaying while the exec reports a failure the caller logs and
+// moves past — which is the shape of every other value this package
+// exists to keep from being written twice.
+const GatewayDenyAllCommand = "gateway-deny-all"

@@ -25,6 +25,10 @@ type migration struct {
 	up      string
 }
 
+// loadMigrations reads the embedded set once. Every open consults it and
+// the bytes cannot change while the process runs.
+var loadMigrations = sync.OnceValues(embeddedMigrations)
+
 // embeddedMigrations reads migrations/NNNNNN_name.up.sql in order.
 //
 // There are no down scripts. A down script claims every schema change is
@@ -32,10 +36,6 @@ type migration struct {
 // the rollback path is restoring the backup taken before the migration
 // ran, which is a copy of what actually existed rather than a guess at
 // how to rebuild it.
-// loadMigrations reads the embedded set once. Every open consults it and
-// the bytes cannot change while the process runs.
-var loadMigrations = sync.OnceValues(embeddedMigrations)
-
 func embeddedMigrations() ([]migration, error) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
