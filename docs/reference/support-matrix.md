@@ -95,11 +95,19 @@ builds for both.
 one entry per platform whose suites were run and whose host facts were
 reviewed and frozen. It records `amd64` today and nothing else.
 
-So `linux/arm64` is **built and unverified**: a release produces it, and
+So `linux/arm64` is **buildable and unverified**: the build produces it —
+the capsule image and the controller binary both compile for it — and
 nobody has run the suites there. That is a different sentence from
-unsupported, and the gate says which it is — a host with no entry fails
-as *not qualified on this platform*, naming the ones that are, rather
-than as an architecture mismatch.
+unsupported, and the gate says which it is: a host with no entry fails as
+*not qualified on this platform*, naming the ones that are, rather than
+as an architecture mismatch.
+
+**What a release actually publishes today is one platform.** The
+publishing half of that decision is not built: the release workflow
+builds and pushes a single image and ships a single `linux/amd64`
+binary. So *built* here describes what the build can produce, not what
+the last release put in the registry. Do not read it as a promise of an
+arm64 artifact.
 
 The distribution is the same kind of statement. `debian 13 trixie` is
 the reviewed selection in the entry that exists, not a constraint the

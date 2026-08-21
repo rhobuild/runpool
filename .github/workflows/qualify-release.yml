@@ -274,8 +274,18 @@ jobs:
 
           facts = json.load(open("evidence/live/platform-facts.json", encoding="utf-8"))
           reference = json.load(open("build/platform.lock.json", encoding="utf-8"))
-          if reference.get("status") != "frozen":
-              sys.exit("release-qualification reference is not frozen")
+          # The entry for the host that produced these facts. The lock
+          # records one per platform qualified, so a host with none is not
+          # a host that failed the reference -- it is one nobody has run
+          # the suites on, and the record has to say which.
+          arch = facts.get("arch")
+          entries = {e["policy"]["arch"]: e for e in reference["platforms"]}
+          entry = entries.get(arch)
+          if entry is None:
+              sys.exit(f"no release qualification is recorded for {arch}; "
+                       f"this release records {', '.join(sorted(entries))}")
+          if entry.get("status") != "frozen":
+              sys.exit(f"the {arch} release-qualification reference is not frozen")
           checksums = open("evidence/release-artifacts/checksums.txt", encoding="utf-8").read().splitlines()
           e2e_files = glob.glob("evidence/controller-e2e/controller-e2e-*.json")
           if len(e2e_files) != 1:
@@ -295,8 +305,8 @@ jobs:
               "capsule_image": os.environ["CAPSULE_IMAGE"],
               "run": os.environ["RUN_URL"],
               "qualified_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "platform_policy": reference["policy"],
-              "platform_reference": reference["platform"],
+              "platform_policy": entry["policy"],
+              "platform_reference": entry["platform"],
               "platform_observed": facts,
               "standalone_artifacts": checksums,
               "suites": [

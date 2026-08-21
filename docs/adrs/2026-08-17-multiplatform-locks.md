@@ -99,12 +99,19 @@ is where it actually comes from.
 
 ## What is not
 
-The third decision: the release publishing an index per image. The
-standalone binaries are already cross-built per platform, and the capsule
-image builds for `linux/arm64` — verified, with the Go stage compiling
-rather than reusing a cached layer. What is not done is the publishing
-itself, which needs `buildx` with a push and a different way of reading
-back the digest, and whose only real verification is a release run.
+The third decision: the release publishing an index per image, and the
+standalone binaries per platform. Neither is built. The release workflow
+builds and pushes one image and ships one `linux/amd64` binary; what
+exists per platform is a compile-only gate in `ci.yml`, which builds to
+`/dev/null` and produces no artifact.
+
+What is verified is that it can be done: the capsule image builds for
+`linux/arm64`, with the Go stage compiling rather than reusing a cached
+layer. What is not is the publishing, which needs `buildx` with a push
+and a different way of reading back the digest — `docker image inspect`
+returns nothing after a multi-platform push, and that digest is what is
+injected as the controller's capsule reference. Its only real
+verification is a release run.
 
 Until it lands, a release publishes one platform's image while the lock
 declares two. The support matrix's *built* list is therefore a statement

@@ -3,7 +3,6 @@ package platform
 import (
 	"bytes"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -49,25 +48,78 @@ func TestManifestSelectsTheLatestReviewedStableEngine(t *testing.T) {
 // suites on and a host that ran them and differed are different answers,
 // and the file's shape used to make only the second expressible.
 func TestAPlatformWithNoEntryIsNotAFailedOne(t *testing.T) {
-	ref, err := Load()
-	if err != nil {
-		t.Fatal(err)
+	// Two entries this test owns, rather than whatever the lock holds. An
+	// assertion written against the file cannot tell "arm64 was qualified
+	// later" from "selection is broken", and the version of this that
+	// skipped on the first was switched off by the second.
+	amd := frozenQualified()
+	arm := frozenQualified()
+	arm.Policy.Arch, arm.Platform.Arch = "arm64", "arm64"
+	arm.Platform.Kernel = "6.12.0-arm64"
+	ref := Reference{SchemaVersion: 2, Platforms: []Qualified{amd, arm}}
+	if err := ref.validate(); err != nil {
+		t.Fatalf("two platforms did not validate: %v", err)
 	}
-	if _, ok := ref.For("arm64"); ok {
-		t.Skip("arm64 is qualified now, so this says nothing")
+
+	for _, arch := range []string{"amd64", "arm64"} {
+		got, ok := ref.For(arch)
+		if !ok {
+			t.Fatalf("no entry for %s in a record holding %v", arch, ref.Arches())
+		}
+		if got.Policy.Arch != arch {
+			t.Errorf("For(%q) returned the %s entry; a host is then qualified against another "+
+				"platform's facts, which is the failure this record exists to stop",
+				arch, got.Policy.Arch)
+		}
 	}
-	err = ref.NotQualified("arm64")
+	if _, ok := ref.For("riscv64"); ok {
+		t.Error("a platform with no entry was matched to one")
+	}
+
+	err := ref.NotQualified("riscv64")
 	if err == nil {
 		t.Fatal("an unqualified platform produced no error")
 	}
-	if !strings.Contains(err.Error(), "arm64") || !strings.Contains(err.Error(), "amd64") {
-		t.Errorf("the error is %q; it has to name the platform asked about and the ones that "+
-			"are qualified, or it reads as a broken release rather than an unqualified host", err)
+	for _, want := range []string{"riscv64", "amd64", "arm64"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error is %q; it has to name the platform asked about and the ones "+
+				"that are qualified, or it reads as a broken release rather than an "+
+				"unqualified host", err)
+		}
 	}
-	// And the shape can hold one without changing: adding a platform is
-	// adding an entry.
-	if !slices.Contains(BuildableArches(), "arm64") {
-		t.Error("arm64 is not buildable, so a qualification for it could never be recorded")
+}
+
+// TestAnEntryFrozenFromAnotherPlatformIsRefused: selection reads the
+// policy and comparison reads the facts, so an entry labelled one
+// platform and frozen from another qualifies neither.
+//
+// The host that ran the suites is told nobody qualified it, and a host of
+// the claimed platform is told the reference is something else. Naming a
+// single architecture in the reader used to make this unrepresentable,
+// and nothing replaced that when the name came out.
+func TestAnEntryFrozenFromAnotherPlatformIsRefused(t *testing.T) {
+	for name, break_ := range map[string]func(*Qualified){
+		"arch":        func(q *Qualified) { q.Platform.Arch = "arm64" },
+		"os":          func(q *Qualified) { q.Platform.OS = "ubuntu" },
+		"os_version":  func(q *Qualified) { q.Platform.OSVersion = "24.04" },
+		"os_codename": func(q *Qualified) { q.Platform.OSCodename = "noble" },
+	} {
+		q := frozenQualified()
+		break_(&q)
+		if err := q.validate(); err == nil {
+			t.Errorf("an entry whose frozen %s differs from the one it selects validated; "+
+				"the release would claim a platform it never measured", name)
+		}
+	}
+}
+
+// TestTwoEntriesForOnePlatformAreRefused: which one qualified a host
+// would be whichever came first.
+func TestTwoEntriesForOnePlatformAreRefused(t *testing.T) {
+	ref := Reference{SchemaVersion: 2, Platforms: []Qualified{frozenQualified(), frozenQualified()}}
+	if err := ref.validate(); err == nil {
+		t.Error("one platform recorded twice validated, so a host is qualified against " +
+			"whichever entry the file happens to list first")
 	}
 }
 
@@ -86,7 +138,7 @@ func TestManifestRequiresEveryFrozenFact(t *testing.T) {
 		t.Fatal("an incomplete frozen reference validated")
 	}
 
-	missingBoolean := frozenReference()
+	missingBoolean := frozenQualified()
 	missingBoolean.Platform.Rootless = nil
 	if err := missingBoolean.validate(); err == nil {
 		t.Fatal("a frozen reference without the rootless observation validated")
@@ -95,7 +147,7 @@ func TestManifestRequiresEveryFrozenFact(t *testing.T) {
 
 // TestCompareNamesEveryDifference keeps qualification evidence fail-closed.
 func TestCompareNamesEveryDifference(t *testing.T) {
-	ref := frozenReference()
+	ref := frozenQualified()
 
 	if got := ref.Compare(ref.Platform); len(got) != 0 {
 		t.Errorf("the reference platform mismatched itself: %v", got)
@@ -122,7 +174,7 @@ func TestCompareNamesEveryDifference(t *testing.T) {
 }
 
 func TestRuntimeComparisonUsesOnlyDockerFacts(t *testing.T) {
-	ref := frozenReference()
+	ref := frozenQualified()
 	observed := Facts{
 		Engine:        ref.Platform.Engine,
 		API:           ref.Platform.API,
@@ -151,7 +203,7 @@ func testPolicy() Policy {
 	}
 }
 
-func frozenReference() Qualified {
+func frozenQualified() Qualified {
 	return Qualified{
 		Status:   ReferenceStatusFrozen,
 		Policy:   testPolicy(),

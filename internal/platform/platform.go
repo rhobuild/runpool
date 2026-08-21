@@ -207,16 +207,28 @@ func (q Qualified) validate() error {
 	//
 	// What is required is that the choice is stated. A policy missing a
 	// field records a selection nobody can check the host against.
+	// Two of these are rules rather than choices, and stay values. The
+	// channel is what the guide and the lock's own comment require --
+	// evidence from a nightly build is evidence about something no
+	// operator installs -- and the selection names how the target was
+	// picked, which is the sentence the reviewer signed off.
+	if q.Policy.DockerChannel != "stable" {
+		return fmt.Errorf("the %s selection policy takes Docker from the %q channel; release "+
+			"evidence comes from the stable channel an operator installs from", q.Policy.Arch,
+			q.Policy.DockerChannel)
+	}
+	if q.Policy.Selection != "latest-stable-at-policy-review" {
+		return fmt.Errorf("the %s selection policy selects by %q; that string is what a "+
+			"reviewer signed off on, not free text", q.Policy.Arch, q.Policy.Selection)
+	}
 	missing := []string{}
 	for name, value := range map[string]string{
-		"os":             q.Policy.OS,
-		"os_version":     q.Policy.OSVersion,
-		"os_codename":    q.Policy.OSCodename,
-		"docker_channel": q.Policy.DockerChannel,
-		"docker_source":  q.Policy.DockerSource,
-		"selection":      q.Policy.Selection,
-		"target_engine":  q.Policy.TargetEngine,
-		"reviewed":       q.Policy.Reviewed,
+		"os":            q.Policy.OS,
+		"os_version":    q.Policy.OSVersion,
+		"os_codename":   q.Policy.OSCodename,
+		"docker_source": q.Policy.DockerSource,
+		"target_engine": q.Policy.TargetEngine,
+		"reviewed":      q.Policy.Reviewed,
 	} {
 		if value == "" {
 			missing = append(missing, name)
@@ -246,6 +258,26 @@ func (q Qualified) validate() error {
 	default:
 		return fmt.Errorf("platform manifest status %q is unsupported for %s",
 			q.Status, q.Policy.Arch)
+	}
+
+	// The facts have to be the platform the entry claims. Nothing else
+	// relates the two: selection reads the policy and comparison reads
+	// the facts, so an entry labelled one platform and frozen from
+	// another qualifies neither -- the host that ran the suites is told
+	// nobody qualified it, and a host of the claimed platform is told the
+	// reference is something else. That is a wrong qualification rather
+	// than a differently shaped one, and it is what naming a single
+	// architecture used to make unrepresentable.
+	for name, pair := range map[string][2]string{
+		"arch":        {q.Policy.Arch, q.Platform.Arch},
+		"os":          {q.Policy.OS, q.Platform.OS},
+		"os_version":  {q.Policy.OSVersion, q.Platform.OSVersion},
+		"os_codename": {q.Policy.OSCodename, q.Platform.OSCodename},
+	} {
+		if want, got := pair[0], pair[1]; got != "" && got != want {
+			return fmt.Errorf("the %s entry selects %s %q and froze %q; the facts are not from "+
+				"the platform the entry claims", q.Policy.Arch, name, want, got)
+		}
 	}
 
 	missing = nil
@@ -286,7 +318,8 @@ func (q Qualified) validate() error {
 // set of exact host facts has replaced the pending reference.
 func (q Qualified) RequireFrozen() error {
 	if q.Status != ReferenceStatusFrozen {
-		return fmt.Errorf("release-qualification reference is %s; capture and review the installed stable Docker platform before creating a candidate", q.Status)
+		return fmt.Errorf("the %s release-qualification reference is %s; capture and review the "+
+			"installed stable Docker platform before creating a candidate", q.Policy.Arch, q.Status)
 	}
 	return nil
 }

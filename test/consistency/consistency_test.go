@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,21 +111,25 @@ func TestDocumentedEngineVersionsMatchTheLock(t *testing.T) {
 		}
 		targets[p.Policy.TargetEngine] = true
 	}
-	if len(targets) != 1 {
-		t.Fatalf("the platforms select %d different engines (%v); a document naming one of them "+
-			"is not stale, and this check cannot tell which", len(targets), targets)
+	// Every selected engine, not one. Two platforms qualified months
+	// apart legitimately pin different ones, and that is what a
+	// per-entry target is for -- so a document naming any of them is
+	// current, and only a version naming none is stale.
+	majors := map[string]bool{}
+	for target := range targets {
+		majors[target[:strings.Index(target, ".")]] = true
 	}
-	var target string
-	for t := range targets {
-		target = t
-	}
-	major := target[:strings.Index(target, ".")]
 
 	out, err := exec.Command("git", "-C", repoPath(), "ls-files", "*.md").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	version := regexp.MustCompile(`\b` + regexp.QuoteMeta(major) + `\.\d+\.\d+\b`)
+	alternatives := make([]string, 0, len(majors))
+	for major := range majors {
+		alternatives = append(alternatives, regexp.QuoteMeta(major))
+	}
+	slices.Sort(alternatives)
+	version := regexp.MustCompile(`\b(?:` + strings.Join(alternatives, "|") + `)\.\d+\.\d+\b`)
 	var stale []string
 	for _, file := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.HasPrefix(file, "docs/adrs/") {
@@ -135,8 +140,14 @@ func TestDocumentedEngineVersionsMatchTheLock(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, m := range version.FindAllString(string(body), -1) {
-			if m != target {
-				stale = append(stale, fmt.Sprintf("%s mentions engine %s; the lock names %s", file, m, target))
+			if !targets[m] {
+				selected := make([]string, 0, len(targets))
+				for engine := range targets {
+					selected = append(selected, engine)
+				}
+				slices.Sort(selected)
+				stale = append(stale, fmt.Sprintf("%s mentions engine %s; the lock selects %s",
+					file, m, strings.Join(selected, ", ")))
 			}
 		}
 	}
@@ -376,5 +387,66 @@ func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
 	}
 	for _, f := range found {
 		t.Error(f)
+	}
+}
+
+// TestEveryReaderOfThePlatformLockKnowsItsShape: the lock is parsed
+// outside Go too, and nothing there fails until a release.
+//
+// The release gate assembles its record with an inline reader. A change
+// to the lock's shape leaves that reader compiling nothing and failing
+// no test — it surfaces the first time somebody freezes an entry and
+// cuts a candidate, and it surfaces as a claim about the reference that
+// is not true of it.
+//
+// This is a text check, which is weaker than running the reader. Running
+// it needs the reader to exist outside the workflow, and that is worth
+// doing; until then this is what stands between a schema change and a
+// release.
+func TestEveryReaderOfThePlatformLockKnowsItsShape(t *testing.T) {
+	raw, err := os.ReadFile(repoPath("build", "platform.lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lock map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := lock["platforms"]; !ok {
+		t.Fatal("the lock has no `platforms` key, so this check is about a shape that is gone")
+	}
+
+	out, err := exec.Command("git", "-C", repoPath(), "ls-files",
+		".github/workflows/*.yml", "scripts/*/*.sh", "scripts/*/*.py").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, file := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if file == "" {
+			continue
+		}
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "platform.lock.json") {
+			continue
+		}
+		checked++
+		// A reader that only names the file may just be pointing at it in
+		// a comment; one that indexes into it has to know the shape.
+		for _, gone := range []string{`reference["policy"]`, `reference["platform"]`,
+			`reference.get("status")`, `.policy.`, `.platform.arch`} {
+			if strings.Contains(text, gone) {
+				t.Errorf("%s reads the lock as %s, which the file has not had since it "+
+					"became a list of platforms; this fails at release time, saying "+
+					"something untrue about the reference", file, gone)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no file outside Go names the lock, so this proves nothing")
 	}
 }

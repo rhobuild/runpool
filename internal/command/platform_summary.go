@@ -2,6 +2,7 @@ package command
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/platform"
@@ -21,11 +22,16 @@ func releaseQualificationReference() map[string]string {
 	if err != nil {
 		return map[string]string{"error": err.Error()}
 	}
+	// The whole platform, not the architecture alone. A darwin build of
+	// the same architecture would otherwise report a Debian host's facts
+	// two lines below saying it is darwin, and the branch below would
+	// read as a platform check while being an architecture one.
+	here := runtime.GOOS + "/" + runtime.GOARCH
 	qualified, ok := ref.For(runtime.GOARCH)
-	if !ok {
+	if !slices.Contains(platform.Buildable, here) || !ok {
 		return map[string]string{
 			"status":    "not-qualified-here",
-			"arch":      runtime.GOARCH,
+			"platform":  here,
 			"qualified": strings.Join(ref.Arches(), ", "),
 		}
 	}
