@@ -115,7 +115,11 @@ const (
 	// sessionConflictGrace is how long a broker may hold a predecessor's
 	// session before the wait stops being ordinary. The broker expires a
 	// session by inactivity well inside this, so past it the binding is
-	// serving nothing for a reason no report would otherwise carry.
+	// taking no new work for a reason that will not resolve itself. It
+	// keeps serving what it already holds, and the reason it records
+	// changes to say both of those things -- the report holds one string
+	// per binding, and waiting one out and being stuck behind one have to
+	// read differently in it.
 	sessionConflictGrace = 5 * time.Minute
 )
 
@@ -475,7 +479,12 @@ type Controller struct {
 	// reopen path; zero means the package default. Held for the same
 	// reason as pollBackoff: ten seconds is not something a test waits.
 	conflictBackoff time.Duration
-	store           *store.Store
+	// conflictGrace overrides sessionConflictGrace; zero means the
+	// package default. Held for the same reason as the two above: five
+	// minutes is not something a test waits, and what happens past it is
+	// the whole of this behaviour.
+	conflictGrace time.Duration
+	store         *store.Store
 	// objects is the daemon as reconciliation sees it: an inventory and
 	// a way to remove from it. Creating capsules goes through caps, and
 	// awaiting them through wait.

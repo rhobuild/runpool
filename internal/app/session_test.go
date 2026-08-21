@@ -3,13 +3,17 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+
+	"github.com/rhobuild/runpool/internal/store"
 )
 
 // stubSession is a message session a test can break on purpose. The
@@ -408,4 +412,133 @@ func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// TestASessionThatWillNotClearReportsSomethingElse: the report is one
+// string per binding, so waiting a conflict out and being stuck behind
+// one have to read differently in it.
+//
+// A conflict is the ordinary shape of a restart, and while the wait is
+// ordinary nothing is recorded at all — the binding is not failing to
+// reach its provider, and saying so would put every restart in the
+// report. Past the point a session expires by inactivity it is not
+// ordinary any more, and that is what the record has to carry: an
+// operator reading `runpool status` decides whether to act, and the log
+// level is not where they look.
+//
+// Both halves are asserted, and each is gated on the loop's own attempt
+// count rather than on the clock, so neither can pass by sampling at a
+// convenient moment.
+func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
+	read := func(t *testing.T, h *harness) string {
+		t.Helper()
+		var reason string
+		if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
+			bindings, err := tx.Bindings()
+			for _, b := range bindings {
+				if b.ID == h.bind.bindingID {
+					reason = b.Contact.LastError
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return reason
+	}
+
+	// conflicting runs the loop against a broker that always answers 409,
+	// and returns once it has answered n times.
+	conflicting := func(t *testing.T, h *harness, grace time.Duration, n int64) {
+		t.Helper()
+		h.srv.pollBackoff = time.Hour
+		h.srv.conflictBackoff = time.Millisecond
+		h.srv.conflictGrace = grace
+
+		var attempts atomic.Int64
+		reached := make(chan struct{})
+		var once sync.Once
+		h.bind.newSession = func(context.Context) (providerSession, error) {
+			if attempts.Add(1) >= n {
+				once.Do(func() { close(reached) })
+			}
+			return nil, errors.New(`the session "abc" already exists, status="409 Conflict"`)
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			h.srv.loop(ctx, h.bind)
+		}()
+		select {
+		case <-reached:
+		case <-time.After(10 * time.Second):
+			cancel()
+			<-done
+			t.Fatalf("the loop answered fewer than %d conflicts", n)
+		}
+		cancel()
+		<-done
+	}
+
+	t.Run("while the wait is ordinary", func(t *testing.T) {
+		h := newHarness(t, 1)
+		// An hour of grace, so every one of these conflicts is inside it.
+		conflicting(t, h, time.Hour, 5)
+		if got := read(t, h); got != "" {
+			t.Errorf("five conflicts inside the grace recorded %q. Waiting one out is the "+
+				"ordinary shape of a restart, and an operator reading the report cannot tell "+
+				"it from a session that will not clear.", got)
+		}
+	})
+
+	t.Run("once it is not", func(t *testing.T) {
+		h := newHarness(t, 1)
+		conflicting(t, h, 20*time.Millisecond, 200)
+		got := read(t, h)
+		if !strings.Contains(got, "not clearing on its own") {
+			t.Fatalf("the report says %q past the grace; it never distinguished a session that "+
+				"will not clear from one being waited out", got)
+		}
+		if !strings.Contains(got, "already queued") {
+			t.Errorf("the reason is %q; it has to say the binding is still serving what it "+
+				"has, because an operator reading it decides whether to act", got)
+		}
+	})
+}
+
+// TestAnUnrelatedOutageDoesNotAgeTheConflict: the run of conflicts is a
+// run of conflicts.
+//
+// Whether a session is clearing is judged from how long this binding has
+// been conflicting. A failure that is not a conflict says nothing about
+// that, and counting the time it lasted would have a binding report a
+// session that will not clear before it has waited out a single one.
+func TestAnUnrelatedOutageDoesNotAgeTheConflict(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.pollBackoff = time.Millisecond
+	h.srv.conflictBackoff = time.Millisecond
+	h.srv.conflictGrace = time.Hour
+
+	// One conflict starts the run; an unrelated failure has to end it.
+	h.bind.conflictSince = time.Now().Add(-2 * time.Hour)
+	h.bind.newSession = func(context.Context) (providerSession, error) {
+		return nil, errors.New("the broker is unreachable")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(ctx, h.bind)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if !h.bind.conflictSince.IsZero() {
+		t.Error("a failure that was not a conflict left the run of conflicts standing, so the " +
+			"next conflict is judged against time this binding spent not conflicting")
+	}
 }

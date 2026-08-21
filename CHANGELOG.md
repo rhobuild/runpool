@@ -305,6 +305,16 @@ by its public and operational effects.
   capsule whose job is running and delete the records that clean up after
   it. Cache lane collection already stated that order for the same
   reason.
+- **A session that will not clear says so in the report, not only in the
+  log.** The broker holds a crashed predecessor's session until it
+  expires by inactivity, and waiting that out is the ordinary shape of a
+  restart. Past the point one expires by, it is not: the reason recorded
+  against the binding changes to say the session is not clearing on its
+  own and that only work already queued is being served, so
+  `runpool status` distinguishes waiting from stuck instead of showing
+  the same line either way. The binding keeps waiting, because the work
+  it can serve without a broker is work it would otherwise stop serving,
+  and the other bindings are unaffected.
 - **The provider's own answer outranks the capsule's.** Every other
   account of whether a job was handed over comes from inside the capsule
   — the state it reports, the code it exits with — and the capsule is
