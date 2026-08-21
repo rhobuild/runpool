@@ -305,6 +305,18 @@ by its public and operational effects.
   capsule whose job is running and delete the records that clean up after
   it. Cache lane collection already stated that order for the same
   reason.
+- **What a release builds for and what it qualifies are two lists.**
+  `build/platform.lock.json` records one entry per platform whose suites
+  were run and whose host facts were reviewed, so qualifying a second one
+  is an added entry rather than a change to the file that is itself the
+  proof of the gate. A host with no entry fails as not qualified on that
+  platform, naming the ones that are, rather than as an architecture
+  mismatch. `build/images.lock.json` states what a release builds for,
+  which today is more than what has been qualified — and the support
+  matrix says which is which instead of letting one imply the other.
+  Neither the architecture nor the distribution is fixed by the code that
+  reads the record: what it requires is that the selection is stated, and
+  that the platform is one a release can build for.
 - **A session that will not clear says so in the report, not only in the
   log.** The broker holds a crashed predecessor's session until it
   expires by inactivity, and waiting that out is the ordinary shape of a

@@ -17,7 +17,13 @@ import (
 var imageLockJSON []byte
 
 type imageLock struct {
-	Images map[string]struct {
+	// Platforms are what a release builds for. They are not what it
+	// qualifies: build/platform.lock.json records the platforms the
+	// suites were run on, and a release may publish for one nobody has
+	// run. Keeping the two lists apart is what lets either sentence be
+	// said without implying the other.
+	Platforms []string `json:"platforms"`
+	Images    map[string]struct {
 		Ref    string `json:"ref"`
 		Digest string `json:"digest"`
 	} `json:"images"`

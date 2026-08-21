@@ -86,16 +86,37 @@ func TestDocumentedEngineVersionsMatchTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	var lock struct {
-		Policy struct {
-			TargetEngine string `json:"target_engine"`
-		} `json:"policy"`
+		Platforms []struct {
+			Policy struct {
+				Arch         string `json:"arch"`
+				TargetEngine string `json:"target_engine"`
+			} `json:"policy"`
+		} `json:"platforms"`
 	}
 	if err := json.Unmarshal(raw, &lock); err != nil {
 		t.Fatal(err)
 	}
-	target := lock.Policy.TargetEngine
-	if target == "" {
-		t.Fatal("build/platform.lock.json names no target engine, so this proves nothing")
+	if len(lock.Platforms) == 0 {
+		t.Fatal("build/platform.lock.json names no platform at all, so this proves nothing")
+	}
+	// Every platform's engine, not the first one's. They are selected by
+	// one policy today and need not stay that way, and a page naming a
+	// version no platform selects is the thing this exists to catch.
+	targets := map[string]bool{}
+	for _, p := range lock.Platforms {
+		if p.Policy.TargetEngine == "" {
+			t.Fatalf("the %s entry names no target engine, so this proves nothing about it",
+				p.Policy.Arch)
+		}
+		targets[p.Policy.TargetEngine] = true
+	}
+	if len(targets) != 1 {
+		t.Fatalf("the platforms select %d different engines (%v); a document naming one of them "+
+			"is not stale, and this check cannot tell which", len(targets), targets)
+	}
+	var target string
+	for t := range targets {
+		target = t
 	}
 	major := target[:strings.Index(target, ".")]
 
