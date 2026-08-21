@@ -95,6 +95,6 @@ version. Breaking either V1 contract requires an explicit version change.
 
 See the [support matrix](reference/support-matrix.md) for what runs on
 what, and [SUPPORT.md](../SUPPORT.md) for where to ask. The release-reference
-platform is one exact configuration, frozen in `build/platform.lock.json` and
-checked by the contract suite rather than assumed; it does not replace the
-runtime compatibility range.
+platforms are exact configurations, one per platform qualified, frozen in
+`build/platform.lock.json` and checked by the contract suite rather than
+assumed; they do not replace the runtime compatibility range.

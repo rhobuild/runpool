@@ -28,15 +28,24 @@ Docker Engine from the official stable channel
 https://download.docker.com/linux/debian
 ```
 
-Architecture is checked against the lock, which records one policy and
-names `amd64` in it. A host of another architecture fails the comparison
-for that reason — not because the suites would fail on it. Recording
-several qualified platforms side by side is the subject of the
-[multiplatform locks decision](../adrs/2026-08-17-multiplatform-locks.md),
-accepted with its implementation pending; until it lands, the lock holds
-exactly one platform and the
-[support matrix](../reference/support-matrix.md) states what has been
-observed and what has not.
+That block describes the entry the lock holds today. It is not a rule:
+the lock records one entry per platform qualified, each with its own
+policy and its own frozen facts, and neither the distribution nor the
+architecture is fixed by the code that reads it. Qualifying a second
+platform is an added entry rather than a change to the file's shape,
+which matters because the file is itself the proof of the gate.
+
+A host with no entry fails as *not qualified on this platform*, naming
+the ones that are — a different answer from a host that was measured and
+differed. What a release builds for is stated separately in
+[`build/images.lock.json`](../../build/images.lock.json), and neither
+list promises the other: see the
+[support matrix](../reference/support-matrix.md).
+
+What the reader still refuses is a platform no release builds for, and a
+reference frozen after the candidate exists. The first would record
+evidence about something nobody can run; the second is evidence that
+could have been written to fit what it was meant to judge.
 
 ## Sizing
 

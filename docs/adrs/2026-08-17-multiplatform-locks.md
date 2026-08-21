@@ -1,6 +1,7 @@
 # A lock records the platforms that were qualified, not the only one that works
 
-**Status:** accepted; implementation pending
+**Status:** accepted; the lock shape and the reader are built, the
+per-platform publishing is not
 **Date:** 2026-08-17
 
 `build/platform.lock.json` carries a single `policy.arch`, so one lock
@@ -78,3 +79,41 @@ without that evidence. Neither sentence promises the other.
 - Nothing is asserted about a platform that was never run. An
   unqualified platform is unverified, which is neither a promise nor a
   denial.
+
+## What is built
+
+The first, second and fourth decisions above. `platform.lock.json`
+records a list of entries, each with its own policy and its own facts;
+the reader selects by the platform being measured and reports a platform
+with no entry as one nobody has qualified rather than as an architecture
+mismatch. `images.lock.json` declares the platforms a release builds for.
+The support matrix states the two lists separately.
+
+Two things were loosened beyond what this record asked for, on the same
+argument it makes. The distribution was hard-coded next to the
+architecture, so a host on another one could not be recorded either; the
+reader now requires the selection to be *stated* rather than to be a
+particular value. And the operating system is derived from what the
+pinned images publish instead of being written as a rule, because that
+is where it actually comes from.
+
+## What is not
+
+The third decision: the release publishing an index per image, and the
+standalone binaries per platform. Neither is built. The release workflow
+builds and pushes one image and ships one `linux/amd64` binary; what
+exists per platform is a compile-only gate in `ci.yml`, which builds to
+`/dev/null` and produces no artifact.
+
+What is verified is that it can be done: the capsule image builds for
+`linux/arm64`, with the Go stage compiling rather than reusing a cached
+layer. What is not is the publishing, which needs `buildx` with a push
+and a different way of reading back the digest — `docker image inspect`
+returns nothing after a multi-platform push, and that digest is what is
+injected as the controller's capsule reference. Its only real
+verification is a release run.
+
+Until it lands, a release publishes one platform's image while the lock
+declares two. The support matrix's *built* list is therefore a statement
+about what the build can produce, not about what the last release
+pushed.

@@ -21,6 +21,6 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-17 | [Capsule image substitution](2026-08-17-capsule-image-substitution.md) — a tier may name its capsule, and the capsule declares its protocol | accepted |
 | 2026-08-17 | [GitHub App credentials](2026-08-17-github-app-credentials.md) — a deployment authenticates as an App, not only as a person | accepted |
 | 2026-08-17 | [Job timeout](2026-08-17-job-timeout.md) — the lease ceiling is a backstop above the provider's own maximum | accepted |
-| 2026-08-17 | [Multiplatform locks](2026-08-17-multiplatform-locks.md) — a lock records the platforms qualified, not the only one that works | accepted; implementation pending |
+| 2026-08-17 | [Multiplatform locks](2026-08-17-multiplatform-locks.md) — a lock records the platforms qualified, not the only one that works | accepted; publishing pending |
 | 2026-08-17 | [Target hosts and scopes](2026-08-17-target-hosts-and-scopes.md) — any host the protocol serves, at any scope it defines | accepted |
 | 2026-08-20 | [The session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md) — why giving up costs more than waiting, and what the report says instead | accepted |

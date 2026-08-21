@@ -561,6 +561,13 @@ func TestHostInfo(t *testing.T) {
 	if arch == "x86_64" {
 		arch = "amd64"
 	}
+	// The entry for the host being measured. A host with none is not a
+	// host that failed the reference; it is one nobody has qualified, and
+	// saying so is what keeps this from reading as a broken release.
+	qualified, ok := reference.For(arch)
+	if !ok {
+		t.Fatalf("not the release-qualification reference — %v", reference.NotQualified(arch))
+	}
 	rootless := info.Rootless
 	observed := platform.Facts{
 		Engine:        info.ServerVersion,
@@ -570,14 +577,16 @@ func TestHostInfo(t *testing.T) {
 		CgroupDriver:  info.CgroupDriver,
 		Rootless:      &rootless,
 	}
-	for _, m := range reference.CompareDockerFacts(observed) {
+	for _, m := range qualified.CompareDockerFacts(observed) {
 		t.Errorf("not the release-qualification reference — %s", m)
 	}
-	// OSType and Architecture use the daemon's own spelling, which
-	// differs from the manifest's (x86_64 against amd64), so they are
-	// compared here rather than by mapping one onto the other.
-	if info.OSType != "linux" || info.Architecture != "x86_64" {
-		t.Errorf("platform = %s/%s; the qualification reference is linux/x86_64", info.OSType, info.Architecture)
+	// OSType is compared here rather than through the manifest, which
+	// records no operating-system kind. The architecture is not: it is
+	// what selected the entry above, so comparing it again would compare
+	// a value against itself.
+	if info.OSType != "linux" {
+		t.Errorf("platform = %s/%s; every qualification reference is a Linux host",
+			info.OSType, info.Architecture)
 	}
 	t.Logf("release-qualification reference confirmed: engine %s, api %s, cgroup v%s/%s, rootful",
 		info.ServerVersion, info.APIVersion, info.CgroupVersion, info.CgroupDriver)

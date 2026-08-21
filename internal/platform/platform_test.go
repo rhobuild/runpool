@@ -3,6 +3,7 @@ package platform
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -25,26 +26,108 @@ func TestManifestSelectsTheLatestReviewedStableEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Status != ReferenceStatusPending {
-		t.Errorf("status = %q; want pending until the server facts are frozen", ref.Status)
+	amd64, ok := ref.For("amd64")
+	if !ok {
+		t.Fatalf("no entry for amd64; the release records %v", ref.Arches())
 	}
-	if ref.Policy.TargetEngine != "29.7.2" || ref.Policy.DockerChannel != "stable" {
-		t.Errorf("Docker policy = %+v; want stable Engine 29.7.2", ref.Policy)
+	if amd64.Status != ReferenceStatusPending {
+		t.Errorf("status = %q; want pending until the server facts are frozen", amd64.Status)
 	}
-	if err := ref.RequireFrozen(); err == nil {
+	if amd64.Policy.TargetEngine != "29.7.2" || amd64.Policy.DockerChannel != "stable" {
+		t.Errorf("Docker policy = %+v; want stable Engine 29.7.2", amd64.Policy)
+	}
+	if err := amd64.RequireFrozen(); err == nil {
 		t.Fatal("a pending reference was accepted for release qualification")
 	}
-	if got := ref.Compare(Facts{}); len(got) != 1 || got[0].Property != "reference_status" {
+	if got := amd64.Compare(Facts{}); len(got) != 1 || got[0].Property != "reference_status" {
 		t.Fatalf("pending comparison = %v; want a reference_status mismatch", got)
 	}
 }
 
+// TestAPlatformWithNoEntryIsNotAFailedOne: a host nobody has run the
+// suites on and a host that ran them and differed are different answers,
+// and the file's shape used to make only the second expressible.
+func TestAPlatformWithNoEntryIsNotAFailedOne(t *testing.T) {
+	// Two entries this test owns, rather than whatever the lock holds. An
+	// assertion written against the file cannot tell "arm64 was qualified
+	// later" from "selection is broken", and the version of this that
+	// skipped on the first was switched off by the second.
+	amd := frozenQualified()
+	arm := frozenQualified()
+	arm.Policy.Arch, arm.Platform.Arch = "arm64", "arm64"
+	arm.Platform.Kernel = "6.12.0-arm64"
+	ref := Reference{SchemaVersion: 2, Platforms: []Qualified{amd, arm}}
+	if err := ref.validate(); err != nil {
+		t.Fatalf("two platforms did not validate: %v", err)
+	}
+
+	for _, arch := range []string{"amd64", "arm64"} {
+		got, ok := ref.For(arch)
+		if !ok {
+			t.Fatalf("no entry for %s in a record holding %v", arch, ref.Arches())
+		}
+		if got.Policy.Arch != arch {
+			t.Errorf("For(%q) returned the %s entry; a host is then qualified against another "+
+				"platform's facts, which is the failure this record exists to stop",
+				arch, got.Policy.Arch)
+		}
+	}
+	if _, ok := ref.For("riscv64"); ok {
+		t.Error("a platform with no entry was matched to one")
+	}
+
+	err := ref.NotQualified("riscv64")
+	if err == nil {
+		t.Fatal("an unqualified platform produced no error")
+	}
+	for _, want := range []string{"riscv64", "amd64", "arm64"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error is %q; it has to name the platform asked about and the ones "+
+				"that are qualified, or it reads as a broken release rather than an "+
+				"unqualified host", err)
+		}
+	}
+}
+
+// TestAnEntryFrozenFromAnotherPlatformIsRefused: selection reads the
+// policy and comparison reads the facts, so an entry labelled one
+// platform and frozen from another qualifies neither.
+//
+// The host that ran the suites is told nobody qualified it, and a host of
+// the claimed platform is told the reference is something else. Naming a
+// single architecture in the reader used to make this unrepresentable,
+// and nothing replaced that when the name came out.
+func TestAnEntryFrozenFromAnotherPlatformIsRefused(t *testing.T) {
+	for name, break_ := range map[string]func(*Qualified){
+		"arch":        func(q *Qualified) { q.Platform.Arch = "arm64" },
+		"os":          func(q *Qualified) { q.Platform.OS = "ubuntu" },
+		"os_version":  func(q *Qualified) { q.Platform.OSVersion = "24.04" },
+		"os_codename": func(q *Qualified) { q.Platform.OSCodename = "noble" },
+	} {
+		q := frozenQualified()
+		break_(&q)
+		if err := q.validate(); err == nil {
+			t.Errorf("an entry whose frozen %s differs from the one it selects validated; "+
+				"the release would claim a platform it never measured", name)
+		}
+	}
+}
+
+// TestTwoEntriesForOnePlatformAreRefused: which one qualified a host
+// would be whichever came first.
+func TestTwoEntriesForOnePlatformAreRefused(t *testing.T) {
+	ref := Reference{SchemaVersion: 2, Platforms: []Qualified{frozenQualified(), frozenQualified()}}
+	if err := ref.validate(); err == nil {
+		t.Error("one platform recorded twice validated, so a host is qualified against " +
+			"whichever entry the file happens to list first")
+	}
+}
+
 func TestManifestRequiresEveryFrozenFact(t *testing.T) {
-	bad := Reference{
-		SchemaVersion: 1,
-		Status:        ReferenceStatusFrozen,
-		Policy:        testPolicy(),
-		Recorded:      "2026-08-14",
+	bad := Qualified{
+		Status:   ReferenceStatusFrozen,
+		Policy:   testPolicy(),
+		Recorded: "2026-08-14",
 		Platform: Facts{
 			OS: "debian", OSVersion: "13", Arch: "amd64",
 			Engine: "29.7.2", CgroupVersion: "2", CgroupDriver: "systemd",
@@ -55,7 +138,7 @@ func TestManifestRequiresEveryFrozenFact(t *testing.T) {
 		t.Fatal("an incomplete frozen reference validated")
 	}
 
-	missingBoolean := frozenReference()
+	missingBoolean := frozenQualified()
 	missingBoolean.Platform.Rootless = nil
 	if err := missingBoolean.validate(); err == nil {
 		t.Fatal("a frozen reference without the rootless observation validated")
@@ -64,7 +147,7 @@ func TestManifestRequiresEveryFrozenFact(t *testing.T) {
 
 // TestCompareNamesEveryDifference keeps qualification evidence fail-closed.
 func TestCompareNamesEveryDifference(t *testing.T) {
-	ref := frozenReference()
+	ref := frozenQualified()
 
 	if got := ref.Compare(ref.Platform); len(got) != 0 {
 		t.Errorf("the reference platform mismatched itself: %v", got)
@@ -91,7 +174,7 @@ func TestCompareNamesEveryDifference(t *testing.T) {
 }
 
 func TestRuntimeComparisonUsesOnlyDockerFacts(t *testing.T) {
-	ref := frozenReference()
+	ref := frozenQualified()
 	observed := Facts{
 		Engine:        ref.Platform.Engine,
 		API:           ref.Platform.API,
@@ -120,12 +203,11 @@ func testPolicy() Policy {
 	}
 }
 
-func frozenReference() Reference {
-	return Reference{
-		SchemaVersion: 1,
-		Status:        ReferenceStatusFrozen,
-		Policy:        testPolicy(),
-		Recorded:      "2026-08-14",
+func frozenQualified() Qualified {
+	return Qualified{
+		Status:   ReferenceStatusFrozen,
+		Policy:   testPolicy(),
+		Recorded: "2026-08-14",
 		Platform: Facts{
 			OS:                "debian",
 			OSVersion:         "13",
@@ -150,3 +232,77 @@ func frozenReference() Reference {
 }
 
 func boolFact(value bool) *bool { return &value }
+
+// TestTheSelectionPolicyIsAChoiceNotARule: which distribution was
+// selected is reviewed, not validated.
+//
+// Naming one in the validator would do to the operating system what
+// naming a single architecture did to the machine: a host that ran the
+// suites and passed would be refused for not being the one the file can
+// express, and the refusal would read as a broken manifest rather than
+// as an unqualified platform. What has to be true is that the choice is
+// stated, because a policy missing a field records a selection nobody
+// can check a host against.
+func TestTheSelectionPolicyIsAChoiceNotARule(t *testing.T) {
+	elsewhere := testPolicy()
+	elsewhere.OS = "ubuntu"
+	elsewhere.OSVersion = "24.04"
+	elsewhere.OSCodename = "noble"
+	elsewhere.DockerSource = "https://download.docker.com/linux/ubuntu"
+	if err := (Qualified{Status: ReferenceStatusPending, Policy: elsewhere}).validate(); err != nil {
+		t.Errorf("a qualification on another distribution was refused: %v.\n"+
+			"The gate is meant to measure the host, and a host it will not let anyone "+
+			"record is a host it is not measuring.", err)
+	}
+
+	for _, blank := range []func(*Policy){
+		func(p *Policy) { p.OS = "" },
+		func(p *Policy) { p.OSVersion = "" },
+		func(p *Policy) { p.OSCodename = "" },
+		func(p *Policy) { p.DockerChannel = "" },
+		func(p *Policy) { p.DockerSource = "" },
+		func(p *Policy) { p.Selection = "" },
+		func(p *Policy) { p.TargetEngine = "" },
+		func(p *Policy) { p.Reviewed = "" },
+	} {
+		policy := testPolicy()
+		blank(&policy)
+		if err := (Qualified{Status: ReferenceStatusPending, Policy: policy}).validate(); err == nil {
+			t.Errorf("a selection policy missing a field validated: %+v", policy)
+		}
+	}
+
+	// The freeze point stays a rule. A reference reviewed after the
+	// candidate exists is a reference the candidate could have been
+	// built against.
+	late := testPolicy()
+	late.FreezePoint = "after-release-candidate"
+	if err := (Qualified{Status: ReferenceStatusPending, Policy: late}).validate(); err == nil {
+		t.Error("a reference frozen after the candidate validated, so the evidence could have " +
+			"been written to fit what it was meant to judge")
+	}
+}
+
+// TestAnyBuildablePlatformCanBeRecorded: the record has to be able to
+// hold a qualification for every platform a release can produce.
+//
+// Only one is recorded today, so nothing else exercises the entries the
+// file does not yet contain — and a check narrowed back to the one that
+// is there would look correct against this file for as long as it stays
+// the only one.
+func TestAnyBuildablePlatformCanBeRecorded(t *testing.T) {
+	for _, arch := range BuildableArches() {
+		policy := testPolicy()
+		policy.Arch = arch
+		if err := (Qualified{Status: ReferenceStatusPending, Policy: policy}).validate(); err != nil {
+			t.Errorf("a qualification for %s was refused: %v.\nA release builds for it, so a "+
+				"host that ran the suites there has nowhere to be recorded.", arch, err)
+		}
+	}
+	unbuildable := testPolicy()
+	unbuildable.Arch = "riscv64"
+	if err := (Qualified{Status: ReferenceStatusPending, Policy: unbuildable}).validate(); err == nil {
+		t.Error("a qualification was accepted for a platform no release builds for, so the " +
+			"record would claim evidence about something nobody can run")
+	}
+}

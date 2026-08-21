@@ -468,6 +468,19 @@ by its public and operational effects.
 
 ### Release qualification and gates
 
+- **What a release builds for and what it qualifies are two lists.**
+  `build/platform.lock.json` records one entry per platform whose suites
+  were run and whose host facts were reviewed, so qualifying a second one
+  is an added entry rather than a change to the file that is itself the
+  proof of the gate. A host with no entry fails as not qualified on that
+  platform, naming the ones that are, rather than as an architecture
+  mismatch. `build/images.lock.json` states what a release builds for,
+  which today is more than what has been qualified — and the support
+  matrix says which is which instead of letting one imply the other.
+  Neither the architecture nor the distribution is fixed by the code that
+  reads the record: what it requires is that the selection is stated, and
+  that the platform is one a release can build for.
+
 - A release qualifies the exact digest-qualified controller and capsule
   candidates it later promotes; no image is rebuilt after qualification.
 - Platform qualification compares every locked host fact and fails when a

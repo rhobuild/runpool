@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rhobuild/runpool/internal/platform"
 )
 
 // The embedded lock is what the controller executes; the reviewed lock
@@ -87,4 +90,36 @@ func TestCapsuleImageResolution(t *testing.T) {
 	if _, err := CapsuleImage(func(string) string { return "" }, "ghcr.io/rhobuild/runpool/capsule:v1"); err == nil {
 		t.Fatal("a mutable release capsule reference was accepted")
 	}
+}
+
+// TestTheLockBuildsForEveryPlatformARelease Can: what a release builds
+// for is bounded by what the pinned images publish.
+//
+// The two locks answer different questions — this one what is built,
+// build/platform.lock.json what was qualified — and neither promises the
+// other. What they cannot disagree about is the ceiling: an image the
+// upstream does not publish for a platform cannot be built for it, so a
+// release declaring one would fail at the registry rather than here.
+func TestTheLockBuildsForEveryPlatformAReleaseCan(t *testing.T) {
+	var lock imageLock
+	if err := json.Unmarshal(imageLockJSON, &lock); err != nil {
+		t.Fatalf("parse the image lock: %v", err)
+	}
+	if len(lock.Platforms) == 0 {
+		t.Fatal("the lock declares no platform, so a release builds for nothing it states")
+	}
+	declared := slices.Clone(lock.Platforms)
+	want := slices.Clone(platform.Buildable)
+	slices.Sort(declared)
+	slices.Sort(want)
+	if !slices.Equal(declared, want) {
+		t.Errorf("the lock builds for %v; the pinned images publish %v. A platform in neither "+
+			"list is one a release claims and cannot produce, or one it could produce and "+
+			"does not offer.", declared, want)
+	}
+	// Whole platform strings, operating system included, and compared
+	// against what the images publish rather than against a rule written
+	// here. A capsule runs a Linux daemon and a Linux runner, so there is
+	// no non-Linux variant to build against — and if one were ever
+	// published, that list is where it would show.
 }

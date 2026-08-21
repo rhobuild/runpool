@@ -7,20 +7,29 @@
     "The qualification job must compare the observed host with those frozen",
     "facts. It must never derive its expected values from the host under test.",
     "Updating Docker after a freeze requires a new reviewed lock and a complete",
-    "no-skip qualification run; it does not invalidate historical records."
+    "no-skip qualification run; it does not invalidate historical records.",
+    "",
+    "One entry per platform qualified. A platform with no entry is not a",
+    "failure of that platform; it is a platform nobody has run the suites",
+    "on, and the two are reported differently. Adding one is an added",
+    "entry rather than a change to this file's shape."
   ],
-  "schema_version": 1,
-  "status": "pending",
-  "policy": {
-    "os": "debian",
-    "os_version": "13",
-    "os_codename": "trixie",
-    "arch": "amd64",
-    "docker_channel": "stable",
-    "docker_source": "https://download.docker.com/linux/debian",
-    "selection": "latest-stable-at-policy-review",
-    "target_engine": "29.7.2",
-    "reviewed": "2026-08-16",
-    "freeze_point": "before-release-candidate"
-  }
+  "schema_version": 2,
+  "platforms": [
+    {
+      "status": "pending",
+      "policy": {
+        "os": "debian",
+        "os_version": "13",
+        "os_codename": "trixie",
+        "arch": "amd64",
+        "docker_channel": "stable",
+        "docker_source": "https://download.docker.com/linux/debian",
+        "selection": "latest-stable-at-policy-review",
+        "target_engine": "29.7.2",
+        "reviewed": "2026-08-16",
+        "freeze_point": "before-release-candidate"
+      }
+    }
+  ]
 }
