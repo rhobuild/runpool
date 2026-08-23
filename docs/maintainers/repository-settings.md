@@ -108,6 +108,18 @@ it.
   tests alone unless somebody dispatches them: Dependabot keeps that update out
   of the grouped batch, CODEOWNERS holds `go.mod`, and the reviewer runs
   `contracts-github-actions` by hand and links the run before merging.
+- Link the `runpool` and `runpool/capsule` container packages to this
+  repository with the Write role, from each package's own Actions access
+  settings. A package created outside a workflow — by a person pushing from a
+  laptop — carries no repository link, and this repository's `GITHUB_TOKEN`
+  cannot write to it: the release builds the image and then fails at its first
+  push with `denied: permission_denied: write_package`. There is no API for the
+  grant and none for reading it back: the packages API reports a repository only
+  for a package a workflow published, so the only confirmation that the grant
+  took is a push that succeeds. Dispatching `release.yml` by hand is that push,
+  and it stops before qualifying or publishing anything.
+- Make both packages public before the first release. The repository is public;
+  a release whose images nobody can pull is not one.
 - Protect `release-candidate` with release-maintainer approval. It gates the
   one job that writes to the registry before anything has been qualified: the
   candidate images a release later promotes. The protected `v*` tag is what
