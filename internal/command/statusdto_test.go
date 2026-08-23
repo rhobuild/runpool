@@ -129,8 +129,8 @@ func TestStatusDiscrepanciesCoverEveryKind(t *testing.T) {
 	if doc.Discrepancies != nil {
 		t.Errorf("discrepancies = %v with an unreachable daemon; want null (not compared)", doc.Discrepancies)
 	}
-	if doc.DockerError == "" {
-		t.Error("an unreachable daemon must be reported in docker_error")
+	if doc.EngineError == "" {
+		t.Error("an unreachable daemon must be reported in engine_error")
 	}
 }
 
@@ -320,7 +320,7 @@ func TestBothStatusAnswersShareOneEnvelope(t *testing.T) {
 // emitted every one of its other fields as a zero value. Two of those
 // are actively misleading rather than merely noisy: `discrepancies:
 // null` is defined by this API as "the daemon could not be asked", and
-// `docker_error` being absent then says it could. A reader diagnosing a
+// `engine_error` being absent then says it could. A reader diagnosing a
 // fresh install would be told the daemon is unreachable and given no
 // reason why.
 func TestThePreServeAnswerCarriesOnlyItsOwnFields(t *testing.T) {

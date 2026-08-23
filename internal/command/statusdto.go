@@ -62,10 +62,10 @@ type statusDoc struct {
 	Volumes       []resourceDTO  `json:"volumes"`
 	// Discrepancies is the books-versus-daemon comparison across every
 	// observed object kind. It is null only when the daemon could not
-	// be asked, which docker_error then explains: an unreadable daemon
+	// be asked, which engine_error then explains: an unreadable daemon
 	// must not report as a clean one.
 	Discrepancies []string `json:"discrepancies"`
-	DockerError   string   `json:"docker_error,omitempty"`
+	EngineError   string   `json:"engine_error,omitempty"`
 	// CapsuleImageError explains a capsule image this command could not
 	// resolve. It is about the shipped default only: a tier naming its
 	// own capsule_image reports that one, and a launch would run it. The
@@ -252,7 +252,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		doc.Volumes = append(doc.Volumes, resourceDTO{Kind: "volume", Role: v.Role, Name: v.ID, LeaseID: string(v.LeaseID)})
 	}
 	if obs.err != nil {
-		doc.DockerError = obs.err.Error()
+		doc.EngineError = obs.err.Error()
 	} else {
 		doc.Discrepancies = discrepancies(snap.Leases, obs)
 	}

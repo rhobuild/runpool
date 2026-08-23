@@ -498,6 +498,9 @@ by its public and operational effects.
 - The standalone binary and completions are built once before qualification,
   retained by checksum, and published without rebuilding. Releases also carry
   separate controller and capsule SBOMs plus signed provenance attestations.
+- The status document reports `engine_error` and the preflight names a
+  `container engine`, rather than naming the one engine there is. What either
+  says about Docker it says in the message, where it is true.
 - Public-repository gates include CodeQL, dependency review, Dependabot,
   vulnerability scanning, SHA-pinned actions, and least-privilege workflow
   permissions.
