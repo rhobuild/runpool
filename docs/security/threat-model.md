@@ -60,7 +60,8 @@ not a silent standing grant to whoever holds the name.
 
 Runpool requires an explicit host topology:
 
-- **`shared-daemon`** is the Dokploy and single-server coexistence contract.
+- **`shared-daemon`** is the single-server coexistence contract, for a host
+  whose Engine a deployment platform is already using.
   It is supported only for private workflows the operator already authorizes
   on that host. Runpool withholds an explicit CPU, memory and free-disk reserve,
   requires restricted egress, isolates organization targets in an explicit

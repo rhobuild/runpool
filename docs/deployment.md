@@ -12,17 +12,24 @@ exact image and host platform have passed the gates in
 ## Deployment surface
 
 [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) is the canonical
-operator-managed deployment. Platform catalogs derive their template from this
-contract; they are not duplicated here because an unreviewed second copy would
-drift.
+operator-managed deployment, and it is the whole of what Runpool asks a host
+for. Platform catalogs derive their template from this contract; they are not
+duplicated here because an unreviewed second copy would drift.
 
-The Dokploy One-Click template follows the
-[official contribution workflow](https://dokploy.github.io/templates/): fork
-`Dokploy/templates`, add `blueprints/runpool`, open a pull request, test its
-automatically generated preview and Base64 import, and let the upstream merge
-become the catalog authority. Do not submit a mutable development image. The
-blueprint is created from an immutable release candidate or release and updated
-through an upstream pull request whenever the deployment contract changes.
+What a platform has to provide is short, and it is the same list everywhere:
+
+- a way to run one container from a digest-qualified image and keep it running;
+- a persistent named volume for the state directory;
+- two read-only bind mounts, for the configuration and the credential
+  directory;
+- the Docker socket, which is what the controller drives;
+- a redeploy that keeps the volume.
+
+What it does not have to provide is a route in. The controller is headless and
+its health is a command the platform runs inside the container —
+`runpool healthcheck --mode=liveness` — not an endpoint it polls. There is no
+port to publish and no HTTP surface to expose, which is why there is none to
+protect.
 
 ## Choose the host topology
 
@@ -32,14 +39,21 @@ topology is therefore explicit rather than inferred:
 
 | Topology | Use it when | Contract |
 | --- | --- | --- |
-| `shared-daemon` | Dokploy and application services already use this Engine | Private, trusted CI only; restricted egress; explicit host reserve; no platform-wide volume prune |
+| `shared-daemon` | The platform and other application services already use this Engine | Private, trusted CI only; restricted egress; explicit host reserve; no platform-wide volume prune |
 | `dedicated-daemon` | The Engine is exclusive to Runpool | Smaller compromise blast radius and the recommended security posture; still not a hostile-code sandbox |
 
 `shared-daemon` lets the operator run and observe the controller and ephemeral
 capsules through the same Docker control plane. It does not make Docker
-multi-tenant: controller, daemon or kernel compromise can affect Dokploy and
-every colocated service. Use it only when that impact is an accepted risk for
-the workflows being admitted.
+multi-tenant: controller, daemon or kernel compromise can affect the platform
+and every colocated service. Use it only when that impact is an accepted risk
+for the workflows being admitted.
+
+`dedicated-daemon` means an Engine on the host that is Runpool's alone. It does
+not mean giving Runpool a privileged daemon of its own inside a container
+beside the platform's. That arrangement reads like isolation and is not one: the
+container needs the privileges that make it equivalent to the host's daemon, it
+doubles what a qualification has to measure, and the capsule's own inner daemon
+already provides the per-job separation this would be reaching for.
 
 Runpool labels its controller-visible objects with `io.runpool.*` ownership
 and correlation fields. Cleanup re-inspects instance and lease ownership
@@ -48,7 +62,7 @@ never issues daemon-wide prune.
 
 ### Shared-daemon cleanup policy
 
-Disable Dokploy jobs or maintenance actions that run any of the following
+Disable platform jobs or maintenance actions that run any of the following
 against the shared Engine:
 
 - `docker volume prune`;
@@ -133,10 +147,11 @@ same authority as mounting those files individually while allowing targets to
 be added without changing the deployment manifest.
 
 The default Compose source paths are
-`../files/runpool/config.yaml` and `../files/runpool/credentials`. Dokploy
-preserves `../files` across deployments, unlike files from a repository clone.
-Other Compose operators set `RUNPOOL_CONFIG_PATH` and
-`RUNPOOL_CREDENTIALS_PATH` to explicit existing sources. Both bind mounts use
+`../files/runpool/config.yaml` and `../files/runpool/credentials`, because a
+platform that keeps a directory across deployments usually keeps that one —
+Dokploy does. Operators elsewhere set `RUNPOOL_CONFIG_PATH` and
+`RUNPOOL_CREDENTIALS_PATH` to explicit existing sources, and should: a default
+that suits one platform is not a recommendation. Both bind mounts use
 `create_host_path: false`, so a typo fails startup instead of silently creating
 an empty directory.
 
@@ -228,45 +243,93 @@ admission, inspect the dry-run plan, and confirm the instance identifier so the
 controller can remove only the resources its state proves it owns. Delete the
 platform service and state volume only after the uninstall completes.
 
+## Platforms
+
+Runpool does not integrate with a deployment platform and does not need to. A
+platform that provides the five things above can run it, and the ones below are
+named because operators ask, not because any of them is part of the design.
+
+| Platform | Status |
+| --- | --- |
+| Compose on a Docker host | The canonical contract; every gate is answered here |
+| [Dokploy](https://dokploy.com) | Compose-native, and the catalog path below is written for it |
+| [Temps](https://temps.sh) | Compose-native; its Compose support is confirmed by its authors |
+| [Coolify](https://coolify.io) | Compose-native |
+
+None of them is *verified* in the sense the [support
+matrix](reference/support-matrix.md) uses that word. Verified means somebody ran
+the checklist below on that platform and recorded what happened, and that has
+not been done for any of them yet.
+
+### The platform checklist
+
+What this proves is not that Runpool works — the gates prove that. It is that
+the platform does not break it. Eight things, in order:
+
+1. The state volume survives a redeploy: `runpool status` reports the same
+   instance and the same leases before and after.
+2. The mounted socket passes a complete `runpool doctor`, including the
+   internal isolated bridge — a platform managing its own networks is the thing
+   most likely to interfere with that one.
+3. Configuration and credentials arrive read-only and at mode `0600`, and the
+   platform copies neither into a log nor into an environment variable.
+4. The platform's health display is wired to `runpool healthcheck` and reflects
+   both `liveness` and `readiness`, rather than a TCP port that does not exist.
+5. The platform's stop grace period exceeds the controller's shutdown budget, so
+   a stop does not kill the controller mid-drain.
+6. A redeploy with a live capsule adopts it rather than re-running its job.
+7. The platform's own cleanup — prunes, maintenance jobs — leaves Runpool's
+   volumes alone: sentinels created outside Runpool are still there afterwards,
+   verified by id.
+8. The platform's logs and `exec` reach the controller, which is how an image
+   with no shell is operated.
+
+A platform that fails one of these is not unsupported. It is a platform with one
+thing to configure, and the checklist says which.
+
 ## Catalog publication
 
-The Dokploy catalog is maintained upstream, not copied into this repository. A
-release maintainer derives the blueprint from the released, digest-qualified
-Compose contract and reviews the generated preview. Catalog updates are release
-work: a mutable development image or unreleased schema must never be published
-as a One-Click service.
+A catalog entry is one platform's distribution of the contract above, not a
+second implementation of it. It is maintained upstream, not copied into this
+repository: a release maintainer derives the blueprint from the released,
+digest-qualified Compose contract and reviews the generated preview. Catalog
+updates are release work — a mutable development image or unreleased schema must
+never be published as a One-Click service.
 
-## Dokploy without a catalog entry
+Dokploy's is the
+[official contribution workflow](https://dokploy.github.io/templates/): fork
+`Dokploy/templates`, add `blueprints/runpool`, open a pull request, test its
+automatically generated preview and Base64 import, and let the upstream merge
+become the catalog authority.
 
-The public One-Click catalog is not a prerequisite for deployment. Until the
-first qualified release is accepted upstream, use this procedure:
+## Deploying through a platform
 
-1. In the Dokploy organization that owns the server, create project `runpool`,
-   environment `production`, and a Docker Compose service named `runpool`.
+A catalog entry is not a prerequisite. Every platform that runs Compose takes
+the same seven steps; the words in brackets are Dokploy's names for them.
+
+1. Create a project and a Compose service named `runpool` [project,
+   environment, Docker Compose service].
 2. Use the canonical
-   [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) as the Compose
-   definition. It creates only the `controller` service inside the `runpool`
-   Compose project.
-3. Through **Advanced → Mounts**, create the configuration and credential files
-   under Dokploy's persistent `../files` area:
-   `../files/runpool/config.yaml`,
-   `../files/runpool/credentials/<credential-id>`. Copy the configuration
+   [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) as the
+   Compose definition. It creates only the `controller` service.
+3. Create the configuration and credential files in whatever directory the
+   platform preserves across deployments [Advanced → Mounts, under `../files`]:
+   one `config.yaml`, and one file per credential. Copy the configuration
    example, then replace target names and capacity with reviewed values.
 4. Put exactly one token in each credential file, terminate it with an optional
    newline, and set every credential file to mode `0600`. Never put a token in
-   the configuration, Compose definition, or Dokploy environment editor.
-5. Set only `RUNPOOL_IMAGE` in the environment editor, using the complete
-   released `@sha256:` reference. Set `RUNPOOL_CONFIG_PATH` or
-   `RUNPOOL_CREDENTIALS_PATH` only when deliberately using non-default source
-   paths.
-6. Render the Compose model and verify that it contains no token values,
-   published ports, domains, or reverse-proxy labels. Validate the mounted
-   document with `runpool config effective` before starting `serve`.
+   the configuration, the Compose definition, or the platform's environment
+   editor.
+5. Set only `RUNPOOL_IMAGE` in the environment, using the complete released
+   `@sha256:` reference. Set `RUNPOOL_CONFIG_PATH` or `RUNPOOL_CREDENTIALS_PATH`
+   only when the persisted directory is not the default one.
+6. Render the Compose model and verify it contains no token values, published
+   ports, domains, or reverse-proxy labels. Validate the mounted document with
+   `runpool config effective` before starting `serve`.
 7. Deploy, wait for the healthcheck, and run `runpool doctor` and
    `runpool status`. Admit ordinary work only after a private fixture workflow
    succeeds for every target.
 
 The controller is headless: do not attach a domain or expose a port. This keeps
-the source of truth in Runpool while following Dokploy's normal Compose path;
-the later catalog blueprint is distribution metadata in the upstream template
-repository, not a second deployment implementation here.
+the source of truth in Runpool while following the platform's normal Compose
+path.

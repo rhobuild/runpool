@@ -498,6 +498,13 @@ by its public and operational effects.
 - The standalone binary and completions are built once before qualification,
   retained by checksum, and published without rebuilding. Releases also carry
   separate controller and capsule SBOMs plus signed provenance attestations.
+- **Runpool deploys on any Docker host that runs Compose.** What a platform has
+  to provide is five things — a container kept running from a digest, a
+  persistent volume, two read-only mounts, the socket, and a redeploy that keeps
+  the volume — and a checklist says how to tell whether one of them does. There
+  is no route in to provide: the controller is headless and its health is a
+  command run inside the container, not an endpoint. Named platforms are
+  examples, not integrations.
 - The status document reports `engine_error` and the preflight names a
   `container engine`, rather than naming the one engine there is. What either
   says about Docker it says in the message, where it is true.

@@ -36,7 +36,7 @@ tier — and `status --json` exposes the same under `host_topology` and
 `scheduling`. On a `shared-daemon` host:
 
 - keep the configured CPU, memory, swap and free-disk reserve above the
-  measured peak of Dokploy and colocated applications;
+  measured peak of the platform and colocated applications;
 - set `scheduling.parallelism` when the host budget must hold across every
   target and tier, rather than letting each tier fill independently;
 - do not run `docker volume prune`, `docker system prune --volumes`, or a
