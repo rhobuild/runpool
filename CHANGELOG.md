@@ -481,6 +481,16 @@ by its public and operational effects.
   reads the record: what it requires is that the selection is stated, and
   that the platform is one a release can build for.
 
+- **A release publishes every platform it declares.** Each is built on a runner
+  of its own architecture, so nothing is emulated and each standalone binary is
+  verified by running it where it will run. The images are published as an index
+  assembled from those builds, and the assembly fails if the index serves fewer
+  platforms than the run produced. The controller embeds one capsule reference,
+  the index digest, which is correct for either architecture because the daemon
+  resolves the matching child at pull time. Promotion copies that index inside
+  the registry rather than pulling and retagging, which would publish one
+  platform of what was qualified.
+
 - A release qualifies the exact digest-qualified controller and capsule
   candidates it later promotes; no image is rebuilt after qualification.
 - Platform qualification compares every locked host fact and fails when a

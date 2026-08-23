@@ -26,7 +26,8 @@ that is what decides whether it can run on a pull request at all.
 | `qualify-release` | `validate release inputs` | The ref is a protected tag, the images are digest-qualified, and the standalone candidate is the tag it claims | Hosted |
 | `qualify-release` | `live contracts on the reference host` | Every live suite, without skips, on the reference host | Self-hosted, protected |
 | `qualify-release` | `release-qualification record` | The evidence supports the claim the record makes | Hosted |
-| `release` | `build immutable candidates` | The candidate images and standalone artifacts exist by digest and checksum | Hosted, protected `release-candidate` |
+| `release` | `capsule candidate`, `controller candidate`, `standalone candidates` | Each platform built on a runner of its own architecture, pushed by digest | Hosted, one leg per platform, protected `release-candidate` |
+| `release` | `capsule index`, `build immutable candidates` | The index serves every platform the run built, and the standalone artifacts exist by checksum | Hosted, protected `release-candidate` |
 | `release` | `attest and publish qualified artifacts` | The record covers this build, the artifacts match their checksums, and the promoted digests are the qualified ones | Hosted, protected `release` |
 
 `qualify-release` also calls `ci`, `contracts-github-actions` and
@@ -111,5 +112,13 @@ of them are shellchecked, at any depth, tracked or not.
 A script is shell when its job is to run other programs: `ssh`, `tar`, `docker`,
 `uname`. It is a Go test or a Go command when its job is to read a file and
 decide something — those get parsed with the parser for the format, and they get
-tests of their own. The repository does not add a second language toolchain for
-this: nothing here is written in Python.
+tests of their own.
+
+Two scripts still call `python3`, both to read JSON a shell cannot:
+`scripts/verify/image-lock.sh` and `scripts/qualification/start-jit-runner.sh`.
+They are what is left of a second toolchain the contribution guide says this
+repository does not add, and the way out of the first one is to lift the image
+lock into a package both the controller and a gate can import, the way the
+platform lock already is. Where a Go template can answer instead, it does:
+`docker buildx imagetools inspect --format` prints the platforms an index
+serves, so the release verifies its own indexes without parsing anything.

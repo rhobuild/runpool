@@ -3,6 +3,11 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # The candidate chain, run against a throwaway tag. It is the only way
+  # to exercise a multi-platform build and the index it assembles before
+  # a real tag depends on them: the qualification and the publication
+  # below do not run for it.
+  workflow_dispatch:
 
 defaults:
   run:
@@ -25,8 +30,36 @@ env:
   GOTOOLCHAIN: go1.26.6
 
 jobs:
+  version:
+    name: the version this run is for
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.this.outputs.version }}
+      candidate: ${{ steps.this.outputs.candidate }}
+    steps:
+      - name: State the version and the candidate tag
+        # A tag push releases itself; a dispatch is a rehearsal, and the
+        # version it stamps has to be a publishable SemVer string so the
+        # same checks run, while naming itself so nothing mistakes the
+        # images it leaves for a candidate.
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        id: this
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            echo "version=${REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "candidate=candidate-${SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v0.0.0-dry-run" >> "$GITHUB_OUTPUT"
+            echo "candidate=dry-run-${SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
   validate:
     name: validate release tag
+    needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -42,17 +75,23 @@ jobs:
 
       - name: Verify the version stamped into the artifact
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           go build -trimpath -ldflags "-X main.version=${VERSION}" -o /tmp/runpool-version ./cmd/runpool
           /tmp/runpool-version version --check-release
 
-  candidate:
-    name: build immutable candidates
-    needs: validate
-    runs-on: ubuntu-24.04
+  # One platform per runner, natively. Every base image these build from
+  # is pinned to an index digest that publishes both, so an arm64 runner
+  # resolves the arm64 child of the reviewed digest and nothing is
+  # emulated: the capsule's final stage installs packages, which under
+  # emulation is slow and occasionally wrong, and a binary verified by
+  # running it has to run on the architecture it is for.
+  capsule:
+    name: capsule candidate
+    needs: [validate, version]
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
-    # The one job that writes to a registry before anything has been
+    # The first job that writes to a registry, before anything has been
     # qualified. The protected tag is what authorizes the run; the
     # environment is where that authorization is recorded and can be held
     # for review, the same place the publication gate already lives.
@@ -60,9 +99,192 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push this platform's capsule
+        env:
+          NAME: ghcr.io/${{ github.repository }}/capsule
+          PLATFORM: ${{ matrix.platform }}
+          CANDIDATE: ${{ needs.version.outputs.candidate }}
+        run: |
+          arch=${PLATFORM#*/}
+          docker build -f build/capsule/Dockerfile -t "${NAME}:${CANDIDATE}-${arch}" .
+          docker push "${NAME}:${CANDIDATE}-${arch}"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' \
+            "${NAME}:${CANDIDATE}-${arch}")
+          case "$reference" in
+            *@sha256:*) ;;
+            *) echo "registry returned no immutable capsule digest"; exit 1 ;;
+          esac
+          # The digest travels as a file rather than a job output: a
+          # matrix leg's outputs overwrite its siblings', and which of
+          # them survived would decide what the index holds.
+          mkdir -p digests
+          printf '%s' "${reference#*@}" > "digests/${arch}"
+
+      - name: Keep this platform's digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: capsule-digest-${{ strategy.job-index }}
+          path: digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  capsule-index:
+    name: capsule index
+    needs: [capsule, version]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-candidate
+    permissions:
+      contents: read
+      packages: write
     outputs:
-      capsule_image: ${{ steps.capsule.outputs.reference }}
-      controller_image: ${{ steps.controller.outputs.reference }}
+      reference: ${{ steps.index.outputs.reference }}
+    steps:
+      - name: Download the per-platform digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: capsule-digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Assemble the capsule index
+        id: index
+        env:
+          NAME: ghcr.io/${{ github.repository }}/capsule
+          CANDIDATE: ${{ needs.version.outputs.candidate }}
+        run: |
+          set --
+          for file in digests/*; do
+            set -- "$@" "${NAME}@$(cat "$file")"
+          done
+          [ "$#" -gt 0 ] || { echo "no platform digest to index"; exit 1; }
+          # A manifest list assembled from the bytes each runner pushed.
+          # The controller embeds this one reference: the daemon resolves
+          # the matching child at pull time, so one exact digest is
+          # correct for every architecture.
+          docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
+          digest=$(docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "the registry returned no index digest"; exit 1 ;;
+          esac
+          # The index has to hold every platform that was pushed into it.
+          # The digest files are named for the architecture each runner
+          # built, so the set that was assembled is compared with the set
+          # the registry now serves rather than with a list written here:
+          # a leg that failed to upload, or a create that silently took
+          # fewer arguments, is an index missing a platform nobody asked
+          # about again until an operator pulls one.
+          built=$(basename -a digests/* | sort | tr '\n' ' ')
+          # One line, so no indentation of this file leaks into the
+          # template's own output. Attestation manifests carry no real
+          # architecture and are skipped rather than counted as a
+          # platform nobody asked for.
+          template='{{range .Manifest.Manifests}}{{if .Platform}}{{if ne .Platform.Architecture "unknown"}}{{.Platform.Architecture}} {{end}}{{end}}{{end}}'
+          published=$(docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
+            | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')
+          if [ "$built" != "$published" ]; then
+            echo "the index serves [$published]; this run built [$built]"
+            exit 1
+          fi
+          echo "reference=${NAME}@${digest}" >> "$GITHUB_OUTPUT"
+
+  controller:
+    name: controller candidate
+    needs: [capsule-index, version]
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    environment: release-candidate
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push this platform's controller
+        env:
+          CAPSULE_IMAGE: ${{ needs.capsule-index.outputs.reference }}
+          NAME: ghcr.io/${{ github.repository }}
+          PLATFORM: ${{ matrix.platform }}
+          CANDIDATE: ${{ needs.version.outputs.candidate }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          arch=${PLATFORM#*/}
+          docker build -f build/controller/Dockerfile \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "CAPSULE_IMAGE=${CAPSULE_IMAGE}" \
+            -t "${NAME}:${CANDIDATE}-${arch}" .
+          docker push "${NAME}:${CANDIDATE}-${arch}"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' \
+            "${NAME}:${CANDIDATE}-${arch}")
+          case "$reference" in
+            *@sha256:*) ;;
+            *) echo "registry returned no immutable controller digest"; exit 1 ;;
+          esac
+          mkdir -p digests
+          printf '%s' "${reference#*@}" > "digests/${arch}"
+
+      - name: Keep this platform's digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: controller-digest-${{ strategy.job-index }}
+          path: digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  artifacts:
+    name: standalone candidates
+    needs: [capsule-index, version]
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,60 +296,139 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Build this platform's standalone binary
+        # Built and then run on the architecture it is for. A binary
+        # whose own report is only ever read on another architecture is
+        # a binary nothing has executed.
+        env:
+          CAPSULE_IMAGE: ${{ needs.capsule-index.outputs.reference }}
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          arch=${PLATFORM#*/}
+          mkdir -p release-artifacts
+          GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.capsuleImage=${CAPSULE_IMAGE}" \
+            -o "release-artifacts/runpool-linux-${arch}" ./cmd/runpool
+          "release-artifacts/runpool-linux-${arch}" version --check-release
+          facts=$("release-artifacts/runpool-linux-${arch}" version --json)
+          echo "$facts"
+          # What the linker stamped, read back out of the binary that
+          # will ship. A -X that silently did nothing leaves the default
+          # capsule reference, which is a mutable tag: the release would
+          # carry a controller that resolves its capsule at run time
+          # instead of running the one that was qualified.
+          for stamped in "$VERSION" "$CAPSULE_IMAGE"; do
+            case "$facts" in
+              *"$stamped"*) ;;
+              *) echo "the ${arch} binary does not report ${stamped}"; exit 1 ;;
+            esac
+          done
+          (cd release-artifacts && sha256sum "runpool-linux-${arch}" > "checksums-${arch}.txt")
+
+      - name: Keep this platform's standalone candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: standalone-${{ strategy.job-index }}
+          path: release-artifacts/*
+          retention-days: 1
+          if-no-files-found: error
+
+  candidate:
+    name: build immutable candidates
+    needs: [capsule-index, controller, artifacts, version]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release-candidate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      capsule_image: ${{ needs.capsule-index.outputs.reference }}
+      controller_image: ${{ steps.index.outputs.reference }}
+    steps:
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download the per-platform digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: controller-digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Download the per-platform standalone candidates
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: standalone-*
+          merge-multiple: true
+          path: release-artifacts
+
       - name: Authenticate to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push the capsule candidate
-        id: capsule
+      - name: Assemble the controller index
+        id: index
         env:
-          IMAGE: ghcr.io/${{ github.repository }}/capsule:candidate-${{ github.sha }}
+          NAME: ghcr.io/${{ github.repository }}
+          CANDIDATE: ${{ needs.version.outputs.candidate }}
         run: |
-          docker build -f build/capsule/Dockerfile -t "$IMAGE" .
-          docker push "$IMAGE"
-          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
-          case "$reference" in
-            *@sha256:*) ;;
-            *) echo "registry returned no immutable capsule digest"; exit 1 ;;
+          set --
+          for file in digests/*; do
+            set -- "$@" "${NAME}@$(cat "$file")"
+          done
+          [ "$#" -gt 0 ] || { echo "no platform digest to index"; exit 1; }
+          docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
+          digest=$(docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "the registry returned no index digest"; exit 1 ;;
           esac
-          echo "reference=$reference" >> "$GITHUB_OUTPUT"
+          # The index has to hold every platform that was pushed into it.
+          # The digest files are named for the architecture each runner
+          # built, so the set that was assembled is compared with the set
+          # the registry now serves rather than with a list written here:
+          # a leg that failed to upload, or a create that silently took
+          # fewer arguments, is an index missing a platform nobody asked
+          # about again until an operator pulls one.
+          built=$(basename -a digests/* | sort | tr '\n' ' ')
+          # One line, so no indentation of this file leaks into the
+          # template's own output. Attestation manifests carry no real
+          # architecture and are skipped rather than counted as a
+          # platform nobody asked for.
+          template='{{range .Manifest.Manifests}}{{if .Platform}}{{if ne .Platform.Architecture "unknown"}}{{.Platform.Architecture}} {{end}}{{end}}{{end}}'
+          published=$(docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
+            | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')
+          if [ "$built" != "$published" ]; then
+            echo "the index serves [$published]; this run built [$built]"
+            exit 1
+          fi
+          echo "reference=${NAME}@${digest}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push the controller candidate
-        id: controller
-        env:
-          CAPSULE_IMAGE: ${{ steps.capsule.outputs.reference }}
-          IMAGE: ghcr.io/${{ github.repository }}:candidate-${{ github.sha }}
-          VERSION: ${{ github.ref_name }}
+      - name: Complete the standalone release artifacts
+        # The completions are the same bytes on every platform, so they
+        # are generated once here rather than per runner, and the
+        # checksums each runner produced are joined into the one file the
+        # publication verifies against.
         run: |
-          docker build -f build/controller/Dockerfile \
-            --build-arg "VERSION=${VERSION}" \
-            --build-arg "CAPSULE_IMAGE=${CAPSULE_IMAGE}" \
-            -t "$IMAGE" .
-          docker push "$IMAGE"
-          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
-          case "$reference" in
-            *@sha256:*) ;;
-            *) echo "registry returned no immutable controller digest"; exit 1 ;;
-          esac
-          echo "reference=$reference" >> "$GITHUB_OUTPUT"
-
-      - name: Build the standalone release artifacts
-        env:
-          CAPSULE_IMAGE: ${{ steps.capsule.outputs.reference }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          mkdir -p release-artifacts
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.capsuleImage=${CAPSULE_IMAGE}" \
-            -o release-artifacts/runpool-linux-amd64 ./cmd/runpool
           go generate ./internal/command/...
           git diff --exit-code docs/reference/cli
           tar -C dist/completions -czf release-artifacts/runpool-completions.tar.gz .
-          (cd release-artifacts && sha256sum runpool-linux-amd64 runpool-completions.tar.gz > checksums.txt)
-          release-artifacts/runpool-linux-amd64 version --check-release
-          release-artifacts/runpool-linux-amd64 version --json
-          (cd release-artifacts && sha256sum -c checksums.txt)
+          cd release-artifacts
+          sha256sum runpool-completions.tar.gz > checksums.txt
+          cat checksums-*.txt >> checksums.txt
+          rm -f checksums-*.txt
+          sha256sum -c checksums.txt
 
       - name: Keep the immutable release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -140,6 +441,7 @@ jobs:
   qualify:
     name: qualify the exact commit and candidates
     needs: candidate
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: read
@@ -151,7 +453,8 @@ jobs:
 
   publish:
     name: attest and publish qualified artifacts
-    needs: [candidate, qualify]
+    needs: [candidate, qualify, version]
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: release
@@ -208,22 +511,27 @@ jobs:
           CAPSULE_NAME: ghcr.io/${{ github.repository }}/capsule
           CONTROLLER_CANDIDATE: ${{ needs.candidate.outputs.controller_image }}
           CONTROLLER_NAME: ghcr.io/${{ github.repository }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
+          # A manifest copy inside the registry, not a pull and a retag:
+          # pulling an index brings down the runner's own platform, and
+          # pushing that back under the release tag would publish one
+          # child of what was qualified. Copying the index preserves its
+          # digest by construction, which is what the check below reads
+          # back.
           promote() {
             candidate=$1
             name=$2
-            docker pull "$candidate" >&2
-            docker tag "$candidate" "${name}:${VERSION}"
-            docker push "${name}:${VERSION}" >&2
-            docker pull "${name}:${VERSION}" >&2
-            reference="${name}@${candidate#*@}"
-            docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${name}:${VERSION}" | grep -Fxq "$reference" || {
+            digest=${candidate#*@}
+            docker buildx imagetools create --tag "${name}:${VERSION}" "$candidate" >&2
+            promoted=$(docker buildx imagetools inspect "${name}:${VERSION}" \
+              --format '{{json .Manifest.Digest}}' | tr -d '"')
+            if [ "$promoted" != "$digest" ]; then
               echo "promoted digest differs from the qualified candidate"
               exit 1
-            }
-            printf '%s' "$reference"
+            fi
+            printf '%s' "${name}@${digest}"
           }
           controller_reference=$(promote "$CONTROLLER_CANDIDATE" "$CONTROLLER_NAME")
           capsule_reference=$(promote "$CAPSULE_CANDIDATE" "$CAPSULE_NAME")
@@ -292,6 +600,7 @@ jobs:
         with:
           files: |
             dist/runpool-linux-amd64
+            dist/runpool-linux-arm64
             dist/runpool-completions.tar.gz
             dist/checksums.txt
             dist/controller.sbom.spdx.json
