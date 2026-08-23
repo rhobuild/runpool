@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // recorder is the intent saga, remembering what it was told. Every
@@ -46,7 +46,7 @@ func (r *recorder) Confirm(id assignment.ResourceIntentID, objectID string) erro
 // refusing, because the intent is already durable and in its creating
 // state, and recovery resolves it by name.
 func TestOnlyATakenNameIsResolved(t *testing.T) {
-	taken := fmt.Errorf("create: %w", docker.ErrAlreadyExists)
+	taken := fmt.Errorf("create: %w", engine.ErrAlreadyExists)
 	gone := errors.New("Cannot connect to the Docker daemon")
 
 	for name, testCase := range map[string]struct {

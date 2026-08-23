@@ -26,7 +26,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
@@ -187,7 +187,7 @@ func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role,
 		// the create. The object is not lost either way: the intent is
 		// already durable and in its creating state, so recovery
 		// resolves it by name.
-		if !errors.Is(err, docker.ErrAlreadyExists) {
+		if !errors.Is(err, engine.ErrAlreadyExists) {
 			return "", fmt.Errorf("create %s %s: %w", kind, role, err)
 		}
 		existing, rerr := resolve()
@@ -219,14 +219,14 @@ func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role,
 // those are the answers that decide whether an attempt is settled or
 // held for a person.
 type capsuleDaemon interface {
-	CreateNetwork(context.Context, docker.NetworkSpec) (string, error)
+	CreateNetwork(context.Context, engine.NetworkSpec) (string, error)
 	CreateVolume(ctx context.Context, name string, labels map[string]string) (string, error)
-	CreateContainer(context.Context, docker.ContainerSpec) (string, error)
+	CreateContainer(context.Context, engine.ContainerSpec) (string, error)
 	StartContainer(ctx context.Context, id string) error
 	ConnectNetwork(ctx context.Context, networkID, containerID string) error
 	NetworkSubnet(ctx context.Context, id string) (string, error)
 	ContainerIPOn(ctx context.Context, containerID, networkID string) (ip, subnet string, err error)
-	ContainerStatus(ctx context.Context, id string) (docker.ContainerState, error)
+	ContainerStatus(ctx context.Context, id string) (engine.ContainerState, error)
 	Exec(ctx context.Context, containerID string, cmd []string) (int, string, error)
 	ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error)
 	OwnedIDByName(ctx context.Context, kind, name string,
@@ -292,10 +292,10 @@ func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
 }
 
 func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
-	short := docker.ShortID(string(spec.LeaseID))
+	short := engine.ShortID(string(spec.LeaseID))
 	name := func(role string) string { return "runpool-" + role + "-" + short }
 	labels := func(kind, role string) map[string]string {
-		return docker.Ownership{
+		return engine.Ownership{
 			Instance: spec.InstanceID,
 			Lease:    spec.LeaseID,
 			Kind:     kind,
@@ -323,7 +323,7 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	capsuleShare := SplitEnvelope(spec.Resources, sandboxed)
 	netID, err := m.create(ctx, rec, KindNetwork, RoleNetwork, name(RoleNetwork),
 		func() (string, error) {
-			return m.dock.CreateNetwork(ctx, docker.NetworkSpec{
+			return m.dock.CreateNetwork(ctx, engine.NetworkSpec{
 				Name:     name(RoleNetwork),
 				Internal: sandboxed,
 				Isolated: sandboxed,
@@ -350,12 +350,12 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 		return "", err
 	}
 
-	mounts := []docker.Mount{{Volume: dindData, Target: dindDataDir}}
+	mounts := []engine.Mount{{Volume: dindData, Target: dindDataDir}}
 	if !spec.Cache.empty() {
-		mounts = append(mounts, docker.Mount{Volume: spec.Cache.Volume, Target: CachePath})
+		mounts = append(mounts, engine.Mount{Volume: spec.Cache.Volume, Target: CachePath})
 	}
 
-	capsuleSpec := docker.ContainerSpec{
+	capsuleSpec := engine.ContainerSpec{
 		Name:       name(RoleCapsule),
 		Image:      spec.CapsuleImage,
 		Labels:     labels(KindContainer, RoleCapsule),
@@ -528,7 +528,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 
 	gwID, err := m.create(ctx, rec, KindContainer, RoleGateway, name(RoleGateway),
 		func() (string, error) {
-			return m.dock.CreateContainer(ctx, docker.ContainerSpec{
+			return m.dock.CreateContainer(ctx, engine.ContainerSpec{
 				Name:       name(RoleGateway),
 				Image:      m.gatewayImage,
 				Entrypoint: []string{supervisorPath, "gateway"},
@@ -614,7 +614,7 @@ func (m *Launcher) awaitState(ctx context.Context, containerID, want string) err
 			return verdict
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("container %s did not reach %q within %s", docker.ShortID(containerID), want, readyTimeout)
+			return fmt.Errorf("container %s did not reach %q within %s", engine.ShortID(containerID), want, readyTimeout)
 		}
 		select {
 		case <-time.After(readyPollInterval):

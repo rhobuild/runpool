@@ -13,8 +13,8 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/lease"
-	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -108,7 +108,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	// monitor would make "no pressure" indistinguishable from "not wired".
 	monitorCfg := &config.Config{}
 	config.ApplyDefaults(monitorCfg)
-	h.probe = &fakeProbe{free: docker.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}}
+	h.probe = &fakeProbe{free: engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}}
 	h.srv.disk = newDiskMonitor(monitorCfg, log, st, h.probe, cacheMgr, h.srv.alloc, "probe-image")
 	// The default launch records the claim and leaves the lease running,
 	// so a test decides its outcome explicitly.
@@ -207,7 +207,7 @@ func (h *harness) attemptByLease(leaseID assignment.LeaseID) store.Attempt {
 // resolveWithoutRuntime runs recovery for a lease whose capsule
 // no longer exists — the common crash shape these tests construct.
 func (h *harness) resolveWithoutRuntime(ctx context.Context, lease store.Lease) {
-	h.srv.resolveInterrupted(ctx, h.bind, lease, docker.OwnedContainer{}, false)
+	h.srv.resolveInterrupted(ctx, h.bind, lease, engine.OwnedContainer{}, false)
 }
 
 func demand(workloadKey, project string, run int64) assignment.WorkloadAssignment {
@@ -237,9 +237,9 @@ var errDaemon = errors.New("daemon unreachable")
 // reconciliation that matters and the half a live daemon will not
 // perform on request: an object that does not die.
 type fakeObjects struct {
-	containers []docker.OwnedContainer
-	networks   []docker.OwnedResource
-	volumes    []docker.OwnedResource
+	containers []engine.OwnedContainer
+	networks   []engine.OwnedResource
+	volumes    []engine.OwnedResource
 	// wedged names the objects whose removal fails, by id.
 	wedged map[string]bool
 	// listErr fails the container inventory, which is the failure a sweep
@@ -252,19 +252,19 @@ type fakeObjects struct {
 	removed []string
 }
 
-func (f *fakeObjects) ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error) {
+func (f *fakeObjects) ListOwnedContainers(context.Context, assignment.InstanceID) ([]engine.OwnedContainer, error) {
 	if f.onList != nil {
 		f.onList()
 	}
 	return f.containers, f.listErr
 }
-func (f *fakeObjects) ListOwnedNetworks(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
+func (f *fakeObjects) ListOwnedNetworks(context.Context, assignment.InstanceID) ([]engine.OwnedResource, error) {
 	if f.onList != nil {
 		f.onList()
 	}
 	return f.networks, nil
 }
-func (f *fakeObjects) ListOwnedVolumes(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error) {
+func (f *fakeObjects) ListOwnedVolumes(context.Context, assignment.InstanceID) ([]engine.OwnedResource, error) {
 	if f.onList != nil {
 		f.onList()
 	}
@@ -286,17 +286,17 @@ func (f *fakeObjects) remove(id string) error {
 // purpose is the states a real filesystem cannot be asked for on demand:
 // no bytes left, no inodes left, a probe that fails.
 type fakeProbe struct {
-	free     docker.FilesystemFree
-	usage    []docker.VolumeUsage
+	free     engine.FilesystemFree
+	usage    []engine.VolumeUsage
 	freeErr  error
 	usageErr error
 }
 
-func (f *fakeProbe) ProbeFilesystemFree(context.Context, string, assignment.InstanceID) (docker.FilesystemFree, error) {
+func (f *fakeProbe) ProbeFilesystemFree(context.Context, string, assignment.InstanceID) (engine.FilesystemFree, error) {
 	return f.free, f.freeErr
 }
 
-func (f *fakeProbe) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
+func (f *fakeProbe) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]engine.VolumeUsage, error) {
 	return f.usage, f.usageErr
 }
 
@@ -310,7 +310,7 @@ func (nopVolumes) OwnedIDByName(_ context.Context, _, name string, _ assignment.
 	return name, nil
 }
 func (nopVolumes) RemoveVolume(context.Context, string) error { return nil }
-func (nopVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
+func (nopVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]engine.VolumeUsage, error) {
 	return nil, nil
 }
 

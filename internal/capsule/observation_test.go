@@ -7,7 +7,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // TestClassifySupervisorStateSeparatesAbortFromExit is the job-loss guard.
@@ -91,7 +91,7 @@ func TestClassifyContainerStateNeverAsksAStoppedCapsule(t *testing.T) {
 		{"exited", SupervisorAbortedExitCode, assignment.ObservedCreated, false},
 		{"dead", SupervisorAbortedExitCode, assignment.ObservedCreated, false},
 	} {
-		got, ask, err := classifyContainerState("c1", docker.ContainerState{Status: tc.status, ExitCode: tc.exit})
+		got, ask, err := classifyContainerState("c1", engine.ContainerState{Status: tc.status, ExitCode: tc.exit})
 		if err != nil {
 			t.Errorf("status %q exit %d: %v", tc.status, tc.exit, err)
 			continue
@@ -105,7 +105,7 @@ func TestClassifyContainerStateNeverAsksAStoppedCapsule(t *testing.T) {
 	}
 
 	// An unknown status refuses to guess rather than settling an attempt.
-	if _, ask, err := classifyContainerState("c1", docker.ContainerState{Status: "removing"}); err == nil || ask {
+	if _, ask, err := classifyContainerState("c1", engine.ContainerState{Status: "removing"}); err == nil || ask {
 		t.Error("an unrecognised status must be an error, not a supervisor query")
 	}
 }
@@ -201,7 +201,7 @@ func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
 // against another needs to be able to tell them apart, and one value
 // for both makes that impossible.
 func TestTheDaemonsAccountIsNotTheCapsulesOwn(t *testing.T) {
-	daemon, _, err := classifyContainerState("c1", docker.ContainerState{Status: "created"})
+	daemon, _, err := classifyContainerState("c1", engine.ContainerState{Status: "created"})
 	if err != nil {
 		t.Fatal(err)
 	}

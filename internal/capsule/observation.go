@@ -8,7 +8,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // InspectExecution classifies a prepared runtime whose start outcome is
@@ -18,7 +18,7 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	state, err := m.dock.ContainerStatus(ctx, string(prepared.RuntimeID))
 	switch {
 	case err == nil:
-	case errors.Is(err, docker.ErrNotFound):
+	case errors.Is(err, engine.ErrNotFound):
 		return assignment.ObservedAbsent, nil
 	default:
 		return assignment.ObservedUnavailable, err
@@ -96,7 +96,7 @@ func classifySupervisorState(state string) (assignment.ExecutionObservation, err
 //
 // askSupervisor is true only while the container still runs, which is the
 // only time an exec can succeed.
-func classifyContainerState(runtimeID string, state docker.ContainerState) (obs assignment.ExecutionObservation, askSupervisor bool, err error) {
+func classifyContainerState(runtimeID string, state engine.ContainerState) (obs assignment.ExecutionObservation, askSupervisor bool, err error) {
 	switch state.Status {
 	case "created":
 		// The daemon's own word, not the capsule's: this container has

@@ -8,7 +8,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -68,7 +68,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		s.log.Info("reconciling interrupted leases", "count", n)
 	}
 
-	runnerByLease := make(map[assignment.LeaseID]docker.OwnedContainer, len(containers))
+	runnerByLease := make(map[assignment.LeaseID]engine.OwnedContainer, len(containers))
 	for _, c := range containers {
 		if c.Role == capsule.RoleCapsule {
 			runnerByLease[c.LeaseID] = c
@@ -148,7 +148,7 @@ func (s *Controller) reportAdoption(b *binding, overBudget bool) {
 //     dispose;
 //   - already released with its attempt still open: nothing to clean,
 //     only the disposition runs.
-func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease store.Lease, runner docker.OwnedContainer, hasRunner bool) {
+func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease store.Lease, runner engine.OwnedContainer, hasRunner bool) {
 	// Recovery bookkeeping runs detached from the caller's context.
 	// Reconciliation happens at startup, where a shutdown can cancel
 	// mid-pass, and releasing a lease while failing to requeue its

@@ -22,7 +22,7 @@ const (
 	upstream = "github.com/actions/scaleset"
 	// engineAdapter is the Moby adapter, and engineSDKs are the modules
 	// only it may see.
-	engineAdapter = module + "/internal/platform/docker"
+	engineAdapter = module + "/internal/engine/docker"
 )
 
 // engineSDKs are the container-engine libraries. Their types describe a
@@ -50,7 +50,8 @@ var corePackages = []string{
 	module + "/internal/egress",
 	module + "/internal/credential",
 	module + "/internal/platform",
-	module + "/internal/platform/docker",
+	module + "/internal/engine",
+	module + "/internal/engine/docker",
 	module + "/internal/config",
 	module + "/internal/doctor",
 }
@@ -85,8 +86,16 @@ var narrowDeps = map[string][]string{
 		module + "/internal/capsule",
 		module + "/internal/config",
 		module + "/internal/credential",
+		module + "/internal/engine",
 		module + "/internal/platform",
-		module + "/internal/platform/docker",
+		// The adapter, for one field. Options.Docker is the concrete
+		// client because a nil one has to stay a nil interface: wrapped,
+		// it is a non-nil value holding nothing, and every guard below
+		// it passes before the next line calls a method on nothing. The
+		// conversion happens once, inside Run. Taking an interface here
+		// would move that trap out to each caller that may have failed
+		// to connect.
+		module + "/internal/engine/docker",
 	},
 	// capsule talks to the daemon; it must not also import the gateway,
 	// which is a separate process with its own lifecycle. The protocol
@@ -99,7 +108,7 @@ var narrowDeps = map[string][]string{
 		module + "/internal/capsule/protocol",
 		module + "/internal/config",
 		module + "/internal/egress",
-		module + "/internal/platform/docker",
+		module + "/internal/engine",
 	},
 	// qualification assembles the record a release is authorized against.
 	// It reads evidence files and the reviewed reference, and that is the
@@ -214,7 +223,7 @@ func TestGeneratedPersistenceStaysInsideTheStore(t *testing.T) {
 // and nothing enforced it.
 //
 // The Docker API client ADR says it plainly -- keep all daemon
-// operations behind internal/platform/docker; no domain package imports
+// operations behind the Moby adapter; no domain package imports
 // Moby types -- and the tree obeys it. What was missing is the thing
 // that keeps obeying it: the architecture rules here covered the
 // provider SDK and said nothing about the engine's, so the first import
@@ -306,7 +315,7 @@ func TestNarrowPackagesStayNarrow(t *testing.T) {
 // reason that edge was removed: the lease machine settles attempts from
 // evidence, and it must stay compilable and testable without a runtime.
 func TestTheLeaseMachineLinksNoContainerRuntime(t *testing.T) {
-	const runtimePkg = module + "/internal/platform/docker"
+	const runtimePkg = module + "/internal/engine/docker"
 	if deps(t, module+"/internal/lease")[runtimePkg] {
 		t.Errorf("internal/lease reaches %s transitively; cleanup that depends on a "+
 			"container runtime stops working exactly when the runtime is what failed", runtimePkg)

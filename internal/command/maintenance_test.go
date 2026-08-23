@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // wedgedDaemon removes what it is asked to remove, except the objects
@@ -46,9 +46,9 @@ func (d *wedgedDaemon) RemoveOwnedVolume(_ context.Context, reference string,
 func maintenancePlan() ownedPlan {
 	return ownedPlan{
 		instanceID: "instance-1",
-		containers: []docker.OwnedContainer{{ID: "c1", Name: "runpool-capsule-1"}, {ID: "c2", Name: "runpool-gateway-1"}},
-		networks:   []docker.OwnedResource{{ID: "n1"}},
-		volumes:    []docker.OwnedResource{{ID: "v1"}},
+		containers: []engine.OwnedContainer{{ID: "c1", Name: "runpool-capsule-1"}, {ID: "c2", Name: "runpool-gateway-1"}},
+		networks:   []engine.OwnedResource{{ID: "n1"}},
+		volumes:    []engine.OwnedResource{{ID: "v1"}},
 	}
 }
 

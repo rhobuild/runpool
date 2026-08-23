@@ -19,7 +19,7 @@ on:
       - "internal/command/**"
       - "internal/config/**"
       - "internal/lease/**"
-      - "internal/platform/docker/**"
+      - "internal/engine/**"
       - "internal/capsule/**"
       - "internal/cache/**"
       - "internal/egress/**"

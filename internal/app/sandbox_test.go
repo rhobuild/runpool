@@ -16,7 +16,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
@@ -96,7 +96,7 @@ type fakeSandboxDaemon struct {
 	probeOut     string
 	probeErr     error
 
-	containers []docker.OwnedContainer
+	containers []engine.OwnedContainer
 	// listErr is the daemon refusing to say which gateways exist, which
 	// is the one failure that makes the whole install unaccountable.
 	listErr error
@@ -202,7 +202,7 @@ func (f *fakeSandboxDaemon) eventsFor(id string) []string {
 }
 func (f *fakeSandboxDaemon) removes() []string { return f.sorted(&f.removed) }
 
-func (f *fakeSandboxDaemon) EnsureOwnedNetwork(context.Context, docker.NetworkSpec) (string, error) {
+func (f *fakeSandboxDaemon) EnsureOwnedNetwork(context.Context, engine.NetworkSpec) (string, error) {
 	return f.uplinkID, nil
 }
 func (f *fakeSandboxDaemon) NetworkSubnet(context.Context, string) (string, error) {
@@ -211,13 +211,13 @@ func (f *fakeSandboxDaemon) NetworkSubnet(context.Context, string) (string, erro
 func (f *fakeSandboxDaemon) AllNetworkSubnets(context.Context) ([]string, error) {
 	return f.subnets, nil
 }
-func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ docker.ContainerSpec) (int64, string, error) {
+func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ engine.ContainerSpec) (int64, string, error) {
 	f.mu.Lock()
 	f.buildDeadline, f.buildBounded = ctx.Deadline()
 	f.mu.Unlock()
 	return 0, f.probeOut, f.probeErr
 }
-func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]docker.OwnedContainer, error) {
+func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]engine.OwnedContainer, error) {
 	f.mu.Lock()
 	f.listDeadline, f.listBounded = ctx.Deadline()
 	f.mu.Unlock()
@@ -342,7 +342,7 @@ func TestBuildDeniesEverythingItDiscovered(t *testing.T) {
 // closed. A relaxation that did not install leaves it under the stricter
 // policy it started with, so its work continues.
 func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
-	gateways := []docker.OwnedContainer{
+	gateways := []engine.OwnedContainer{
 		{ID: "gw-ok", Name: "gw-ok", Role: capsule.RoleGateway, Running: true},
 		{ID: "gw-bad", Name: "gw-bad", Role: capsule.RoleGateway, Running: true},
 		{ID: "gw-stopped", Name: "gw-stopped", Role: capsule.RoleGateway},
@@ -404,7 +404,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 // there to close.
 func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	d := &fakeSandboxDaemon{
-		containers: []docker.OwnedContainer{
+		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
 			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
 			{ID: "runner", Role: capsule.RoleCapsule, Running: true},
@@ -494,7 +494,7 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 	daemon := &fakeSandboxDaemon{
 		refuse:  map[string]bool{},
 		listErr: errors.New("daemon unreachable"),
-		containers: []docker.OwnedContainer{
+		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
 		},
 	}
@@ -561,10 +561,10 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 			"or it cannot tell a bounded pass from an unbounded one", count, gatewayFanout)
 	}
 
-	containers := make([]docker.OwnedContainer, 0, count)
+	containers := make([]engine.OwnedContainer, 0, count)
 	for i := range count {
 		id := fmt.Sprintf("gw-%02d", i)
-		containers = append(containers, docker.OwnedContainer{
+		containers = append(containers, engine.OwnedContainer{
 			ID: id, Name: id, Role: capsule.RoleGateway, Running: true,
 		})
 	}
@@ -611,7 +611,7 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 // behind it. Bounding the exec and not the removal left that in the same
 // function as the bound.
 func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
-	d := &fakeSandboxDaemon{containers: []docker.OwnedContainer{
+	d := &fakeSandboxDaemon{containers: []engine.OwnedContainer{
 		{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
 	}}
 	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
@@ -706,7 +706,7 @@ func TestEnumeratingGatewaysIsBounded(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := &fakeSandboxDaemon{containers: []docker.OwnedContainer{
+			d := &fakeSandboxDaemon{containers: []engine.OwnedContainer{
 				{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
 			}}
 			n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
@@ -793,7 +793,7 @@ func TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency(t *testing.T) {
 	// A gateway to close, so "nothing was closed" is an observation
 	// rather than an empty daemon answering emptily.
 	daemon := &fakeSandboxDaemon{
-		containers: []docker.OwnedContainer{{ID: "gw-1", Role: capsule.RoleGateway, LeaseID: "lse-1", Running: true}},
+		containers: []engine.OwnedContainer{{ID: "gw-1", Role: capsule.RoleGateway, LeaseID: "lse-1", Running: true}},
 	}
 	n := newTestSandbox(t, daemon, &capsule.Sandbox{})
 

@@ -3,7 +3,7 @@ package capsule
 import (
 	"context"
 
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // fakeDaemon answers the one or two calls a test cares about. The
@@ -12,11 +12,11 @@ import (
 // further than it declared says so instead of passing on a lie.
 type fakeDaemon struct {
 	capsuleDaemon
-	status func(id string) (docker.ContainerState, error)
+	status func(id string) (engine.ContainerState, error)
 	exec   func(id string, cmd []string) (int, string, error)
 }
 
-func (f *fakeDaemon) ContainerStatus(_ context.Context, id string) (docker.ContainerState, error) {
+func (f *fakeDaemon) ContainerStatus(_ context.Context, id string) (engine.ContainerState, error) {
 	return f.status(id)
 }
 

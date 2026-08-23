@@ -1,6 +1,7 @@
 # Use the versioned Moby client modules
 
-**Status:** accepted
+**Status:** accepted; the adapter is named by
+[the engine port](2026-08-23-the-engine-port-has-a-name.md)
 
 **Date:** 2026-08-12
 
@@ -16,8 +17,8 @@ request.
 ## Decision
 
 Use `github.com/moby/moby/client` with the matching
-`github.com/moby/moby/api` module. Keep all daemon operations behind
-`internal/platform/docker`; no domain package imports Moby types.
+`github.com/moby/moby/api` module. Keep all daemon operations behind the
+Moby adapter; no domain package imports Moby types.
 
 The adapter owns API-version negotiation, error normalization, ownership
 labels, and the translation between Runpool specifications and Moby option

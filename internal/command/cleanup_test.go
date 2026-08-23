@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -23,17 +23,17 @@ import (
 func TestExcludeSparesTheInstancesOwnObjects(t *testing.T) {
 	plan := ownedPlan{
 		instanceID: "inst-1",
-		containers: []docker.OwnedContainer{
+		containers: []engine.OwnedContainer{
 			{ID: "c1", Name: "runpool-inst-1-df-probe-aa", Role: "probe", Running: true},
 			{ID: "c2", Name: "runpool-inst-1-hostnet-probe-bb", Role: "probe", Running: false},
 			{ID: "c3", Name: "runner-live", Role: "capsule", LeaseID: "lse-live", Running: true},
 			{ID: "c4", Name: "runner-done", Role: "capsule", LeaseID: "lse-done"},
 		},
-		networks: []docker.OwnedResource{
+		networks: []engine.OwnedResource{
 			{ID: "n1", Role: "uplink"},
 			{ID: "n2", Role: "capsule-net", LeaseID: "lse-done"},
 		},
-		volumes: []docker.OwnedResource{
+		volumes: []engine.OwnedResource{
 			{ID: "v1", Role: "cache-lane"},
 			{ID: "v2", Role: "dind-data", LeaseID: "lse-done"},
 		},
@@ -91,9 +91,9 @@ func TestLiveLeaseCount(t *testing.T) {
 func TestDescribeNamesEveryObjectItWouldTake(t *testing.T) {
 	plan := ownedPlan{
 		instanceID: "inst-1",
-		containers: []docker.OwnedContainer{{ID: "c1", Name: "runner-1", Role: "capsule"}},
-		networks:   []docker.OwnedResource{{ID: "n1", Role: "capsule-net"}},
-		volumes:    []docker.OwnedResource{{ID: "v1", Role: "dind-data"}},
+		containers: []engine.OwnedContainer{{ID: "c1", Name: "runner-1", Role: "capsule"}},
+		networks:   []engine.OwnedResource{{ID: "n1", Role: "capsule-net"}},
+		volumes:    []engine.OwnedResource{{ID: "v1", Role: "dind-data"}},
 	}
 	if plan.empty() {
 		t.Fatal("a plan with three objects reported itself empty")

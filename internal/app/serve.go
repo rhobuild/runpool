@@ -19,8 +19,9 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/doctor"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/lease"
-	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -453,9 +454,9 @@ type providerSession interface {
 // this interface rather than the client itself, the whole startup and
 // sweep path becomes reachable from a test.
 type ownedObjects interface {
-	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedContainer, error)
-	ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedResource, error)
-	ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedResource, error)
+	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error)
+	ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
+	ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
 	RemoveContainer(ctx context.Context, id string) error
 	RemoveNetwork(ctx context.Context, id string) error
 	RemoveVolume(ctx context.Context, name string) error

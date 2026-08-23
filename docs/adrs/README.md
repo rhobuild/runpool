@@ -14,7 +14,7 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-11 | [Capacity floor](2026-08-11-capacity-floor.md) — every binding floored at one | superseded by admission credits |
 | 2026-08-11 | [Repository cache scope](2026-08-11-repository-cache-scope.md) — persistent lanes only where identity binds | accepted |
 | 2026-08-11 | [Plain L3 routing is rejected](2026-08-11-network-sandbox-proxy.md) — why an in-bridge gateway cannot forward, and the one path the host's rule leaves open | accepted, implemented by the egress relay |
-| 2026-08-12 | [Docker API client](2026-08-12-docker-api-client.md) — versioned Moby modules behind a live-tested adapter | accepted |
+| 2026-08-12 | [Docker API client](2026-08-12-docker-api-client.md) — versioned Moby modules behind a live-tested adapter | accepted; the adapter is named by the engine port |
 | 2026-08-13 | [Egress is a relay, not a route](2026-08-13-egress-relay.md) — what the host's own `--internal` rule forces, and what it gives | accepted and implemented; release qualification pending |
 | 2026-08-13 | [Admission credits](2026-08-13-admission-credits.md) — tier parallelism is shared credit with a rotating discovery credit | accepted |
 | 2026-08-14 | [Scheduling and swap semantics](2026-08-14-scheduling-and-swap.md) — optional global parallelism and provider-neutral resource units | accepted |
@@ -23,4 +23,5 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-17 | [Job timeout](2026-08-17-job-timeout.md) — the lease ceiling is a backstop above the provider's own maximum | accepted |
 | 2026-08-17 | [Multiplatform locks](2026-08-17-multiplatform-locks.md) — a lock records the platforms qualified, not the only one that works | accepted and implemented |
 | 2026-08-17 | [Target hosts and scopes](2026-08-17-target-hosts-and-scopes.md) — any host the protocol serves, at any scope it defines | accepted |
+| 2026-08-23 | [The engine port has a name](2026-08-23-the-engine-port-has-a-name.md) — the container engine is a port, and the Moby client is one adapter behind it | accepted and implemented |
 | 2026-08-20 | [The session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md) — why giving up costs more than waiting, and what the report says instead | accepted; supersedes one consequence of session conflict |

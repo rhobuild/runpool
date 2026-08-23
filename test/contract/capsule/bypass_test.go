@@ -10,7 +10,8 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
@@ -40,9 +41,9 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	rec := &memRecorder{}
 
 	// The uplink stands in for the instance's shared egress network.
-	uplinkID, err := dock.CreateNetwork(ctx, docker.NetworkSpec{
+	uplinkID, err := dock.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:   string(string(leaseID) + "-uplink"),
-		Labels: docker.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatalf("uplink: %v", err)

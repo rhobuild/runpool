@@ -11,7 +11,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -22,8 +22,8 @@ import (
 // daemon could not compute counts as zero rather than as a guess.
 func TestMeasureWeighsOnlyThisInstancesLanes(t *testing.T) {
 	h := newHarness(t, 1)
-	h.probe.free = docker.FilesystemFree{FreeBytes: 500, FreeInodes: 90}
-	h.probe.usage = []docker.VolumeUsage{
+	h.probe.free = engine.FilesystemFree{FreeBytes: 500, FreeInodes: 90}
+	h.probe.usage = []engine.VolumeUsage{
 		{Name: "lane-a", Size: 100, Role: cache.RoleCacheLane},
 		{Name: "lane-b", Size: 40, Role: cache.RoleCacheLane},
 		{Name: "workspace", Size: 9000, Role: "workspace"},
@@ -65,7 +65,7 @@ func TestAFailedMeasurementKeepsTheLevelInForce(t *testing.T) {
 // than admitting, and the change is audited.
 func TestPassClosesAdmissionAndPersistsIt(t *testing.T) {
 	h := newHarness(t, 1)
-	h.probe.free = docker.FilesystemFree{FreeBytes: 0, FreeInodes: 0}
+	h.probe.free = engine.FilesystemFree{FreeBytes: 0, FreeInodes: 0}
 
 	h.srv.disk.pass(t.Context())
 
@@ -190,7 +190,7 @@ func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
 		uplinkID:     "up-1",
 		uplinkSubnet: "172.30.0.0/24",
 		probeOut:     "", // saw nothing: the deny set cannot be trusted
-		containers: []docker.OwnedContainer{
+		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
 			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
 		},

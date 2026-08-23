@@ -9,7 +9,8 @@ import (
 
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/credential"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 
@@ -213,9 +214,9 @@ func deleteConfiguredScaleSets(ctx context.Context, streams IO, bindings []store
 // removal happens in dependency order.
 type ownedPlan struct {
 	instanceID string
-	containers []docker.OwnedContainer
-	networks   []docker.OwnedResource
-	volumes    []docker.OwnedResource
+	containers []engine.OwnedContainer
+	networks   []engine.OwnedResource
+	volumes    []engine.OwnedResource
 }
 
 // maintenanceDaemon is the daemon as the maintenance commands need it:
@@ -225,9 +226,9 @@ type ownedPlan struct {
 // say is "this one will not go", and a live daemon cannot be asked to
 // refuse on demand.
 type maintenanceDaemon interface {
-	ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error)
-	ListOwnedNetworks(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error)
-	ListOwnedVolumes(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error)
+	ListOwnedContainers(context.Context, assignment.InstanceID) ([]engine.OwnedContainer, error)
+	ListOwnedNetworks(context.Context, assignment.InstanceID) ([]engine.OwnedResource, error)
+	ListOwnedVolumes(context.Context, assignment.InstanceID) ([]engine.OwnedResource, error)
 	RemoveOwnedContainer(ctx context.Context, reference string,
 		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
 	RemoveOwnedNetwork(ctx context.Context, reference string,
