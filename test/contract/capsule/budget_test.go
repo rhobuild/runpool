@@ -39,7 +39,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 
 	uplinkID, err := dock.CreateNetwork(ctx, docker.NetworkSpec{
 		Name:   leaseID + "-uplink",
-		Labels: map[string]string{docker.LabelManaged: "true", docker.LabelInstance: "contract", docker.LabelRole: capsule.RoleUplink},
+		Labels: docker.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -58,7 +58,7 @@ func (c *Client) ListOwnedVolumes(ctx context.Context, instanceID assignment.Ins
 	}
 	out := make([]OwnedResource, 0, len(resp.Items))
 	for _, v := range resp.Items {
-		out = append(out, OwnedResource{ID: v.Name, LeaseID: assignment.LeaseID(v.Labels[LabelLease]), Role: v.Labels[LabelRole]})
+		out = append(out, OwnedResource{ID: v.Name, LeaseID: assignment.LeaseID(v.Labels[labelLease]), Role: v.Labels[labelRole]})
 	}
 	return out, nil
 }

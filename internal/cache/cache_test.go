@@ -62,7 +62,16 @@ func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) (
 				size = s
 			}
 		}
-		out = append(out, docker.VolumeUsage{Name: name, Labels: labels, Size: size})
+		// Role is lifted out of the labels here because that is what the
+		// adapter does: a fake that reports a volume without the role it
+		// was stamped with is a fake the caller cannot tell apart from a
+		// volume nobody owns.
+		out = append(out, docker.VolumeUsage{
+			Name:   name,
+			Role:   labels["io.runpool.role"],
+			Labels: labels,
+			Size:   size,
+		})
 	}
 	return out, nil
 }
@@ -187,7 +196,7 @@ func TestVolumeNamesAreOpaque(t *testing.T) {
 	if strings.Contains(labels[LabelProject], "acme") {
 		t.Errorf("repository text reached the labels: %q", labels[LabelProject])
 	}
-	if labels[docker.LabelManaged] != "true" || labels[docker.LabelRole] != RoleCacheLane {
+	if labels["io.runpool.managed"] != "true" || labels["io.runpool.role"] != RoleCacheLane {
 		t.Errorf("ownership labels wrong: %v", labels)
 	}
 }

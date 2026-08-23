@@ -155,12 +155,8 @@ func (n *networkSandbox) build(ctx context.Context, budget time.Duration) (*caps
 	defer cancel()
 
 	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, docker.NetworkSpec{
-		Name: "runpool-uplink-" + string(n.instanceID)[:8],
-		Labels: map[string]string{
-			docker.LabelManaged:  "true",
-			docker.LabelInstance: string(n.instanceID),
-			docker.LabelRole:     capsule.RoleUplink,
-		},
+		Name:   "runpool-uplink-" + string(n.instanceID)[:8],
+		Labels: docker.Ownership{Instance: n.instanceID, Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uplink network: %w", err)
@@ -623,11 +619,7 @@ func (n *networkSandbox) discoverHostCIDRs(ctx context.Context) ([]string, error
 		Entrypoint:  []string{"/bin/sh", "-c"},
 		Cmd:         []string{"ip -o -4 addr show scope global"},
 		NetworkMode: "host",
-		Labels: map[string]string{
-			docker.LabelManaged:  "true",
-			docker.LabelInstance: string(n.instanceID),
-			docker.LabelRole:     "probe",
-		},
+		Labels:      docker.Ownership{Instance: n.instanceID, Role: "probe"}.Labels(),
 	})
 	if err != nil {
 		return nil, err

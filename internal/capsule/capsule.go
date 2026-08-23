@@ -260,16 +260,15 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	short := docker.ShortID(string(spec.LeaseID))
 	name := func(role string) string { return "runpool-" + role + "-" + short }
 	labels := func(kind, role string) map[string]string {
-		return map[string]string{
-			docker.LabelManaged:  "true",
-			docker.LabelInstance: string(spec.InstanceID),
-			docker.LabelKind:     kind,
-			docker.LabelLease:    string(spec.LeaseID),
-			docker.LabelRole:     role,
-			docker.LabelAttempt:  string(spec.AttemptID),
-			docker.LabelTarget:   string(spec.TargetID),
-			docker.LabelTier:     string(spec.TierID),
-		}
+		return docker.Ownership{
+			Instance: spec.InstanceID,
+			Lease:    spec.LeaseID,
+			Kind:     kind,
+			Role:     role,
+			Attempt:  string(spec.AttemptID),
+			Target:   string(spec.TargetID),
+			Tier:     string(spec.TierID),
+		}.Labels()
 	}
 	resolve := func(kind, objName string) func() (string, error) {
 		return func() (string, error) {

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -78,7 +77,7 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 	sizes := map[string]int64{} // lane id -> bytes
 	orphaned := map[string]int64{}
 	for _, u := range usage {
-		if u.Labels[docker.LabelRole] != RoleCacheLane {
+		if u.Role != RoleCacheLane {
 			continue
 		}
 		size := u.Size
@@ -111,7 +110,7 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 		}
 	}
 	for _, u := range usage {
-		if u.Labels[docker.LabelRole] != RoleCacheLane {
+		if u.Role != RoleCacheLane {
 			continue
 		}
 		lane := u.Labels[LabelLane]

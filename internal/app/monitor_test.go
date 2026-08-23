@@ -24,10 +24,10 @@ func TestMeasureWeighsOnlyThisInstancesLanes(t *testing.T) {
 	h := newHarness(t, 1)
 	h.probe.free = docker.FilesystemFree{FreeBytes: 500, FreeInodes: 90}
 	h.probe.usage = []docker.VolumeUsage{
-		{Name: "lane-a", Size: 100, Labels: map[string]string{docker.LabelRole: cache.RoleCacheLane}},
-		{Name: "lane-b", Size: 40, Labels: map[string]string{docker.LabelRole: cache.RoleCacheLane}},
-		{Name: "workspace", Size: 9000, Labels: map[string]string{docker.LabelRole: "workspace"}},
-		{Name: "unmeasured", Size: -1, Labels: map[string]string{docker.LabelRole: cache.RoleCacheLane}},
+		{Name: "lane-a", Size: 100, Role: cache.RoleCacheLane},
+		{Name: "lane-b", Size: 40, Role: cache.RoleCacheLane},
+		{Name: "workspace", Size: 9000, Role: "workspace"},
+		{Name: "unmeasured", Size: -1, Role: cache.RoleCacheLane},
 	}
 
 	facts, err := h.srv.disk.measure(t.Context())

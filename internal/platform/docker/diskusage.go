@@ -16,7 +16,12 @@ import (
 // VolumeUsage is one owned volume's measured size, as the daemon
 // reports it through the disk-usage endpoint.
 type VolumeUsage struct {
-	Name   string
+	Name string
+	// Role is the ownership role the volume carries, lifted out of the
+	// labels so a caller can ask what a volume is for without knowing
+	// how ownership is written down. Labels stays for the vocabulary
+	// that is the caller's own, such as which lane a cache volume is.
+	Role   string
 	Labels map[string]string
 	// Size in bytes; -1 when the daemon could not compute it.
 	Size int64
@@ -33,14 +38,19 @@ func (c *Client) OwnedVolumeUsage(ctx context.Context, instanceID assignment.Ins
 	}
 	var out []VolumeUsage
 	for _, v := range du.Volumes.Items {
-		if v.Labels[LabelManaged] != "true" || v.Labels[LabelInstance] != string(instanceID) {
+		if v.Labels[labelManaged] != "true" || v.Labels[labelInstance] != string(instanceID) {
 			continue
 		}
 		size := int64(-1)
 		if v.UsageData != nil {
 			size = v.UsageData.Size
 		}
-		out = append(out, VolumeUsage{Name: v.Name, Labels: v.Labels, Size: size})
+		out = append(out, VolumeUsage{
+			Name:   v.Name,
+			Role:   v.Labels[labelRole],
+			Labels: v.Labels,
+			Size:   size,
+		})
 	}
 	return out, nil
 }
@@ -74,12 +84,11 @@ func (c *Client) ProbeFilesystemFree(ctx context.Context, image string, instance
 		// is the supervisor.
 		Entrypoint: []string{"/bin/sh", "-c"},
 		Cmd:        []string{"df -Pk / && df -Pi /"},
-		Labels: map[string]string{
-			LabelManaged:  "true",
-			LabelInstance: string(instanceID),
-			LabelKind:     "container",
-			LabelRole:     "probe",
-		},
+		Labels: Ownership{
+			Instance: instanceID,
+			Kind:     "container",
+			Role:     "probe",
+		}.Labels(),
 	})
 	if err != nil {
 		return FilesystemFree{}, err
