@@ -218,7 +218,25 @@ type ownedPlan struct {
 	volumes    []docker.OwnedResource
 }
 
-func planOwnedResources(ctx context.Context, st *store.Store, dock *docker.Client) (ownedPlan, error) {
+// maintenanceDaemon is the daemon as the maintenance commands need it:
+// enumerate what this instance owns, and remove one object at a time
+// with ownership proven first. Declared here, and narrow, because these
+// are the commands that delete things — what a fake has to be able to
+// say is "this one will not go", and a live daemon cannot be asked to
+// refuse on demand.
+type maintenanceDaemon interface {
+	ListOwnedContainers(context.Context, assignment.InstanceID) ([]docker.OwnedContainer, error)
+	ListOwnedNetworks(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error)
+	ListOwnedVolumes(context.Context, assignment.InstanceID) ([]docker.OwnedResource, error)
+	RemoveOwnedContainer(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
+	RemoveOwnedNetwork(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
+	RemoveOwnedVolume(ctx context.Context, reference string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) error
+}
+
+func planOwnedResources(ctx context.Context, st *store.Store, dock maintenanceDaemon) (ownedPlan, error) {
 	p := ownedPlan{instanceID: string(st.InstanceID())}
 	var err error
 	id := p.instanceID
@@ -295,7 +313,7 @@ func (p ownedPlan) describe(verb string, applying bool) string {
 
 // remove deletes containers first, then the networks and volumes they
 // held open.
-func (p ownedPlan) remove(ctx context.Context, dock *docker.Client) error {
+func (p ownedPlan) remove(ctx context.Context, dock maintenanceDaemon) error {
 	for _, c := range p.containers {
 		if err := dock.RemoveOwnedContainer(ctx, c.ID, assignment.InstanceID(p.instanceID), c.LeaseID); err != nil {
 			return fmt.Errorf("remove container %s: %w", c.Name, err)
