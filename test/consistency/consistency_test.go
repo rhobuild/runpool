@@ -437,8 +437,14 @@ func TestEveryReaderOfThePlatformLockKnowsItsShape(t *testing.T) {
 		checked++
 		// A reader that only names the file may just be pointing at it in
 		// a comment; one that indexes into it has to know the shape.
+		//
+		// The forms below are the top-level ones the old shape had. A
+		// bare path fragment cannot be on this list: an entry's policy is
+		// still reached through `.policy.`, and its facts through
+		// `.platform.`, so a correct reader of the list would be refused
+		// by a check that reads it as the shape that is gone.
 		for _, gone := range []string{`reference["policy"]`, `reference["platform"]`,
-			`reference.get("status")`, `.policy.`, `.platform.arch`} {
+			`reference.get("status")`} {
 			if strings.Contains(text, gone) {
 				t.Errorf("%s reads the lock as %s, which the file has not had since it "+
 					"became a list of platforms; this fails at release time, saying "+

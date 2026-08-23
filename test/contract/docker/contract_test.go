@@ -528,6 +528,37 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 	}
 }
 
+// lockArch translates the daemon's spelling of an architecture into the
+// one the platform lock records. They differ on both platforms a release builds
+// for, and scripts/qualification/platform-facts.sh maps the same pair
+// for the facts the release gate reads.
+func lockArch(daemon string) string {
+	switch daemon {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	}
+	return daemon
+}
+
+// TestTheDaemonSpellingSelectsTheEntry: the entry is selected by the
+// architecture the daemon reports, and the daemon does not spell it the
+// way the lock does.
+//
+// Mapping one architecture and not the other refuses a host that ran the
+// suites for how its daemon writes the name, and it refuses it as a
+// platform nobody qualified -- which is the answer a record of several
+// platforms exists to stop giving.
+func TestTheDaemonSpellingSelectsTheEntry(t *testing.T) {
+	for daemon, want := range map[string]string{"x86_64": "amd64", "aarch64": "arm64"} {
+		if got := lockArch(daemon); got != want {
+			t.Errorf("a daemon reporting %q selects the %q entry; the lock records %q, so the "+
+				"host is told nobody has qualified its platform", daemon, got, want)
+		}
+	}
+}
+
 // TestHostInfo covers the doctor's view of the daemon. Runpool refuses
 // hosts it cannot honour the capsule contract on, and every field here
 // is read from a result struct the migration introduced.
@@ -557,10 +588,7 @@ func TestHostInfo(t *testing.T) {
 	// The expectation comes from the reviewed manifest, never from the host
 	// being evaluated.
 	reference := platform.MustLoad()
-	arch := info.Architecture
-	if arch == "x86_64" {
-		arch = "amd64"
-	}
+	arch := lockArch(info.Architecture)
 	// The entry for the host being measured. A host with none is not a
 	// host that failed the reference; it is one nobody has qualified, and
 	// saying so is what keeps this from reading as a broken release.

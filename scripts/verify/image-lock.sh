@@ -37,10 +37,12 @@ for name in $names; do
     continue
   fi
 
-  # The digest is right; now the platforms behind it. Attestation
-  # manifests carry no architecture and are skipped rather than reported
-  # as a platform nobody asked for.
-  published=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' |
+  # The digest is right; now the platforms behind it. By digest rather
+  # than by tag, so these are the bytes just verified and not whatever
+  # the tag resolves to a moment later. Attestation manifests carry no
+  # architecture and are skipped rather than reported as a platform
+  # nobody asked for.
+  if ! published=$(docker buildx imagetools inspect "${ref%:*}@${want}" --format '{{json .Manifest}}' |
     python3 -c '
 import json, sys
 m = json.load(sys.stdin)
@@ -50,7 +52,11 @@ for d in m.get("manifests", []):
     if p.get("architecture") in (None, "unknown"):
         continue
     out.append(p["os"] + "/" + p["architecture"])
-print(" ".join(sorted(set(out))))')
+print(" ".join(sorted(set(out))))'); then
+    echo "FAIL  $name ($ref): the published platforms could not be read"
+    status=1
+    continue
+  fi
   for platform in $declared; do
     case " $published " in
       *" $platform "*) ;;
