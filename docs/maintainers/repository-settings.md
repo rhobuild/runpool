@@ -108,6 +108,12 @@ it.
   tests alone unless somebody dispatches them: Dependabot keeps that update out
   of the grouped batch, CODEOWNERS holds `go.mod`, and the reviewer runs
   `contracts-github-actions` by hand and links the run before merging.
+- Protect `release-candidate` with release-maintainer approval. It gates the
+  one job that writes to the registry before anything has been qualified: the
+  candidate images a release later promotes. The protected `v*` tag is what
+  authorizes the run, and this is where that authorization is recorded and can
+  be held. With a single maintainer, self-review applies here for the reason
+  the rulesets section gives: a bypass taken on every run protects nothing.
 - Protect `release` with required maintainers and the external security review
   approval. Only the final publish job may use it.
 

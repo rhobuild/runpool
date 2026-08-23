@@ -56,10 +56,15 @@ concurrency:
   group: integration-docker-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Kept equal to go.mod by scripts/verify/go-version.sh.
+  GOTOOLCHAIN: go1.26.6
+
 jobs:
   daemon:
     name: moby adapter, cache lanes and disk
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,6 +92,10 @@ jobs:
   capsule:
     name: outer capsule, JIT and the egress sandbox
     runs-on: ubuntu-24.04
+    # Above the suite's own 20m, plus the capsule image build it does
+    # first: a job deadline under the test's leaves the suite reporting
+    # nothing when it is the thing that hung.
+    timeout-minutes: 40
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,6 +133,7 @@ jobs:
   lifecycle:
     name: lifecycle drills
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,6 +156,7 @@ jobs:
   sqlite:
     name: sqlite durability
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
