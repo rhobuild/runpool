@@ -42,7 +42,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	// The uplink stands in for the instance's shared egress network.
 	uplinkID, err := dock.CreateNetwork(ctx, docker.NetworkSpec{
 		Name:   string(string(leaseID) + "-uplink"),
-		Labels: map[string]string{docker.LabelManaged: "true", docker.LabelInstance: "contract", docker.LabelRole: capsule.RoleUplink},
+		Labels: docker.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatalf("uplink: %v", err)

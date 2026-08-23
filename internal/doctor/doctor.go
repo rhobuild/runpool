@@ -236,12 +236,14 @@ func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
 		Name:     probe,
 		Internal: true,
 		Isolated: true,
-		Labels: map[string]string{
-			docker.LabelManaged:  "true",
-			docker.LabelInstance: "doctor",
-			docker.LabelKind:     "network",
-			docker.LabelRole:     "preflight-probe",
-		},
+		Labels: docker.Ownership{
+			// Not an instance: the preflight runs before one serves, and
+			// the sentinel is what keeps its probe out of any instance's
+			// sweep.
+			Instance: "doctor",
+			Kind:     "network",
+			Role:     "preflight-probe",
+		}.Labels(),
 	})
 	if err != nil {
 		cleanupErr := removeProbeNetwork(ctx, d, probe)

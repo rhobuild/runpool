@@ -330,8 +330,8 @@ func TestIsolatedBridgeProbeLifecycle(t *testing.T) {
 		if !probe.created.Internal || !probe.created.Isolated {
 			t.Fatalf("probe network = %+v; want internal and isolated", probe.created)
 		}
-		if probe.created.Labels[docker.LabelRole] != "preflight-probe" {
-			t.Fatalf("probe role = %q; want preflight-probe", probe.created.Labels[docker.LabelRole])
+		if probe.created.Labels["io.runpool.role"] != "preflight-probe" {
+			t.Fatalf("probe role = %q; want preflight-probe", probe.created.Labels["io.runpool.role"])
 		}
 		if probe.removed != "probe-id" {
 			t.Fatalf("removed %q; want the created network id", probe.removed)

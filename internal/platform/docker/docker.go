@@ -26,15 +26,61 @@ import (
 // reconcilable through the Docker API alone, so a crashed controller's
 // objects can always be found without trusting its own books.
 const (
-	LabelManaged  = "io.runpool.managed"
-	LabelInstance = "io.runpool.instance"
-	LabelKind     = "io.runpool.kind"
-	LabelLease    = "io.runpool.lease"
-	LabelRole     = "io.runpool.role"
-	LabelAttempt  = "io.runpool.attempt"
-	LabelTarget   = "io.runpool.target"
-	LabelTier     = "io.runpool.tier"
+	labelManaged  = "io.runpool.managed"
+	labelInstance = "io.runpool.instance"
+	labelKind     = "io.runpool.kind"
+	labelLease    = "io.runpool.lease"
+	labelRole     = "io.runpool.role"
+	labelAttempt  = "io.runpool.attempt"
+	labelTarget   = "io.runpool.target"
+	labelTier     = "io.runpool.tier"
 )
+
+// Ownership is what a Runpool instance stamps on everything it creates,
+// and the only thing that proves an object is its to remove. A name is
+// not proof: a foreign object can carry the name a plan expects, and
+// adopting it by name is how a sweep deletes somebody else's work.
+//
+// It is one value rather than a map each caller builds, because the
+// shape is fixed and the six places that built it by hand could each
+// forget a key. What varies is which fields a kind of object has:
+// instance infrastructure carries no lease, and a probe carries neither
+// attempt nor tier. An unset field is left off rather than written
+// empty, so an object states what is true of it and nothing else.
+type Ownership struct {
+	Instance assignment.InstanceID
+	Lease    assignment.LeaseID
+	Kind     string
+	Role     string
+	Attempt  string
+	Target   string
+	Tier     string
+}
+
+// Labels renders the ownership as the labels an object carries. The
+// values are a compatibility surface between releases: a controller
+// sweeps the objects an older one stamped, so a key or a value that
+// changes is a sweep that stops finding them. internal/platform/docker's
+// own test pins them exactly.
+func (o Ownership) Labels() map[string]string {
+	labels := map[string]string{
+		labelManaged:  "true",
+		labelInstance: string(o.Instance),
+	}
+	for key, value := range map[string]string{
+		labelKind:    o.Kind,
+		labelLease:   string(o.Lease),
+		labelRole:    o.Role,
+		labelAttempt: o.Attempt,
+		labelTarget:  o.Target,
+		labelTier:    o.Tier,
+	} {
+		if value != "" {
+			labels[key] = value
+		}
+	}
+	return labels
+}
 
 type Client struct {
 	cli *client.Client
@@ -355,7 +401,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, ins
 	default:
 		return "", fmt.Errorf("unknown resource kind %q", kind)
 	}
-	if labels[LabelManaged] != "true" || labels[LabelInstance] != string(instanceID) || labels[LabelLease] != string(leaseID) {
+	if labels[labelManaged] != "true" || labels[labelInstance] != string(instanceID) || labels[labelLease] != string(leaseID) {
 		return "", fmt.Errorf("%w: %s %q", ErrForeignResource, kind, reference)
 	}
 	return id, nil
@@ -474,11 +520,11 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.
 		out = append(out, OwnedContainer{
 			ID:   s.ID,
 			Name: name,
-			Kind: s.Labels[LabelKind],
-			Role: s.Labels[LabelRole],
+			Kind: s.Labels[labelKind],
+			Role: s.Labels[labelRole],
 			// The one conversion: a label is a string until it is read,
 			// and this is where it is read.
-			LeaseID: assignment.LeaseID(s.Labels[LabelLease]),
+			LeaseID: assignment.LeaseID(s.Labels[labelLease]),
 			Running: s.State == container.StateRunning,
 		})
 	}
@@ -487,6 +533,6 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.
 
 func ownedFilter(instanceID assignment.InstanceID) client.Filters {
 	return client.Filters{}.
-		Add("label", LabelManaged+"=true").
-		Add("label", LabelInstance+"="+string(instanceID))
+		Add("label", labelManaged+"=true").
+		Add("label", labelInstance+"="+string(instanceID))
 }

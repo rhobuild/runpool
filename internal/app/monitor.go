@@ -192,7 +192,7 @@ func (m *diskMonitor) measure(ctx context.Context) (disk.Facts, error) {
 	}
 	var managed int64
 	for _, u := range usage {
-		if u.Labels[docker.LabelRole] == cache.RoleCacheLane && u.Size > 0 {
+		if u.Role == cache.RoleCacheLane && u.Size > 0 {
 			managed += u.Size
 		}
 	}

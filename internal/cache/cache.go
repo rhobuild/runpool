@@ -97,14 +97,13 @@ func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation 
 	}
 
 	name := VolumeName(lane.ID)
-	labels := map[string]string{
-		docker.LabelManaged:  "true",
-		docker.LabelInstance: string(m.instanceID),
-		docker.LabelRole:     labelRoleValue,
-		LabelProject:         lane.ProjectID,
-		LabelGen:             lane.Generation,
-		LabelLane:            lane.ID,
-	}
+	// The lane's own three go on top of the ownership every managed
+	// object carries: what a lane is warm for is the cache's vocabulary,
+	// not the daemon's.
+	labels := docker.Ownership{Instance: m.instanceID, Role: labelRoleValue}.Labels()
+	labels[LabelProject] = lane.ProjectID
+	labels[LabelGen] = lane.Generation
+	labels[LabelLane] = lane.ID
 	if err := m.volumes.EnsureOwnedVolume(ctx, name, labels); err != nil {
 		// The lane lease must not outlive a volume that cannot be used:
 		// give it back so the job runs uncached and the next acquire can

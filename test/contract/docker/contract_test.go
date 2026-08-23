@@ -65,11 +65,11 @@ func client(t *testing.T) (*docker.Client, string) {
 
 func labels(instance, lease, kind, role string) map[string]string {
 	return map[string]string{
-		docker.LabelManaged:  "true",
-		docker.LabelInstance: instance,
-		docker.LabelLease:    lease,
-		docker.LabelKind:     kind,
-		docker.LabelRole:     role,
+		"io.runpool.managed":  "true",
+		"io.runpool.instance": instance,
+		"io.runpool.lease":    lease,
+		"io.runpool.kind":     kind,
+		"io.runpool.role":     role,
 	}
 }
 
@@ -629,9 +629,9 @@ func TestEnsureOwnedVolume(t *testing.T) {
 	ctx := t.Context()
 
 	own := map[string]string{
-		docker.LabelManaged:  "true",
-		docker.LabelInstance: instance,
-		docker.LabelRole:     cache.RoleCacheLane,
+		"io.runpool.managed":  "true",
+		"io.runpool.instance": instance,
+		"io.runpool.role":     cache.RoleCacheLane,
 	}
 	name := instance + "-ensure"
 	t.Cleanup(func() { _ = c.RemoveVolume(context.Background(), name) })
@@ -803,7 +803,7 @@ func TestOwnedVolumeUsage(t *testing.T) {
 	if found.Size < 512*1024 {
 		t.Errorf("size = %d; want at least the 512KiB written", found.Size)
 	}
-	if found.Labels[docker.LabelRole] != cache.RoleCacheLane {
+	if found.Role != cache.RoleCacheLane {
 		t.Errorf("labels did not travel through disk usage: %v", found.Labels)
 	}
 }
@@ -910,8 +910,8 @@ func TestContainerRemovalSparesNamedVolumes(t *testing.T) {
 
 	named := instance + "-keep"
 	if _, err := c.CreateVolume(ctx, named, map[string]string{
-		docker.LabelManaged:  "true",
-		docker.LabelInstance: instance,
+		"io.runpool.managed":  "true",
+		"io.runpool.instance": instance,
 	}); err != nil {
 		t.Fatalf("create named volume: %v", err)
 	}
@@ -922,8 +922,8 @@ func TestContainerRemovalSparesNamedVolumes(t *testing.T) {
 		Image: busybox,
 		Cmd:   []string{"true"},
 		Labels: map[string]string{
-			docker.LabelManaged:  "true",
-			docker.LabelInstance: instance,
+			"io.runpool.managed":  "true",
+			"io.runpool.instance": instance,
 		},
 		Mounts: []docker.Mount{
 			{Volume: named, Target: "/data"},

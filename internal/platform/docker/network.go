@@ -159,7 +159,7 @@ func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID assignment.In
 	}
 	out := make([]OwnedResource, 0, len(nets.Items))
 	for _, n := range nets.Items {
-		out = append(out, OwnedResource{ID: n.ID, LeaseID: assignment.LeaseID(n.Labels[LabelLease]), Role: n.Labels[LabelRole]})
+		out = append(out, OwnedResource{ID: n.ID, LeaseID: assignment.LeaseID(n.Labels[labelLease]), Role: n.Labels[labelRole]})
 	}
 	return out, nil
 }
