@@ -55,7 +55,7 @@ defines its own expectation.
 
 | | Reference value |
 | --- | --- |
-| OS | Debian 13 (trixie), amd64; exact patch pending host capture |
+| OS | Debian 13 (trixie), amd64 — the selection in the one entry recorded; exact patch pending host capture |
 | Kernel | Pending host capture |
 | Docker Engine | **29.7.2** selected; exact installed package pending capture |
 | Engine API, containerd, runc | Pending host capture |
@@ -83,14 +83,43 @@ does not invalidate earlier release evidence.
 | `public-internet-only` in shared mode | Open capsule egress to host and private networks is incompatible with the coexistence contract |
 | `systemd` or `cgroupfs` driver | Read from the daemon at startup; the parent form is generated for the reported driver and verified live |
 
-**Architecture is qualification evidence, not a design limit.** The gates
-observe `linux/amd64`, which is what the platform lock records and what
-the published images are built for. Nothing in the design restricts an
-architecture: the capsule's base images publish `linux/arm64`, the
-controller is a static Go binary, and the isolation is cgroup v2 and
-kernel netfilter on either. Another architecture is therefore *unverified*
-rather than unsupported — nobody has run the suites there, and this
-document will say so until somebody has.
+**What is built and what is qualified are two lists, and neither promises
+the other.**
+
+*Built* is [`build/images.lock.json`](../../build/images.lock.json):
+`linux/amd64` and `linux/arm64`, which is what the pinned base images
+publish. The controller is a static Go binary and the capsule's Dockerfile
+builds for both.
+
+*Qualified* is [`build/platform.lock.json`](../../build/platform.lock.json),
+one entry per platform whose suites were run and whose host facts were
+reviewed and frozen. It records `amd64` today and nothing else.
+
+So `linux/arm64` is **buildable and unverified**: the build produces it —
+the capsule image and the controller binary both compile for it — and
+nobody has run the suites there. That is a different sentence from
+unsupported, and the gate says which it is: a host with no entry fails as
+*not qualified on this platform*, naming the ones that are, rather than
+as an architecture mismatch.
+
+**What a release actually publishes today is one platform.** The
+publishing half of that decision is not built: the release workflow
+builds and pushes a single image and ships a single `linux/amd64`
+binary. So *built* here describes what the build can produce, not what
+the last release put in the registry. Do not read it as a promise of an
+arm64 artifact.
+
+The distribution is the same kind of statement. `debian 13 trixie` is
+the reviewed selection in the entry that exists, not a constraint the
+reader enforces: a host on another distribution that ran the suites can
+be recorded as its own entry. What no entry can name is a platform no
+release builds for.
+
+Operating system is not on that list. A capsule runs a Linux daemon and
+a Linux runner inside a container, and the isolation is cgroup v2 and
+kernel netfilter; there is no non-Linux variant of the base images to
+build against. That is a design limit, and it is stated as a host
+requirement above rather than as a policy anyone may revise.
 
 The self-hosted release-qualification runner must use GitHub Actions Runner 2.327.1
 or newer so the Node 24 runtime required by the pinned first-party actions is

@@ -5,10 +5,20 @@
     "it was tested against. The runner and dind pair is versioned together:",
     "the runner's externals tree and the daemon it drives must match.",
     "scripts/verify/image-lock.sh re-resolves each tag and fails when a",
-    "digest has drifted from what is recorded here."
+    "digest has drifted from what is recorded here.",
+    "",
+    "platforms are what a release builds for, which is not what it",
+    "qualifies: build/platform.lock.json records the platforms the suites",
+    "were run on, and neither list promises the other. The digests need no",
+    "per-platform variant because they are index digests already: a build",
+    "targeting one of these resolves that platform's child of the same",
+    "pinned digest."
   ],
   "resolved": "2026-08-15",
-  "platform": "linux/amd64",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
   "images": {
     "runner": {
       "ref": "ghcr.io/actions/actions-runner:2.336.0",

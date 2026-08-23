@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -26,15 +27,85 @@ const (
 //go:embed platform.lock.json
 var manifestJSON []byte
 
-// Reference is the reviewed release-qualification target. A pending reference
-// keeps release gates closed until the operator facts have been captured and
-// frozen in the repository before a candidate tag is created.
+// Buildable are the platforms a release can build for: the intersection
+// of what the pinned upstream images publish. The runner image publishes
+// linux/amd64 and linux/arm64 and nothing else, which is the ceiling;
+// dind publishes more.
+//
+// The operating system is here because the images say so, not because
+// anything in this package decided it. A capsule runs a Linux daemon and
+// a Linux runner inside a container, so there is no non-Linux variant of
+// these images to build against — and if one were ever published, this
+// list is where that would show, rather than in a rule written beside it.
+//
+// It is not the list of qualified platforms. A release may build for a
+// platform nobody has run the suites on, and keeping the two apart is
+// what lets either be said without implying the other.
+var Buildable = []string{"linux/amd64", "linux/arm64"}
+
+// BuildableArches is Buildable's architectures, for the entries in the
+// qualification record, which name a host rather than an image.
+func BuildableArches() []string {
+	out := make([]string, 0, len(Buildable))
+	for _, p := range Buildable {
+		if _, arch, ok := strings.Cut(p, "/"); ok {
+			out = append(out, arch)
+		}
+	}
+	return out
+}
+
+// Reference is the reviewed release-qualification record: one entry per
+// platform that was qualified, each with its own selection policy and,
+// once frozen, its own exact facts.
+//
+// A list rather than one entry because qualification is evidence that
+// the release ran correctly on a host, and there is one host's worth of
+// facts per platform. Shaped as one, the file could not record a second
+// qualification without changing the format that is itself the proof of
+// the gate -- and a gate that refuses a host for not being the one
+// platform its file can express is measuring the file, not the host.
 type Reference struct {
-	SchemaVersion int    `json:"schema_version"`
-	Status        string `json:"status"`
-	Policy        Policy `json:"policy"`
-	Recorded      string `json:"recorded,omitempty"`
-	Platform      Facts  `json:"platform,omitempty"`
+	SchemaVersion int         `json:"schema_version"`
+	Platforms     []Qualified `json:"platforms"`
+}
+
+// Qualified is one platform's selection policy and the facts observed on
+// it. A pending entry keeps release gates closed for that platform until
+// its facts have been captured and reviewed before a candidate tag.
+type Qualified struct {
+	Status   string `json:"status"`
+	Policy   Policy `json:"policy"`
+	Recorded string `json:"recorded,omitempty"`
+	Platform Facts  `json:"platform,omitempty"`
+}
+
+// For returns the entry qualified for an architecture.
+func (r Reference) For(arch string) (Qualified, bool) {
+	for _, q := range r.Platforms {
+		if q.Policy.Arch == arch {
+			return q, true
+		}
+	}
+	return Qualified{}, false
+}
+
+// Arches lists the architectures this release records a qualification
+// for, in the order the file names them. It is what a failure on an
+// unqualified platform says instead of "wrong architecture": the
+// distinction between a host that failed and a host nobody has run.
+func (r Reference) Arches() []string {
+	out := make([]string, 0, len(r.Platforms))
+	for _, q := range r.Platforms {
+		out = append(out, q.Policy.Arch)
+	}
+	return out
+}
+
+// NotQualified is the error a platform with no entry gets.
+func (r Reference) NotQualified(arch string) error {
+	return fmt.Errorf("no release qualification is recorded for %s; this release records %s",
+		arch, strings.Join(r.Arches(), ", "))
 }
 
 // Policy records how the exact target is selected. It is distinct from the
@@ -102,48 +173,133 @@ func MustLoad() Reference {
 }
 
 func (r Reference) validate() error {
-	if r.SchemaVersion != 1 {
+	if r.SchemaVersion != 2 {
 		return fmt.Errorf("platform manifest schema_version %d is unsupported", r.SchemaVersion)
 	}
-	if r.Policy.OS != "debian" || r.Policy.OSVersion != "13" ||
-		r.Policy.OSCodename != "trixie" || r.Policy.Arch != "amd64" ||
-		r.Policy.DockerChannel != "stable" || r.Policy.DockerSource == "" ||
-		r.Policy.Selection != "latest-stable-at-policy-review" || r.Policy.TargetEngine == "" ||
-		r.Policy.Reviewed == "" || r.Policy.FreezePoint != "before-release-candidate" {
-		return fmt.Errorf("platform manifest has an invalid selection policy")
+	if len(r.Platforms) == 0 {
+		return fmt.Errorf("platform manifest records no platform at all")
 	}
-	switch r.Status {
+	seen := map[string]bool{}
+	for _, q := range r.Platforms {
+		if seen[q.Policy.Arch] {
+			return fmt.Errorf("platform manifest records %s twice; which entry qualifies a host "+
+				"would be whichever came first", q.Policy.Arch)
+		}
+		seen[q.Policy.Arch] = true
+		if err := q.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (q Qualified) validate() error {
+	if !slices.Contains(BuildableArches(), q.Policy.Arch) {
+		return fmt.Errorf("platform manifest qualifies %q, which no release builds for; "+
+			"the pinned images publish %s", q.Policy.Arch, strings.Join(Buildable, ", "))
+	}
+	// Which distribution was selected is a reviewed choice, not a rule.
+	// Naming one here would do to the operating system what naming a
+	// single architecture did to the machine: a host that ran the suites
+	// and passed would be refused for not being the one this file can
+	// express, and the refusal would read as a broken manifest rather
+	// than as an unqualified platform.
+	//
+	// What is required is that the choice is stated. A policy missing a
+	// field records a selection nobody can check the host against.
+	// Two of these are rules rather than choices, and stay values. The
+	// channel is what the guide and the lock's own comment require --
+	// evidence from a nightly build is evidence about something no
+	// operator installs -- and the selection names how the target was
+	// picked, which is the sentence the reviewer signed off.
+	if q.Policy.DockerChannel != "stable" {
+		return fmt.Errorf("the %s selection policy takes Docker from the %q channel; release "+
+			"evidence comes from the stable channel an operator installs from", q.Policy.Arch,
+			q.Policy.DockerChannel)
+	}
+	if q.Policy.Selection != "latest-stable-at-policy-review" {
+		return fmt.Errorf("the %s selection policy selects by %q; that string is what a "+
+			"reviewer signed off on, not free text", q.Policy.Arch, q.Policy.Selection)
+	}
+	missing := []string{}
+	for name, value := range map[string]string{
+		"os":            q.Policy.OS,
+		"os_version":    q.Policy.OSVersion,
+		"os_codename":   q.Policy.OSCodename,
+		"docker_source": q.Policy.DockerSource,
+		"target_engine": q.Policy.TargetEngine,
+		"reviewed":      q.Policy.Reviewed,
+	} {
+		if value == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return fmt.Errorf("the %s selection policy states no %s", q.Policy.Arch,
+			strings.Join(missing, ", "))
+	}
+	// The freeze point is a rule rather than a choice: a lock reviewed
+	// after the candidate exists is a lock the candidate could have been
+	// built against.
+	if q.Policy.FreezePoint != "before-release-candidate" {
+		return fmt.Errorf("the %s selection policy freezes at %q; a reference reviewed after "+
+			"the candidate exists is not evidence about it", q.Policy.Arch, q.Policy.FreezePoint)
+	}
+	switch q.Status {
 	case ReferenceStatusPending:
-		if r.Recorded != "" || r.Platform != (Facts{}) {
-			return fmt.Errorf("pending platform manifest must not contain frozen facts")
+		if q.Recorded != "" || q.Platform != (Facts{}) {
+			return fmt.Errorf("pending platform manifest must not contain frozen facts for %s",
+				q.Policy.Arch)
 		}
 		return nil
 	case ReferenceStatusFrozen:
 		// Continue below and require every exact fact.
 	default:
-		return fmt.Errorf("platform manifest status %q is unsupported", r.Status)
+		return fmt.Errorf("platform manifest status %q is unsupported for %s",
+			q.Status, q.Policy.Arch)
 	}
 
-	missing := []string{}
+	// The facts have to be the platform the entry claims. Nothing else
+	// relates the two: selection reads the policy and comparison reads
+	// the facts, so an entry labelled one platform and frozen from
+	// another qualifies neither -- the host that ran the suites is told
+	// nobody qualified it, and a host of the claimed platform is told the
+	// reference is something else. That is a wrong qualification rather
+	// than a differently shaped one, and it is what naming a single
+	// architecture used to make unrepresentable.
+	for name, pair := range map[string][2]string{
+		"arch":        {q.Policy.Arch, q.Platform.Arch},
+		"os":          {q.Policy.OS, q.Platform.OS},
+		"os_version":  {q.Policy.OSVersion, q.Platform.OSVersion},
+		"os_codename": {q.Policy.OSCodename, q.Platform.OSCodename},
+	} {
+		if want, got := pair[0], pair[1]; got != "" && got != want {
+			return fmt.Errorf("the %s entry selects %s %q and froze %q; the facts are not from "+
+				"the platform the entry claims", q.Policy.Arch, name, want, got)
+		}
+	}
+
+	missing = nil
 	for name, value := range map[string]string{
-		"recorded":           r.Recorded,
-		"os":                 r.Platform.OS,
-		"os_version":         r.Platform.OSVersion,
-		"os_codename":        r.Platform.OSCodename,
-		"arch":               r.Platform.Arch,
-		"kernel":             r.Platform.Kernel,
-		"engine":             r.Platform.Engine,
-		"api":                r.Platform.API,
-		"cgroup_version":     r.Platform.CgroupVersion,
-		"cgroup_driver":      r.Platform.CgroupDriver,
-		"storage_driver":     r.Platform.StorageDriver,
-		"backing_filesystem": r.Platform.BackingFilesystem,
-		"containerd":         r.Platform.Containerd,
-		"runc":               r.Platform.Runc,
-		"buildx":             r.Platform.Buildx,
-		"compose":            r.Platform.Compose,
-		"iptables":           r.Platform.IPTables,
-		"nftables":           r.Platform.NFTables,
+		"recorded":           q.Recorded,
+		"os":                 q.Platform.OS,
+		"os_version":         q.Platform.OSVersion,
+		"os_codename":        q.Platform.OSCodename,
+		"arch":               q.Platform.Arch,
+		"kernel":             q.Platform.Kernel,
+		"engine":             q.Platform.Engine,
+		"api":                q.Platform.API,
+		"cgroup_version":     q.Platform.CgroupVersion,
+		"cgroup_driver":      q.Platform.CgroupDriver,
+		"storage_driver":     q.Platform.StorageDriver,
+		"backing_filesystem": q.Platform.BackingFilesystem,
+		"containerd":         q.Platform.Containerd,
+		"runc":               q.Platform.Runc,
+		"buildx":             q.Platform.Buildx,
+		"compose":            q.Platform.Compose,
+		"iptables":           q.Platform.IPTables,
+		"nftables":           q.Platform.NFTables,
 	} {
 		if value == "" {
 			missing = append(missing, name)
@@ -152,7 +308,7 @@ func (r Reference) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("platform manifest is incomplete: %s", strings.Join(missing, ", "))
 	}
-	if r.Platform.Rootless == nil {
+	if q.Platform.Rootless == nil {
 		return fmt.Errorf("platform manifest is incomplete: rootless")
 	}
 	return nil
@@ -160,9 +316,10 @@ func (r Reference) validate() error {
 
 // RequireFrozen rejects release qualification until an independently reviewed
 // set of exact host facts has replaced the pending reference.
-func (r Reference) RequireFrozen() error {
-	if r.Status != ReferenceStatusFrozen {
-		return fmt.Errorf("release-qualification reference is %s; capture and review the installed stable Docker platform before creating a candidate", r.Status)
+func (q Qualified) RequireFrozen() error {
+	if q.Status != ReferenceStatusFrozen {
+		return fmt.Errorf("the %s release-qualification reference is %s; capture and review the "+
+			"installed stable Docker platform before creating a candidate", q.Policy.Arch, q.Status)
 	}
 	return nil
 }
@@ -181,9 +338,9 @@ func (m Mismatch) String() string {
 // Compare reports every observed fact that differs from the qualification
 // reference. Missing observations are mismatches because absent evidence
 // cannot qualify a release.
-func (r Reference) Compare(observed Facts) []Mismatch {
-	if r.Status != ReferenceStatusFrozen {
-		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: r.Status}}
+func (q Qualified) Compare(observed Facts) []Mismatch {
+	if q.Status != ReferenceStatusFrozen {
+		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: q.Status}}
 	}
 	var out []Mismatch
 	check := func(property, want, got string) {
@@ -191,24 +348,24 @@ func (r Reference) Compare(observed Facts) []Mismatch {
 			out = append(out, Mismatch{Property: property, Want: want, Got: got})
 		}
 	}
-	check("os", r.Platform.OS, observed.OS)
-	check("os_version", r.Platform.OSVersion, observed.OSVersion)
-	check("os_codename", r.Platform.OSCodename, observed.OSCodename)
-	check("arch", r.Platform.Arch, observed.Arch)
-	check("kernel", r.Platform.Kernel, observed.Kernel)
-	check("engine", r.Platform.Engine, observed.Engine)
-	check("api", r.Platform.API, observed.API)
-	check("cgroup_version", r.Platform.CgroupVersion, observed.CgroupVersion)
-	check("cgroup_driver", r.Platform.CgroupDriver, observed.CgroupDriver)
-	check("storage_driver", r.Platform.StorageDriver, observed.StorageDriver)
-	check("backing_filesystem", r.Platform.BackingFilesystem, observed.BackingFilesystem)
-	check("containerd", r.Platform.Containerd, observed.Containerd)
-	check("runc", r.Platform.Runc, observed.Runc)
-	check("buildx", r.Platform.Buildx, observed.Buildx)
-	check("compose", r.Platform.Compose, observed.Compose)
-	check("iptables", r.Platform.IPTables, observed.IPTables)
-	check("nftables", r.Platform.NFTables, observed.NFTables)
-	if mismatch, ok := compareBoolFact("rootless", r.Platform.Rootless, observed.Rootless); ok {
+	check("os", q.Platform.OS, observed.OS)
+	check("os_version", q.Platform.OSVersion, observed.OSVersion)
+	check("os_codename", q.Platform.OSCodename, observed.OSCodename)
+	check("arch", q.Platform.Arch, observed.Arch)
+	check("kernel", q.Platform.Kernel, observed.Kernel)
+	check("engine", q.Platform.Engine, observed.Engine)
+	check("api", q.Platform.API, observed.API)
+	check("cgroup_version", q.Platform.CgroupVersion, observed.CgroupVersion)
+	check("cgroup_driver", q.Platform.CgroupDriver, observed.CgroupDriver)
+	check("storage_driver", q.Platform.StorageDriver, observed.StorageDriver)
+	check("backing_filesystem", q.Platform.BackingFilesystem, observed.BackingFilesystem)
+	check("containerd", q.Platform.Containerd, observed.Containerd)
+	check("runc", q.Platform.Runc, observed.Runc)
+	check("buildx", q.Platform.Buildx, observed.Buildx)
+	check("compose", q.Platform.Compose, observed.Compose)
+	check("iptables", q.Platform.IPTables, observed.IPTables)
+	check("nftables", q.Platform.NFTables, observed.NFTables)
+	if mismatch, ok := compareBoolFact("rootless", q.Platform.Rootless, observed.Rootless); ok {
 		out = append(out, mismatch)
 	}
 	return out
@@ -216,9 +373,9 @@ func (r Reference) Compare(observed Facts) []Mismatch {
 
 // CompareDockerFacts is the subset of Compare observable through the Docker
 // API. Qualification contracts use it when they need daemon-only evidence.
-func (r Reference) CompareDockerFacts(observed Facts) []Mismatch {
-	if r.Status != ReferenceStatusFrozen {
-		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: r.Status}}
+func (q Qualified) CompareDockerFacts(observed Facts) []Mismatch {
+	if q.Status != ReferenceStatusFrozen {
+		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: q.Status}}
 	}
 	var out []Mismatch
 	check := func(property, want, got string) {
@@ -226,12 +383,12 @@ func (r Reference) CompareDockerFacts(observed Facts) []Mismatch {
 			out = append(out, Mismatch{Property: property, Want: want, Got: got})
 		}
 	}
-	check("engine", r.Platform.Engine, observed.Engine)
-	check("api", r.Platform.API, observed.API)
-	check("arch", r.Platform.Arch, observed.Arch)
-	check("cgroup_version", r.Platform.CgroupVersion, observed.CgroupVersion)
-	check("cgroup_driver", r.Platform.CgroupDriver, observed.CgroupDriver)
-	if mismatch, ok := compareBoolFact("rootless", r.Platform.Rootless, observed.Rootless); ok {
+	check("engine", q.Platform.Engine, observed.Engine)
+	check("api", q.Platform.API, observed.API)
+	check("arch", q.Platform.Arch, observed.Arch)
+	check("cgroup_version", q.Platform.CgroupVersion, observed.CgroupVersion)
+	check("cgroup_driver", q.Platform.CgroupDriver, observed.CgroupDriver)
+	if mismatch, ok := compareBoolFact("rootless", q.Platform.Rootless, observed.Rootless); ok {
 		out = append(out, mismatch)
 	}
 	return out
