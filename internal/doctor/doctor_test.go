@@ -722,7 +722,7 @@ func TestDoctorRunsWithoutADaemon(t *testing.T) {
 	for _, r := range report.Results {
 		named = append(named, r.Name)
 	}
-	for _, want := range []string{"docker daemon", "isolated bridge"} {
+	for _, want := range []string{"container engine", "isolated bridge"} {
 		if !slices.Contains(named, want) {
 			t.Errorf("no %q result in %v; the check never ran", want, named)
 		}

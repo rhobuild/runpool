@@ -181,24 +181,24 @@ func checkPlatform() Result {
 // precisely the verdicts that stop a host from serving.
 func checkDaemon(ctx context.Context, d daemonInfo) Result {
 	if d == nil {
-		return Result{"docker daemon", Fail, "not connected",
+		return Result{"container engine", Fail, "not connected",
 			"mount the daemon socket at /var/run/docker.sock"}
 	}
 	info, err := d.Info(ctx)
 	if err != nil {
-		return Result{"docker daemon", Fail, err.Error(), "check the socket mount and daemon health"}
+		return Result{"container engine", Fail, err.Error(), "check the socket mount and daemon health"}
 	}
 	if info.Rootless {
-		return Result{"docker daemon", Fail, "rootless mode (engine " + info.ServerVersion + ")",
+		return Result{"container engine", Fail, "rootless mode (engine " + info.ServerVersion + ")",
 			"V1 requires rootful Docker: privileged dind and cgroup limits differ under rootless"}
 	}
 	major := majorVersion(info.ServerVersion)
 	detail := fmt.Sprintf("engine %s, api %s, %s", info.ServerVersion, info.APIVersion, info.Architecture)
 	if major < platform.MinimumEngineMajor {
-		return Result{"docker daemon", Fail, detail,
+		return Result{"container engine", Fail, detail,
 			fmt.Sprintf("upgrade to Docker Engine %d or newer", platform.MinimumEngineMajor)}
 	}
-	return Result{"docker daemon", Pass, detail, ""}
+	return Result{"container engine", Pass, detail, ""}
 }
 
 // networkProbeClient is the two calls the bridge probe needs, named so

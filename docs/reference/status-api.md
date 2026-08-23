@@ -62,7 +62,7 @@ absent state, because the attempt it was asked about cannot exist.
 | `containers` | array | Owned containers: `name`, `role`, `lease_id`, `running` |
 | `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id`. No `state` — it is recorded per lease, and these are reported from the daemon |
 | `discrepancies` | array or null | Where the books and the daemon disagree; `null` if the daemon could not be asked |
-| `docker_error` | string, optional | Why the daemon could not be asked |
+| `engine_error` | string, optional | Why the daemon could not be asked |
 | `capsule_image_error` | string, optional | Why the shipped capsule image could not be resolved. It concerns only the tiers that name no `capsule_image` of their own: those report what the build ships rather than what a launch would run, while a tier naming its own image reports that one |
 
 Each binding reports what its own loop last managed with its provider:
@@ -148,5 +148,5 @@ as orphans would bury the real findings. What is reported:
 - an owned object carrying neither a lease nor a persistent role.
 
 An unreachable daemon yields `discrepancies: null` and a
-`docker_error`, never an empty list — a report that compared nothing
+`engine_error`, never an empty list — a report that compared nothing
 must not look like a clean one.

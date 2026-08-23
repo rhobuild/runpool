@@ -197,7 +197,7 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	}
 	fmt.Fprintf(streams.Out, "\nowned networks (%d), volumes (%d)\n", len(obs.networks), len(obs.volumes))
 	if obs.err != nil {
-		fmt.Fprintf(streams.Out, "\ndocker: %v — the books could not be compared with the daemon\n", obs.err)
+		fmt.Fprintf(streams.Out, "\nengine: %v — the books could not be compared with the daemon\n", obs.err)
 		return nil
 	}
 

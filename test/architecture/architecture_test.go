@@ -20,7 +20,18 @@ const (
 	// upstream is the provider SDK itself; only the adapter and its
 	// contract suite may see it.
 	upstream = "github.com/actions/scaleset"
+	// engineAdapter is the Moby adapter, and engineSDKs are the modules
+	// only it may see.
+	engineAdapter = module + "/internal/platform/docker"
 )
+
+// engineSDKs are the container-engine libraries. Their types describe a
+// daemon's API, and a domain package holding one is a domain package
+// that has learned which daemon it is talking to.
+var engineSDKs = []string{
+	"github.com/moby/",
+	"github.com/containerd/errdefs",
+}
 
 // corePackages are the provider-neutral packages. None of them may
 // depend on the GitHub Actions adapter or the upstream SDK, directly or
@@ -194,6 +205,34 @@ func TestGeneratedPersistenceStaysInsideTheStore(t *testing.T) {
 		for _, imported := range imports {
 			if imported == generated {
 				t.Errorf("%s imports %s; generated persistence is internal to the store package", importer, generated)
+			}
+		}
+	}
+}
+
+// TestTheEngineSDKStaysInsideItsAdapter: the decision is written down
+// and nothing enforced it.
+//
+// The Docker API client ADR says it plainly -- keep all daemon
+// operations behind internal/platform/docker; no domain package imports
+// Moby types -- and the tree obeys it. What was missing is the thing
+// that keeps obeying it: the architecture rules here covered the
+// provider SDK and said nothing about the engine's, so the first import
+// that crossed the line would have compiled, passed, and moved the
+// boundary by one convenient edit.
+func TestTheEngineSDKStaysInsideItsAdapter(t *testing.T) {
+	for importer, imports := range importGraph(t) {
+		if importer == engineAdapter {
+			continue
+		}
+		for _, imported := range imports {
+			for _, sdk := range engineSDKs {
+				if !strings.HasPrefix(imported, sdk) {
+					continue
+				}
+				t.Errorf("%s imports %s; only %s may see a container engine's own types, "+
+					"and what leaves it is Runpool's vocabulary rather than a daemon's",
+					importer, imported, engineAdapter)
 			}
 		}
 	}
