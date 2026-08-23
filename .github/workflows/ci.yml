@@ -178,9 +178,9 @@ jobs:
         # this replaces were one directory deep and missed
         # test/drills/remote-drills.sh, which two workflows execute — a
         # script CI runs and does not lint is the one place a quoting bug
-        # reaches a real host unread. Untracked but unignored files count,
-        # the same set doc-links.sh checks: a script is worth linting from
-        # the moment it exists, not from the moment it is added.
+        # reaches a real host unread. Untracked but unignored files
+        # count: a script is worth linting from the moment it exists, not
+        # from the moment it is added.
         run: git ls-files -coz --exclude-standard -- "*.sh" | xargs -0 shellcheck
       - name: Lint the Dockerfiles
         uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
@@ -191,14 +191,6 @@ jobs:
           # base image plus the image lock; pinning apt versions on top
           # of that pins us to a distribution's mirror lifetime.
           ignore: DL3008
-      - name: Verify documentation links resolve
-        # Offline by design: in-repo links only, which is what a
-        # documentation reorganization breaks silently.
-        run: scripts/verify/doc-links.sh
-      - name: Verify the builder images and workflows match go.mod
-        # An image tag, a workflow variable and a module directive belong
-        # to different updaters, so nothing but this keeps them in step.
-        run: scripts/verify/go-version.sh
       - name: Validate the reference deployment
         run: |
           mkdir -p /tmp/runpool-ci-credentials

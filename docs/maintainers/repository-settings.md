@@ -70,7 +70,7 @@ it.
   self-hosted host. The workflow rejects non-tag refs; reviewers must still
   verify the protected SemVer tag plus both image digests before approval.
 - In `release-qualification`, configure a dedicated private E2E fixture
-  repository with `.github/workflows/runpool-e2e.yml` byte-for-byte equal to
+  repository whose own `runpool-e2e.yml` workflow is byte-for-byte equal to
   `test/e2e/controller/testdata/workload.yml`. Set
   `RUNPOOL_E2E_ORGANIZATION`, `RUNPOOL_E2E_REPOSITORY`,
   `RUNPOOL_E2E_GIT_REVISION`, and
