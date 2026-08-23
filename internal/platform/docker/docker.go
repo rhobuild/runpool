@@ -233,7 +233,7 @@ func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		id, err = create()
 	}
 	if err != nil {
-		return "", fmt.Errorf("create container %s: %w", spec.Name, err)
+		return "", fmt.Errorf("create container %s: %w", spec.Name, classify(err))
 	}
 	return id, nil
 }
@@ -344,10 +344,44 @@ func ignoreNotFound(err error) error {
 	return err
 }
 
-// IsNotFound reports whether err means the daemon has no such object.
-// Callers that must distinguish absence from unreachability — execution
-// inspection, most of all — depend on this being a typed check.
-func IsNotFound(err error) bool { return cerrdefs.IsNotFound(err) }
+// The daemon's answers, in Runpool's vocabulary. A caller that has to
+// act differently on one of these gets a sentinel to test for; a caller
+// that only reports the failure gets the daemon's own text, which says
+// more than a category would.
+//
+// There are three because three call sites branch. A category nothing
+// branches on is a category that will be wrong the first time somebody
+// relies on it, since nothing exercises the mapping.
+var (
+	// ErrNotFound is absence, which is different from unreachability:
+	// an execution that cannot be found ended, and one that cannot be
+	// asked about is undecided.
+	ErrNotFound = errors.New("the daemon has no such object")
+	// ErrAlreadyExists is the name being taken. Recovery resolves it by
+	// proving ownership; anything else that fails a create is a failure
+	// to create.
+	ErrAlreadyExists = errors.New("an object of that name already exists")
+	// ErrUnavailable is the daemon not answering at all.
+	ErrUnavailable = errors.New("the daemon could not be reached")
+)
+
+// classify names what a daemon error means, keeping the daemon's own
+// text: the sentinel is for branching and the text is for reading. An
+// error it has no name for is returned as it came, because inventing a
+// category for it would be a claim this package cannot make.
+func classify(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case cerrdefs.IsNotFound(err):
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	case cerrdefs.IsAlreadyExists(err), cerrdefs.IsConflict(err):
+		return fmt.Errorf("%w: %w", ErrAlreadyExists, err)
+	case cerrdefs.IsUnavailable(err), client.IsErrConnectionFailed(err):
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return err
+}
 
 // ErrForeignResource reports an object that carries the expected name
 // but not this owner's labels. Adopting it would mean running work
@@ -464,7 +498,10 @@ type ContainerState struct {
 func (c *Client) ContainerStatus(ctx context.Context, id string) (ContainerState, error) {
 	inspected, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
-		return ContainerState{}, err
+		// Classified because the answer decides an attempt's fate: a
+		// container that is gone ended, and one the daemon cannot be
+		// asked about is undecided and goes to a person.
+		return ContainerState{}, classify(err)
 	}
 	if inspected.Container.State == nil {
 		return ContainerState{}, fmt.Errorf("container %s reports no state", id)

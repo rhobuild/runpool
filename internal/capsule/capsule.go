@@ -177,25 +177,38 @@ func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role,
 	if err := rec.Creating(intentID); err != nil {
 		return "", err
 	}
-	dockerID, err := createFn()
+	objectID, err := createFn()
 	if err != nil {
-		existing, rerr := resolve()
-		if rerr != nil || existing == "" {
-			if rerr == nil {
-				rerr = err
-			}
-			return "", fmt.Errorf("create %s %s: %w", kind, role, rerr)
+		// Only a taken name is worth resolving, and only then is
+		// adoption an answer rather than a guess. A create that failed
+		// for any other reason -- the daemon gone, the image refused --
+		// says nothing about whether an object exists, and looking one
+		// up anyway reported the failure of the lookup under the name of
+		// the create. The object is not lost either way: the intent is
+		// already durable and in its creating state, so recovery
+		// resolves it by name.
+		if !errors.Is(err, docker.ErrAlreadyExists) {
+			return "", fmt.Errorf("create %s %s: %w", kind, role, err)
 		}
-		dockerID = existing
+		existing, rerr := resolve()
+		if rerr != nil {
+			return "", fmt.Errorf("resolving the %s %s that already exists: %w", kind, role, rerr)
+		}
+		if existing == "" {
+			// The name was taken when the create ran and free when the
+			// lookup ran, so nothing is there to adopt.
+			return "", fmt.Errorf("create %s %s: %w", kind, role, err)
+		}
+		objectID = existing
 	}
-	if err := rec.Confirm(intentID, dockerID); err != nil {
+	if err := rec.Confirm(intentID, objectID); err != nil {
 		// The object exists and the intent still names it in its
 		// creating state: recovery resolves it by name. Nothing is
 		// removed here, because losing the object is worse than
 		// re-finding it.
 		return "", fmt.Errorf("confirming %s %s: %w", kind, role, err)
 	}
-	return dockerID, nil
+	return objectID, nil
 }
 
 // Launcher builds capsules. It holds no per-capsule state: everything a

@@ -2,11 +2,12 @@ package capsule
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 
@@ -17,7 +18,7 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	state, err := m.dock.ContainerStatus(ctx, string(prepared.RuntimeID))
 	switch {
 	case err == nil:
-	case docker.IsNotFound(err):
+	case errors.Is(err, docker.ErrNotFound):
 		return assignment.ObservedAbsent, nil
 	default:
 		return assignment.ObservedUnavailable, err

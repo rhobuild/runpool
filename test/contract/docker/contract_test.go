@@ -893,7 +893,7 @@ func mustRemoveContainer(t *testing.T, c *docker.Client, ctx context.Context, id
 	// Absence is verified, not assumed: a removal the daemon accepted
 	// but did not complete leaves a privileged leftover this suite
 	// exists to notice.
-	if _, err := c.ContainerStatus(cctx, id); !docker.IsNotFound(err) {
+	if _, err := c.ContainerStatus(cctx, id); !errors.Is(err, docker.ErrNotFound) {
 		t.Errorf("cleanup: container %s still exists after removal (status error: %v)", id, err)
 	}
 }
