@@ -26,11 +26,14 @@ COPYFILE_DISABLE=1 git ls-files -coz --exclude-standard | tar --no-xattrs -czf "
 remote_dir=$(ssh "$host" 'mktemp -d /tmp/runpool-capsule-contract.XXXXXX')
 remote_dir_q=$(printf '%q' "$remote_dir")
 trap 'rm -rf "$out"; ssh "$host" "rm -rf $remote_dir_q" || true' EXIT
-scp -q "$out/src.tgz" "$out/capsule-contract.test" "$host":"$remote_dir/"
+# The harness goes with it: the deadline the suite is allowed lives there,
+# so this driver and both CI gates give it the same one.
+scp -q "$out/src.tgz" "$out/capsule-contract.test" \
+  test/contract/capsule/remote-harness.sh "$host":"$remote_dir/"
 # shellcheck disable=SC2029 # client-side expansion is intended: remote_dir comes from the remote mktemp above
 ssh "$host" "set -e
 mkdir -p '$remote_dir/src'
 tar -xzf '$remote_dir/src.tgz' -C '$remote_dir/src' 2>/dev/null
 cd '$remote_dir/src'
 docker build -q -f build/capsule/Dockerfile -t runpool-capsule:dev . >/dev/null
-RUNPOOL_CAPSULE_CONTRACT=1 '$remote_dir/capsule-contract.test' -test.v -test.count=1"
+bash '$remote_dir/remote-harness.sh' '$remote_dir'"

@@ -80,14 +80,14 @@ jobs:
         run: |
           docker version --format 'engine {{.Server.Version}} api {{.Server.APIVersion}}'
           docker info --format 'cgroup {{.CgroupVersion}} driver {{.CgroupDriver}} rootless {{.SecurityOptions}}'
-      - name: Remove the pull fixture so the pull path is real
-        # TestPullOnMissingImage proves the pull, which it can only do
-        # if the image is genuinely absent first.
-        run: docker rmi busybox:1.36.1-uclibc 2>/dev/null || true
       - name: Run the Docker contracts
-        env:
-          RUNPOOL_DOCKER_CONTRACT: "1"
-        run: go test -count=1 -v ./test/contract/docker/...
+        # The harness the release gate and the SSH driver also run: it
+        # clears the pull fixture and proves it is gone before the suite
+        # starts.
+        run: |
+          dir=$(mktemp -d)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/docker-contract.test" ./test/contract/docker
+          bash test/contract/docker/remote-harness.sh "$dir"
 
   capsule:
     name: outer capsule, JIT and the egress sandbox
@@ -108,13 +108,10 @@ jobs:
       - name: Build the capsule image from the pinned inputs
         run: docker build -f build/capsule/Dockerfile -t runpool-capsule:dev .
       - name: Run the capsule, egress and budget contracts
-        # The lifecycle drives a real runner with a fake credential —
-        # the runner rejects it and exits, which proves it ran without
-        # needing a provider. The bypass suite proves the capsule has no
-        # route out and that its only egress is the policy.
-        env:
-          RUNPOOL_CAPSULE_CONTRACT: "1"
-        run: go test -count=1 -v -timeout 20m ./test/contract/capsule/...
+        run: |
+          dir=$(mktemp -d)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/capsule-contract.test" ./test/contract/capsule
+          bash test/contract/capsule/remote-harness.sh "$dir"
       - name: Verify no managed objects were left behind
         # Every object carries ownership labels; a leak here is a
         # cleanup bug that would leak on an operator's host too.
@@ -166,12 +163,14 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Build the durability suite for the container
-        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o /tmp/sqlite-contract.test ./test/contract/sqlite
       - name: Run the durability suite on a named volume
         # The state database lives on a named volume in production, so
         # it is tested on one here: WAL behaviour, contention, and
-        # SQLITE_FULL on a capped filesystem.
+        # SQLITE_FULL on a capped filesystem. A run-scoped directory
+        # rather than /tmp, so two runs on one host cannot overwrite each
+        # other's binary mid-test.
         run: |
-          cp test/contract/sqlite/testdata/remote-harness.sh /tmp/
-          bash /tmp/remote-harness.sh /tmp
+          dir=$(mktemp -d)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/sqlite-contract.test" ./test/contract/sqlite
+          cp test/contract/sqlite/testdata/remote-harness.sh "$dir/"
+          bash "$dir/remote-harness.sh" "$dir"
