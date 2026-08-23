@@ -55,7 +55,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Validate the fixture configuration
+      - name: Verify the fixture configuration is complete
         env:
           REPO_URL: ${{ vars.RUNPOOL_CONTRACT_REPO_URL }}
           ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
@@ -107,7 +107,7 @@ jobs:
           permission-contents: read
           permission-organization-self-hosted-runners: write
 
-      - name: Upstream contracts
+      - name: Run the upstream contracts
         # The suite creates its own scale sets and removes them through
         # t.Cleanup, including on failure, so a run leaves the fixture
         # as it found it. Release-qualification mode turns every skip into a
@@ -132,7 +132,7 @@ jobs:
           mkdir -p upstream-evidence
           go test -count=1 -v -timeout 40m ./test/contract/githubactions/... 2>&1 | tee upstream-evidence/contract.log
 
-      - name: Redact the evidence before it is kept
+      - name: Refuse credential-bearing evidence
         id: evidence-check
         # The identity evidence records upstream message and job
         # identifiers, which is the point of keeping it. It must not

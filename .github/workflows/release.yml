@@ -40,7 +40,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Validate the version stamped into the artifact
+      - name: Verify the version stamped into the artifact
         env:
           VERSION: ${{ github.ref_name }}
         run: |
@@ -178,7 +178,7 @@ jobs:
           name: release-qualification
           path: qualification
 
-      - name: Download the exact standalone artifacts
+      - name: Download the standalone candidates
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-artifacts-candidate
@@ -236,7 +236,7 @@ jobs:
             echo "capsule_reference=$capsule_reference"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Generate controller SBOM
+      - name: Generate the controller SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ steps.promote.outputs.controller_reference }}
@@ -244,7 +244,7 @@ jobs:
           output-file: dist/controller.sbom.spdx.json
           upload-artifact: false
 
-      - name: Generate capsule SBOM
+      - name: Generate the capsule SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ steps.promote.outputs.capsule_reference }}
@@ -252,19 +252,19 @@ jobs:
           output-file: dist/capsule.sbom.spdx.json
           upload-artifact: false
 
-      - name: Attest standalone artifacts
+      - name: Attest the standalone artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
 
-      - name: Attest controller provenance
+      - name: Attest the controller provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.promote.outputs.controller_name }}
           subject-digest: ${{ steps.promote.outputs.controller_digest }}
           push-to-registry: true
 
-      - name: Attest controller SBOM
+      - name: Attest the controller SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.promote.outputs.controller_name }}
@@ -272,14 +272,14 @@ jobs:
           sbom-path: dist/controller.sbom.spdx.json
           push-to-registry: true
 
-      - name: Attest capsule provenance
+      - name: Attest the capsule provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.promote.outputs.capsule_name }}
           subject-digest: ${{ steps.promote.outputs.capsule_digest }}
           push-to-registry: true
 
-      - name: Attest capsule SBOM
+      - name: Attest the capsule SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.promote.outputs.capsule_name }}

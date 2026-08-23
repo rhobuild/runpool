@@ -29,6 +29,6 @@ COPYFILE_DISABLE=1 git ls-files -coz --exclude-standard | tar --no-xattrs -czf "
 remote_dir=$(ssh "$host" 'mktemp -d /tmp/runpool-drills.XXXXXX')
 remote_dir_q=$(printf '%q' "$remote_dir")
 trap 'rm -rf "$out"; ssh "$host" "rm -rf $remote_dir_q" || true' EXIT
-scp -q "$out/src.tgz" "$out/drill-seed" test/drills/remote-drills.sh "$host":"$remote_dir/"
+scp -q "$out/src.tgz" "$out/drill-seed" test/drills/remote-harness.sh "$host":"$remote_dir/"
 # shellcheck disable=SC2029 # client-side expansion is intended: remote_dir comes from the remote mktemp above
-ssh "$host" "bash '$remote_dir/remote-drills.sh' '$remote_dir'"
+ssh "$host" "bash '$remote_dir/remote-harness.sh' '$remote_dir'"

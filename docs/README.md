@@ -37,6 +37,8 @@ Documentation is organized by the question it answers.
   selection and, once frozen, exact facts required by qualification.
 - [`build/images.lock.json`](../build/images.lock.json): digest-pinned capsule
   inputs.
+- [Continuous integration](maintainers/ci.md): what each gate proves, where it
+  runs, and the names the workflows use.
 - [Repository settings](maintainers/repository-settings.md): GitHub rulesets,
   environments, Actions permissions, and security features required before
   public launch.

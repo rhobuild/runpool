@@ -6,8 +6,8 @@ set -euo pipefail
 # step. Everything it creates is named after this run and removed at
 # the end, success or failure.
 #
-# Usage: remote-drills.sh <dir>
-dir=${1:?usage: remote-drills.sh <dir with src.tgz and drill-seed>}
+# Usage: remote-harness.sh <dir>
+dir=${1:?usage: remote-harness.sh <dir with src.tgz and drill-seed>}
 run_id=$(basename "$dir" | tr -dc 'a-zA-Z0-9' | tail -c 8)
 vol="runpool-drill-state-$run_id"
 img="runpool:drill-$run_id"

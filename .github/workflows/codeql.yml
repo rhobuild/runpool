@@ -23,7 +23,7 @@ env:
 
 jobs:
   analyze:
-    name: analyze Go
+    name: security analysis
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -44,9 +44,9 @@ jobs:
         with:
           languages: go
           build-mode: autobuild
-      - name: Build
+      - name: Build the tree for analysis
         uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-      - name: Analyze
+      - name: Analyze the built tree
         uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: /language:go
