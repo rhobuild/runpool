@@ -93,7 +93,14 @@ reserved for a script another program invokes as a command, which is why
 
 **A pair of scripts splits by machine.** The driver you run from your own
 machine lives under `scripts/`; the half it ships to the host under test lives
-under `test/`, named `remote-harness.sh`.
+beside its suite under `test/`, named `remote-harness.sh`.
+
+In a gate there is no ship: the runner *is* the host under test, so the workflow
+cross-compiles the suite and runs that same harness directly. That is what keeps
+one suite from having three spellings — the driver's, the pull request's and the
+release's — and it is where anything the suite needs true before it starts
+belongs, such as clearing the image the Docker suite's pull test depends on
+being absent.
 
 Every script carries `#!/usr/bin/env bash`, `set -euo pipefail`, a header saying
 what it proves and why it exists, a `# Usage:` line, and the executable bit. All

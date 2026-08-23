@@ -494,6 +494,12 @@ by its public and operational effects.
 - Every path the documentation names is checked, whether it is written as a
   link or as a command someone will copy, so a rename cannot leave a reference
   that reads as fact.
+- Each live suite has one harness, run by the pull-request gate, by the release
+  gate and by the driver that ships it to a host over SSH. The two gates differ
+  only in whether qualification mode is on and whether the output is kept as
+  evidence. The Docker suite's pull fixture is cleared by that harness and the
+  removal is proven, so the test that exists to pull it cannot quietly stop
+  pulling anything.
 - The release-qualification record is one typed document with two ends: the
   job that writes it and the job that reads it back share the type, so a field
   one of them renames is a build failure rather than a publication that

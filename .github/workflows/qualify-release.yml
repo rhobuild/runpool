@@ -142,17 +142,19 @@ jobs:
 
       - name: Run the Docker contracts
         env:
-          RUNPOOL_DOCKER_CONTRACT: "1"
           RUNPOOL_CONTRACT_QUALIFY: "1"
         run: |
-          docker image rm -f busybox:1.36.1-uclibc >/dev/null 2>&1 || true
-          go test -count=1 -v ./test/contract/docker/... 2>&1 | tee docker-contract.log
+          dir=$(mktemp -d)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/docker-contract.test" ./test/contract/docker
+          bash test/contract/docker/remote-harness.sh "$dir" 2>&1 | tee docker-contract.log
 
       - name: Run the capsule, egress and budget contracts
         env:
-          RUNPOOL_CAPSULE_CONTRACT: "1"
           RUNPOOL_CONTRACT_QUALIFY: "1"
-        run: go test -count=1 -v -timeout 30m ./test/contract/capsule/... 2>&1 | tee capsule-contract.log
+        run: |
+          dir=$(mktemp -d)
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/capsule-contract.test" ./test/contract/capsule
+          bash test/contract/capsule/remote-harness.sh "$dir" 2>&1 | tee capsule-contract.log
 
       - name: Run the durability suite on a named volume
         run: |

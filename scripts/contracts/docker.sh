@@ -22,9 +22,6 @@ fi
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
-# The pull fixture must match the digest the suite pins.
-pull_fixture='busybox:1.36.1-uclibc@sha256:0872fb3a7632ba9d0ae46a8e832a62b30ce83a6f220b8bb52903d9cf477dabe3'
-
 echo "== cross-compile linux/amd64 (CGO_ENABLED=0) =="
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$out/docker-contract.test" ./test/contract/docker
 
@@ -33,19 +30,6 @@ ssh "$host" 'docker version --format "engine {{.Server.Version}} api {{.Server.A
 echo "== release-qualification reference (build/platform.lock.json) =="
 grep -E '"(engine|api|os|os_version|arch|cgroup_driver)"' build/platform.lock.json
 
-# The pull-on-missing-image path only exists while the image is missing:
-# after one run the daemon has it cached and the test passes without
-# exercising a pull. Remove it and verify it is gone — a removal that
-# silently failed turns the pull test into a no-op.
-echo "== clearing the pull fixture so the pull path is real =="
-# shellcheck disable=SC2029 # client-side expansion is intended: the fixture reference is a constant defined above
-ssh "$host" "docker image rm -f '$pull_fixture' >/dev/null 2>&1 || true"
-# shellcheck disable=SC2029 # the fixture is a fixed local constant, intentionally expanded before SSH
-if ssh "$host" "docker image inspect '$pull_fixture' >/dev/null 2>&1"; then
-  echo 'the pull fixture is still present; the pull test would exercise nothing' >&2
-  exit 1
-fi
-
 echo "== contract suite on $host =="
 # The remote directory is run-scoped: a fixed path lets two runs — or
 # two operators — overwrite each other's binaries mid-test. printf %q
@@ -53,7 +37,10 @@ echo "== contract suite on $host =="
 remote_dir=$(ssh "$host" 'mktemp -d /tmp/runpool-docker-contract.XXXXXX')
 remote_dir_q=$(printf '%q' "$remote_dir")
 trap 'rm -rf "$out"; ssh "$host" "rm -rf $remote_dir_q" || true' EXIT
-scp -q "$out/docker-contract.test" "$host":"$remote_dir/"
+# The harness goes with it: clearing the pull fixture and proving it gone
+# is the suite's precondition, and both CI gates run the same file rather
+# than a second spelling of it.
+scp -q "$out/docker-contract.test" test/contract/docker/remote-harness.sh "$host":"$remote_dir/"
 qualify_env=""
 if [ -n "${RUNPOOL_CONTRACT_QUALIFY:-}" ]; then
   # No expected version travels from here: the suite embeds the
@@ -61,4 +48,4 @@ if [ -n "${RUNPOOL_CONTRACT_QUALIFY:-}" ]; then
   qualify_env="RUNPOOL_CONTRACT_QUALIFY=1"
 fi
 # shellcheck disable=SC2029 # client-side expansion is intended: remote_dir comes from the remote mktemp above
-ssh "$host" "RUNPOOL_DOCKER_CONTRACT=1 $qualify_env '$remote_dir/docker-contract.test' -test.v -test.count=1"
+ssh "$host" "$qualify_env bash '$remote_dir/remote-harness.sh' '$remote_dir'"
