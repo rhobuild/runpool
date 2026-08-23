@@ -76,13 +76,6 @@ func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) (in
 	return inspect.ExitCode, buf.String(), nil
 }
 
-// ExecOK reports whether a command inside the container exits zero — the
-// readiness-probe shape.
-func (c *Client) ExecOK(ctx context.Context, containerID string, cmd []string) bool {
-	code, _, err := c.Exec(ctx, containerID, cmd)
-	return err == nil && code == 0
-}
-
 // ExecWithInput runs a command inside a running container feeding input
 // on its stdin, and returns its exit code and combined output. It is
 // the credential channel: stdin is the one path into a container that
