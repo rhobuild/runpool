@@ -211,11 +211,33 @@ func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role,
 	return objectID, nil
 }
 
+// capsuleDaemon is the daemon as a capsule needs it, declared here
+// rather than by the adapter: what this package may know is the eleven
+// operations a capsule is built from, and a seam is what lets the
+// refusals be asked for. A live daemon cannot be told to be absent, to
+// be unreachable, or to refuse a container that is already running, and
+// those are the answers that decide whether an attempt is settled or
+// held for a person.
+type capsuleDaemon interface {
+	CreateNetwork(context.Context, docker.NetworkSpec) (string, error)
+	CreateVolume(ctx context.Context, name string, labels map[string]string) (string, error)
+	CreateContainer(context.Context, docker.ContainerSpec) (string, error)
+	StartContainer(ctx context.Context, id string) error
+	ConnectNetwork(ctx context.Context, networkID, containerID string) error
+	NetworkSubnet(ctx context.Context, id string) (string, error)
+	ContainerIPOn(ctx context.Context, containerID, networkID string) (ip, subnet string, err error)
+	ContainerStatus(ctx context.Context, id string) (docker.ContainerState, error)
+	Exec(ctx context.Context, containerID string, cmd []string) (int, string, error)
+	ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error)
+	OwnedIDByName(ctx context.Context, kind, name string,
+		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
+}
+
 // Launcher builds capsules. It holds no per-capsule state: everything a
 // launch needs arrives in its Spec, and everything it creates is
 // recorded through the caller's ResourceRecorder.
 type Launcher struct {
-	dock *docker.Client
+	dock capsuleDaemon
 	// gatewayImage is what every egress gateway runs, whatever a tier
 	// configured for its jobs. It belongs to the launcher rather than to
 	// a Spec because it is not a per-launch decision: the gateway is the
@@ -226,7 +248,7 @@ type Launcher struct {
 	gatewayImage string
 }
 
-func NewLauncher(d *docker.Client, gatewayImage string) *Launcher {
+func NewLauncher(d capsuleDaemon, gatewayImage string) *Launcher {
 	return &Launcher{dock: d, gatewayImage: gatewayImage}
 }
 

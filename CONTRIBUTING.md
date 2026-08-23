@@ -58,7 +58,14 @@ deliberately thin here and proved elsewhere.
 `internal/capsule` and the socket-facing half of `internal/gateway` are
 thin translations of an external API. A unit test there asserts the mock,
 so they are proved by the suites that run against a real daemon and a real
-provider instead:
+provider instead.
+
+The exception is what a live daemon cannot be asked for. It cannot be told
+to be unreachable, to answer with something nobody has a name for, or to
+refuse a name that is taken — and those answers decide whether an attempt
+is settled or held for a person. `internal/capsule` holds the daemon
+through an interface it declares itself, so those refusals can be asked
+for and are covered hermetically. What still needs a daemon:
 
 | Code | Proved by |
 | --- | --- |
