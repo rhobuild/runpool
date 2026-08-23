@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "controller_image": "ghcr.io/rhobuild/runpool@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "qualified_at": "2026-08-18T09:14:07Z",
+  "platform_policy": {
+    "os": "debian",
+    "os_version": "13",
+    "os_codename": "trixie",
+    "arch": "amd64",
+    "docker_channel": "stable",
+    "docker_source": "https://download.docker.com/linux/debian",
+    "selection": "latest-stable-at-policy-review",
+    "target_engine": "29.7.2",
+    "reviewed": "2026-08-16",
+    "freeze_point": "before-release-candidate"
+  },
+  "platform_reference": {
+    "os": "debian",
+    "os_version": "13",
+    "os_codename": "trixie",
+    "arch": "amd64",
+    "kernel": "6.12.48+deb13-amd64",
+    "engine": "29.7.2",
+    "api": "1.53",
+    "cgroup_version": "2",
+    "cgroup_driver": "systemd",
+    "storage_driver": "overlayfs",
+    "backing_filesystem": "extfs",
+    "rootless": false,
+    "containerd": "2.2.0",
+    "runc": "1.4.2",
+    "buildx": "v0.32.0",
+    "compose": "2.42.0",
+    "iptables": "iptables v1.8.11 (nf_tables)",
+    "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+  },
+  "platform_observed": {
+    "os": "debian",
+    "os_version": "13",
+    "os_codename": "trixie",
+    "arch": "amd64",
+    "kernel": "6.12.48+deb13-amd64",
+    "engine": "29.7.2",
+    "api": "1.53",
+    "cgroup_version": "2",
+    "cgroup_driver": "systemd",
+    "storage_driver": "overlayfs",
+    "backing_filesystem": "extfs",
+    "rootless": false,
+    "containerd": "2.2.0",
+    "runc": "1.4.2",
+    "buildx": "v0.32.0",
+    "compose": "2.42.0",
+    "iptables": "iptables v1.8.11 (nf_tables)",
+    "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+  },
+  "standalone_artifacts": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  runpool-linux-amd64",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  runpool-completions.tar.gz"
+  ],
+  "suites": [
+    "hermetic",
+    "docker-contract",
+    "capsule-contract",
+    "sqlite-durability",
+    "lifecycle-drills",
+    "contracts-github-actions",
+    "controller-e2e"
+  ]
+}

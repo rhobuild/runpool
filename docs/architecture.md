@@ -35,6 +35,14 @@ internal/platform/docker         the Moby adapter
 runs inside the gateway container, and `internal/app` does not import it. The
 controller's part is computing the policy and handing it over.
 
+The tree above is what hangs off the two binaries, and three things under
+`internal/` hang off neither: `internal/command/gen` and
+`internal/store/schema/gen`, which write generated files, and
+`internal/qualification`, which assembles and checks the record a release is
+authorized against. They live beside the packages whose types they drive and
+run through `go run`. An architecture test keeps the last one out of the
+product: a gate that links into what it gates is a gate measuring itself.
+
 The arrow never points from lifecycle or state domains to a provider. An
 architecture test enforces it: core packages may not depend on
 `internal/platform/githubactions` or on the provider SDK, directly or

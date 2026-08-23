@@ -121,7 +121,7 @@ jobs:
       - name: Verify the release-qualification reference
         run: |
           scripts/qualification/platform-facts.sh | tee platform-facts.json
-          go run ./internal/platform/cmd/verify -observed platform-facts.json
+          go run ./internal/qualification/cmd/verify-platform -observed platform-facts.json
 
       - name: Authenticate to GHCR
         env:
@@ -240,6 +240,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
       - name: Download live evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -271,58 +276,8 @@ jobs:
           CONTROLLER_IMAGE: ${{ inputs.controller_image }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python3 - <<'PY' > release-qualification.json
-          import datetime, glob, json, os, sys
-
-          facts = json.load(open("evidence/live/platform-facts.json", encoding="utf-8"))
-          reference = json.load(open("build/platform.lock.json", encoding="utf-8"))
-          # The entry for the host that produced these facts. The lock
-          # records one per platform qualified, so a host with none is not
-          # a host that failed the reference -- it is one nobody has run
-          # the suites on, and the record has to say which.
-          arch = facts.get("arch")
-          entries = {e["policy"]["arch"]: e for e in reference["platforms"]}
-          entry = entries.get(arch)
-          if entry is None:
-              sys.exit(f"no release qualification is recorded for {arch}; "
-                       f"this release records {', '.join(sorted(entries))}")
-          if entry.get("status") != "frozen":
-              sys.exit(f"the {arch} release-qualification reference is not frozen")
-          checksums = open("evidence/release-artifacts/checksums.txt", encoding="utf-8").read().splitlines()
-          e2e_files = glob.glob("evidence/controller-e2e/controller-e2e-*.json")
-          if len(e2e_files) != 1:
-              sys.exit(f"expected one controller E2E record, found {len(e2e_files)}")
-          e2e = json.load(open(e2e_files[0], encoding="utf-8"))
-          if e2e.get("outcome") != "passed":
-              sys.exit("controller E2E record is not successful")
-          if e2e.get("controller_image") != os.environ["CONTROLLER_IMAGE"]:
-              sys.exit("controller E2E covered a different controller image")
-          if e2e.get("capsule_image") != os.environ["CAPSULE_IMAGE"]:
-              sys.exit("controller E2E covered a different capsule image")
-
-          record = {
-              "schema_version": 1,
-              "commit": os.environ["COMMIT"],
-              "controller_image": os.environ["CONTROLLER_IMAGE"],
-              "capsule_image": os.environ["CAPSULE_IMAGE"],
-              "run": os.environ["RUN_URL"],
-              "qualified_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "platform_policy": entry["policy"],
-              "platform_reference": entry["platform"],
-              "platform_observed": facts,
-              "standalone_artifacts": checksums,
-              "suites": [
-                  "hermetic",
-                  "docker-contract",
-                  "capsule-contract",
-                  "sqlite-durability",
-                  "lifecycle-drills",
-                  "contracts-github-actions",
-                  "controller-e2e",
-              ],
-          }
-          print(json.dumps(record, indent=2))
-          PY
+          go run ./internal/qualification/cmd/record -evidence evidence \
+            > release-qualification.json
           cat release-qualification.json
 
       - name: Keep the release-qualification record

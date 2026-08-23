@@ -90,6 +90,14 @@ var narrowDeps = map[string][]string{
 		module + "/internal/egress",
 		module + "/internal/platform/docker",
 	},
+	// qualification assembles the record a release is authorized against.
+	// It reads evidence files and the reviewed reference, and that is the
+	// whole of what it may know: an edge to the store, the lease machine
+	// or the wiring layers would make the gate that authorizes a release
+	// depend on the code being released, which is a gate measuring
+	// itself. Assemble takes the reference as a parameter rather than
+	// loading it, and this is what keeps that shape.
+	module + "/internal/qualification": {module + "/internal/platform"},
 	// The gateway is the one process a capsule's traffic passes through,
 	// and it runs from the capsule image rather than the controller
 	// binary. What it may know is the policy vocabulary it enforces, the
@@ -148,27 +156,67 @@ func TestAdapterDependsOnTheDomainNotTheReverse(t *testing.T) {
 // table layout. Only internal/store may see the generated package;
 // everything else talks to repositories that translate raw outcomes
 // into domain errors.
-func TestGeneratedPersistenceStaysInsideTheStore(t *testing.T) {
+// importGraph is every package in the module with its direct imports.
+//
+// The pattern is the module's own, never "./...": a test binary runs in
+// its own source directory, where "./..." matches one package — this
+// file's. A walk written that way reports nothing and passes, which is
+// the shape a rule about the whole tree must not have.
+func importGraph(t *testing.T) map[string][]string {
+	t.Helper()
 	cmd := exec.Command("go", "list", "-f",
-		`{{.ImportPath}} {{join .Imports " "}}`, "./...")
+		`{{.ImportPath}} {{join .Imports " "}}`, module+"/...")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("go list: %v", err)
 	}
-	generated := module + "/internal/store/sqlitedb"
+	graph := map[string][]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
 		}
-		importer := fields[0]
+		graph[fields[0]] = fields[1:]
+	}
+	if len(graph) < 2 {
+		t.Fatalf("the module lists %d packages, so this proves nothing", len(graph))
+	}
+	return graph
+}
+
+func TestGeneratedPersistenceStaysInsideTheStore(t *testing.T) {
+	generated := module + "/internal/store/sqlitedb"
+	for importer, imports := range importGraph(t) {
 		if importer == module+"/internal/store" || importer == generated {
 			continue
 		}
-		for _, imported := range fields[1:] {
+		for _, imported := range imports {
 			if imported == generated {
 				t.Errorf("%s imports %s; generated persistence is internal to the store package", importer, generated)
+			}
+		}
+	}
+}
+
+// TestReleaseToolingStaysOutOfTheProduct: the release gate is not part
+// of what it gates.
+//
+// Nothing under internal/qualification ships. It has no place in either
+// binary, and an import of it from a runtime package would link the
+// vocabulary of the release gate into the thing being released —
+// quietly, because it compiles. A directory name enforces none of that;
+// this does.
+func TestReleaseToolingStaysOutOfTheProduct(t *testing.T) {
+	tooling := module + "/internal/qualification"
+	for importer, imports := range importGraph(t) {
+		if importer == tooling || strings.HasPrefix(importer, tooling+"/") {
+			continue
+		}
+		for _, imported := range imports {
+			if imported == tooling {
+				t.Errorf("%s imports %s; the release gate must not link into the product it gates",
+					importer, tooling)
 			}
 		}
 	}

@@ -391,18 +391,18 @@ func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
 }
 
 // TestEveryReaderOfThePlatformLockKnowsItsShape: the lock is parsed
-// outside Go too, and nothing there fails until a release.
+// outside Go too, and a reader nothing runs fails first at a release.
 //
-// The release gate assembles its record with an inline reader. A change
-// to the lock's shape leaves that reader compiling nothing and failing
-// no test — it surfaces the first time somebody freezes an entry and
-// cuts a candidate, and it surfaces as a claim about the reference that
-// is not true of it.
+// A change to the lock's shape leaves such a reader compiling nothing
+// and failing no test — it surfaces the first time somebody freezes an
+// entry and cuts a candidate, and it surfaces as a claim about the
+// reference that is not true of it.
 //
-// This is a text check, which is weaker than running the reader. Running
-// it needs the reader to exist outside the workflow, and that is worth
-// doing; until then this is what stands between a schema change and a
-// release.
+// The one reader that decides a release, the record assembler, is Go now
+// and is run against the shipped reference by
+// TestTheEmbeddedReferenceIsTheOneARecordIsBuiltFrom. What this covers is
+// everything else: a text check is weaker than running the reader, and it
+// is what stands behind any reader that has no test to run it.
 func TestEveryReaderOfThePlatformLockKnowsItsShape(t *testing.T) {
 	raw, err := os.ReadFile(repoPath("build", "platform.lock.json"))
 	if err != nil {
