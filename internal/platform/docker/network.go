@@ -37,7 +37,7 @@ func (c *Client) CreateNetwork(ctx context.Context, spec NetworkSpec) (string, e
 	}
 	resp, err := c.cli.NetworkCreate(ctx, spec.Name, opts)
 	if err != nil {
-		return "", err
+		return "", classify(err)
 	}
 	return resp.ID, nil
 }

@@ -15,7 +15,7 @@ import (
 func (c *Client) CreateVolume(ctx context.Context, name string, labels map[string]string) (string, error) {
 	created, err := c.cli.VolumeCreate(ctx, client.VolumeCreateOptions{Name: name, Labels: labels})
 	if err != nil {
-		return "", err
+		return "", classify(err)
 	}
 	return created.Volume.Name, nil
 }
