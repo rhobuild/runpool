@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The exact toolchain, kept equal to go.mod by
-  # scripts/verify/go-version.sh. This workflow compiles the binary that
+  # The exact toolchain, held equal to go.mod by the consistency
+  # suite. This workflow compiles the binary that
   # ships, so a compiler chosen here and nowhere else would be the one
   # thing no gate ever exercised.
   GOTOOLCHAIN: go1.26.6

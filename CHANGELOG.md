@@ -491,6 +491,9 @@ by its public and operational effects.
 - Public-repository gates include CodeQL, dependency review, Dependabot,
   vulnerability scanning, SHA-pinned actions, and least-privilege workflow
   permissions.
+- Every path the documentation names is checked, whether it is written as a
+  link or as a command someone will copy, so a rename cannot leave a reference
+  that reads as fact.
 - The release-qualification record is one typed document with two ends: the
   job that writes it and the job that reads it back share the type, so a field
   one of them renames is a build failure rather than a publication that
