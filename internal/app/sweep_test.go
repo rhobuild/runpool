@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // TestSweepOrphansSparesWhatIsNotGarbage drives the sweep at its own call
@@ -17,17 +17,17 @@ import (
 // and everything else is what a sweep exists to collect.
 func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 	h := newHarness(t, 1)
-	h.objects.containers = []docker.OwnedContainer{
+	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-live", Role: "capsule", LeaseID: "lse-adopted", Running: true},
 		{ID: "runner-done", Role: "capsule", LeaseID: "lse-gone"},
 		{ID: "probe-running", Role: "probe", Running: true},
 		{ID: "probe-leaked", Role: "probe"},
 	}
-	h.objects.networks = []docker.OwnedResource{
+	h.objects.networks = []engine.OwnedResource{
 		{ID: "uplink", Role: "uplink"},
 		{ID: "net-gone", Role: "capsule-net", LeaseID: "lse-gone"},
 	}
-	h.objects.volumes = []docker.OwnedResource{
+	h.objects.volumes = []engine.OwnedResource{
 		{ID: "lane", Role: "cache-lane"},
 		{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"},
 	}
@@ -52,9 +52,9 @@ func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 // finds the survivor by its labels.
 func TestSweepOrphansSurvivesAnObjectThatWillNotDie(t *testing.T) {
 	h := newHarness(t, 1)
-	h.objects.containers = []docker.OwnedContainer{{ID: "wedged", Role: "capsule", LeaseID: "lse-gone"}}
-	h.objects.networks = []docker.OwnedResource{{ID: "net-gone", Role: "capsule-net", LeaseID: "lse-gone"}}
-	h.objects.volumes = []docker.OwnedResource{{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"}}
+	h.objects.containers = []engine.OwnedContainer{{ID: "wedged", Role: "capsule", LeaseID: "lse-gone"}}
+	h.objects.networks = []engine.OwnedResource{{ID: "net-gone", Role: "capsule-net", LeaseID: "lse-gone"}}
+	h.objects.volumes = []engine.OwnedResource{{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"}}
 	h.objects.wedged["wedged"] = true
 
 	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err != nil {
@@ -92,13 +92,13 @@ func TestSweepOrphansFailsOnAnUnreadableInventory(t *testing.T) {
 // reader that runs after the enumeration.
 func TestALeaseCommittedDuringTheSweepKeepsItsObjects(t *testing.T) {
 	h := newHarness(t, 1)
-	h.objects.containers = []docker.OwnedContainer{
+	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-committing", Role: "capsule", LeaseID: "lse-committing", Running: true},
 	}
-	h.objects.networks = []docker.OwnedResource{
+	h.objects.networks = []engine.OwnedResource{
 		{ID: "net-committing", Role: "capsule-net", LeaseID: "lse-committing"},
 	}
-	h.objects.volumes = []docker.OwnedResource{
+	h.objects.volumes = []engine.OwnedResource{
 		{ID: "vol-committing", Role: "dind-data", LeaseID: "lse-committing"},
 	}
 

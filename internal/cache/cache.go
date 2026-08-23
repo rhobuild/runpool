@@ -15,7 +15,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -56,7 +56,7 @@ type laneVolumes interface {
 	OwnedIDByName(ctx context.Context, kind, name string,
 		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
 	RemoveVolume(ctx context.Context, name string) error
-	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]docker.VolumeUsage, error)
+	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]engine.VolumeUsage, error)
 }
 
 type LaneManager struct {
@@ -100,7 +100,7 @@ func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation 
 	// The lane's own three go on top of the ownership every managed
 	// object carries: what a lane is warm for is the cache's vocabulary,
 	// not the daemon's.
-	labels := docker.Ownership{Instance: m.instanceID, Role: labelRoleValue}.Labels()
+	labels := engine.Ownership{Instance: m.instanceID, Role: labelRoleValue}.Labels()
 	labels[LabelProject] = lane.ProjectID
 	labels[LabelGen] = lane.Generation
 	labels[LabelLane] = lane.ID

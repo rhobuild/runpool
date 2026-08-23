@@ -7,9 +7,7 @@ package docker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -20,67 +18,8 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/engine"
 )
-
-// Ownership labels: every resource Runpool creates is identifiable and
-// reconcilable through the Docker API alone, so a crashed controller's
-// objects can always be found without trusting its own books.
-const (
-	labelManaged  = "io.runpool.managed"
-	labelInstance = "io.runpool.instance"
-	labelKind     = "io.runpool.kind"
-	labelLease    = "io.runpool.lease"
-	labelRole     = "io.runpool.role"
-	labelAttempt  = "io.runpool.attempt"
-	labelTarget   = "io.runpool.target"
-	labelTier     = "io.runpool.tier"
-)
-
-// Ownership is what a Runpool instance stamps on everything it creates,
-// and the only thing that proves an object is its to remove. A name is
-// not proof: a foreign object can carry the name a plan expects, and
-// adopting it by name is how a sweep deletes somebody else's work.
-//
-// It is one value rather than a map each caller builds, because the
-// shape is fixed and the six places that built it by hand could each
-// forget a key. What varies is which fields a kind of object has:
-// instance infrastructure carries no lease, and a probe carries neither
-// attempt nor tier. An unset field is left off rather than written
-// empty, so an object states what is true of it and nothing else.
-type Ownership struct {
-	Instance assignment.InstanceID
-	Lease    assignment.LeaseID
-	Kind     string
-	Role     string
-	Attempt  string
-	Target   string
-	Tier     string
-}
-
-// Labels renders the ownership as the labels an object carries. The
-// values are a compatibility surface between releases: a controller
-// sweeps the objects an older one stamped, so a key or a value that
-// changes is a sweep that stops finding them. internal/platform/docker's
-// own test pins them exactly.
-func (o Ownership) Labels() map[string]string {
-	labels := map[string]string{
-		labelManaged:  "true",
-		labelInstance: string(o.Instance),
-	}
-	for key, value := range map[string]string{
-		labelKind:    o.Kind,
-		labelLease:   string(o.Lease),
-		labelRole:    o.Role,
-		labelAttempt: o.Attempt,
-		labelTarget:  o.Target,
-		labelTier:    o.Tier,
-	} {
-		if value != "" {
-			labels[key] = value
-		}
-	}
-	return labels
-}
 
 type Client struct {
 	cli *client.Client
@@ -128,55 +67,7 @@ func New(ctx context.Context) (*Client, error) {
 
 func (c *Client) Close() error { return c.cli.Close() }
 
-// Mount attaches one named volume into a container at an absolute path,
-// whole. Binds and subpaths are deliberately not expressible: every
-// mount Runpool makes is a daemon-side volume, which is the same object
-// however the controller itself is deployed.
-type Mount struct {
-	Volume   string
-	Target   string
-	ReadOnly bool
-}
-
-// ContainerSpec is the container shape used by capsules, gateways, and
-// short-lived operational probes.
-type ContainerSpec struct {
-	Name       string
-	Image      string
-	Entrypoint []string
-	Cmd        []string
-	Env        []string
-	User       string // "" = image default; "0:0" for root setup tasks
-	Labels     map[string]string
-	Privileged bool
-	// NetworkMode overrides Network for daemon-defined modes such as host.
-	// Network attaches to a user-defined network by name or id.
-	NetworkMode string
-	Network     string
-	// DNS pins the container's resolvers — the capsule points at its
-	// gateway's forwarder, never at anything it could choose itself.
-	DNS []netip.Addr
-	// CapAdd grants capabilities to an otherwise unprivileged container.
-	// The gateway receives NET_ADMIN for its own fail-closed ruleset.
-	CapAdd   []string
-	GroupAdd []string
-	Mounts   []Mount
-	// Tmpfs mounts by target path, e.g. "/run/runpool": "rw,size=64k".
-	Tmpfs map[string]string
-
-	// Resource limits, the tier envelope applied to the container.
-	MemoryBytes     int64
-	MemorySwapBytes int64
-	NanoCPUs        int64
-	PIDsLimit       int64
-	// CgroupParent places this container under a shared parent cgroup.
-	// A lease's capsule and its gateway name the same parent, so the
-	// kernel accounts them as one aggregate and one path reports the
-	// lease's whole consumption.
-	CgroupParent string
-}
-
-func (c *Client) hostConfig(spec ContainerSpec) *container.HostConfig {
+func (c *Client) hostConfig(spec engine.ContainerSpec) *container.HostConfig {
 	mounts := make([]mount.Mount, len(spec.Mounts))
 	for i, m := range spec.Mounts {
 		mounts[i] = mount.Mount{Type: mount.TypeVolume, Source: m.Volume, Target: m.Target, ReadOnly: m.ReadOnly}
@@ -206,7 +97,7 @@ func (c *Client) hostConfig(spec ContainerSpec) *container.HostConfig {
 
 // CreateContainer creates a container, pulling the image only when the
 // daemon does not have it. It does not start it.
-func (c *Client) CreateContainer(ctx context.Context, spec ContainerSpec) (string, error) {
+func (c *Client) CreateContainer(ctx context.Context, spec engine.ContainerSpec) (string, error) {
 	create := func() (string, error) {
 		resp, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Config: &container.Config{
@@ -260,7 +151,7 @@ func (c *Client) pull(ctx context.Context, ref string) error {
 // RunTask creates, starts and awaits a short-lived container (a chown or
 // externals seed), returning its exit code and combined output, then
 // removes it. Tasks are not capsule resources; they clean themselves up.
-func (c *Client) RunTask(ctx context.Context, spec ContainerSpec) (int64, string, error) {
+func (c *Client) RunTask(ctx context.Context, spec engine.ContainerSpec) (int64, string, error) {
 	id, err := c.CreateContainer(ctx, spec)
 	if err != nil {
 		return -1, "", err
@@ -344,27 +235,6 @@ func ignoreNotFound(err error) error {
 	return err
 }
 
-// The daemon's answers, in Runpool's vocabulary. A caller that has to
-// act differently on one of these gets a sentinel to test for; a caller
-// that only reports the failure gets the daemon's own text, which says
-// more than a category would.
-//
-// There are three because three call sites branch. A category nothing
-// branches on is a category that will be wrong the first time somebody
-// relies on it, since nothing exercises the mapping.
-var (
-	// ErrNotFound is absence, which is different from unreachability:
-	// an execution that cannot be found ended, and one that cannot be
-	// asked about is undecided.
-	ErrNotFound = errors.New("the daemon has no such object")
-	// ErrAlreadyExists is the name being taken. Recovery resolves it by
-	// proving ownership; anything else that fails a create is a failure
-	// to create.
-	ErrAlreadyExists = errors.New("an object of that name already exists")
-	// ErrUnavailable is the daemon not answering at all.
-	ErrUnavailable = errors.New("the daemon could not be reached")
-)
-
 // classify names what a daemon error means, keeping the daemon's own
 // text: the sentinel is for branching and the text is for reading. An
 // error it has no name for is returned as it came, because inventing a
@@ -374,26 +244,20 @@ func classify(err error) error {
 	case err == nil:
 		return nil
 	case cerrdefs.IsNotFound(err):
-		return fmt.Errorf("%w: %w", ErrNotFound, err)
+		return fmt.Errorf("%w: %w", engine.ErrNotFound, err)
 	case cerrdefs.IsAlreadyExists(err), cerrdefs.IsConflict(err):
-		return fmt.Errorf("%w: %w", ErrAlreadyExists, err)
+		return fmt.Errorf("%w: %w", engine.ErrAlreadyExists, err)
 	case cerrdefs.IsUnavailable(err), client.IsErrConnectionFailed(err):
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return fmt.Errorf("%w: %w", engine.ErrUnavailable, err)
 	}
 	return err
 }
-
-// ErrForeignResource reports an object that carries the expected name
-// but not this owner's labels. Adopting it would mean running work
-// through — and later deleting — something another instance or a human
-// created, so the only safe answer is to stop.
-var ErrForeignResource = errors.New("an object with the expected name exists but is not owned by this lease")
 
 // OwnedIDByName resolves an object by its deterministic name and proves
 // ownership before returning it. Absence returns ("", nil): for a
 // create-side conflict it means the conflict was transient, and for
 // recovery it proves the create never took effect. A name match with
-// foreign labels is ErrForeignResource — name equality is not ownership.
+// foreign labels is engine.ErrForeignResource — name equality is not ownership.
 func (c *Client) OwnedIDByName(ctx context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	return c.resolveOwnedID(ctx, kind, name, instanceID, leaseID)
 }
@@ -435,8 +299,9 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, ins
 	default:
 		return "", fmt.Errorf("unknown resource kind %q", kind)
 	}
-	if labels[labelManaged] != "true" || labels[labelInstance] != string(instanceID) || labels[labelLease] != string(leaseID) {
-		return "", fmt.Errorf("%w: %s %q", ErrForeignResource, kind, reference)
+	own, managed := engine.OwnershipFrom(labels)
+	if !managed || own.Instance != instanceID || own.Lease != leaseID {
+		return "", fmt.Errorf("%w: %s %q", engine.ErrForeignResource, kind, reference)
 	}
 	return id, nil
 }
@@ -481,66 +346,30 @@ func (c *Client) ContainerCgroupParent(ctx context.Context, id string) (string, 
 	return inspected.Container.HostConfig.CgroupParent, nil
 }
 
-// ContainerState is what the daemon can still say about a container after
-// it has stopped. ExitCode is carried alongside Status because a stopped
-// container's own filesystem is no longer reachable — no exec, and its
-// tmpfs control surface is gone — so the exit code is the only account of
-// itself a capsule can leave behind.
-type ContainerState struct {
-	Status   string
-	ExitCode int
-}
-
 // ContainerStatus returns the daemon's state for one container: created,
 // running, paused, restarting, removing, exited or dead, with the exit
 // code when it has stopped. A not-found error passes through typed so the
 // caller can treat absence as an answer rather than a failure.
-func (c *Client) ContainerStatus(ctx context.Context, id string) (ContainerState, error) {
+func (c *Client) ContainerStatus(ctx context.Context, id string) (engine.ContainerState, error) {
 	inspected, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		// Classified because the answer decides an attempt's fate: a
 		// container that is gone ended, and one the daemon cannot be
 		// asked about is undecided and goes to a person.
-		return ContainerState{}, classify(err)
+		return engine.ContainerState{}, classify(err)
 	}
 	if inspected.Container.State == nil {
-		return ContainerState{}, fmt.Errorf("container %s reports no state", id)
+		return engine.ContainerState{}, fmt.Errorf("container %s reports no state", id)
 	}
-	return ContainerState{
+	return engine.ContainerState{
 		Status:   string(inspected.Container.State.Status),
 		ExitCode: inspected.Container.State.ExitCode,
 	}, nil
 }
 
-// OwnedContainer is one labeled container found during reconciliation.
-type OwnedContainer struct {
-	ID      string
-	Name    string
-	Kind    string
-	Role    string
-	LeaseID assignment.LeaseID
-	Running bool
-}
-
-// HelperInFlight reports whether this is a container the instance runs
-// for itself and has not finished with — the filesystem probe, host-CIDR
-// discovery. A sweep has to leave those alone while they run.
-//
-// The lease id decides ownership, the same rule
-// OwnedResource.InstanceInfrastructure states for networks and volumes.
-// The second condition is what makes containers different: a lease-less
-// network or volume is persistent, while a helper is ephemeral and
-// RunTask removes its own on a deadline of its own. So one still running
-// is in flight, and force removing it fails the measurement that started
-// it; one that is stopped outlived the process that owned it, and
-// collecting that is what a sweep is for. Both conditions live here
-// rather than at the call sites because a sweep that tests only the
-// first deletes the instance's own working parts.
-func (c OwnedContainer) HelperInFlight() bool { return c.LeaseID == "" && c.Running }
-
 // ListOwnedContainers finds every container this instance stamped,
 // running or not — the reconciliation working set after a crash.
-func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]OwnedContainer, error) {
+func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error) {
 	list, err := c.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: ownedFilter(instanceID),
@@ -548,20 +377,21 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.
 	if err != nil {
 		return nil, err
 	}
-	out := make([]OwnedContainer, 0, len(list.Items))
+	out := make([]engine.OwnedContainer, 0, len(list.Items))
 	for _, s := range list.Items {
 		name := ""
 		if len(s.Names) > 0 {
 			name = strings.TrimPrefix(s.Names[0], "/")
 		}
-		out = append(out, OwnedContainer{
-			ID:   s.ID,
-			Name: name,
-			Kind: s.Labels[labelKind],
-			Role: s.Labels[labelRole],
-			// The one conversion: a label is a string until it is read,
-			// and this is where it is read.
-			LeaseID: assignment.LeaseID(s.Labels[labelLease]),
+		// The one conversion: a label is a string until it is read, and
+		// this is where it is read.
+		own, _ := engine.OwnershipFrom(s.Labels)
+		out = append(out, engine.OwnedContainer{
+			ID:      s.ID,
+			Name:    name,
+			Kind:    own.Kind,
+			Role:    own.Role,
+			LeaseID: own.Lease,
 			Running: s.State == container.StateRunning,
 		})
 	}
@@ -569,7 +399,9 @@ func (c *Client) ListOwnedContainers(ctx context.Context, instanceID assignment.
 }
 
 func ownedFilter(instanceID assignment.InstanceID) client.Filters {
-	return client.Filters{}.
-		Add("label", labelManaged+"=true").
-		Add("label", labelInstance+"="+string(instanceID))
+	filters := client.Filters{}
+	for key, value := range engine.ManagedBy(instanceID) {
+		filters = filters.Add("label", key+"="+value)
+	}
+	return filters
 }

@@ -22,7 +22,7 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 )
 
 const (

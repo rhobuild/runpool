@@ -23,8 +23,9 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/credential"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/platform"
-	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 
 type Status string
@@ -204,7 +205,7 @@ func checkDaemon(ctx context.Context, d daemonInfo) Result {
 // networkProbeClient is the two calls the bridge probe needs, named so
 // the probe cannot reach the rest of a daemon client.
 type networkProbeClient interface {
-	CreateNetwork(context.Context, docker.NetworkSpec) (string, error)
+	CreateNetwork(context.Context, engine.NetworkSpec) (string, error)
 	RemoveNetwork(context.Context, string) error
 }
 
@@ -232,11 +233,11 @@ func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
 		return Result{name, Fail, "cannot generate a unique probe name: " + err.Error(), "check the host random source"}
 	}
 	probe := "runpool-doctor-" + suffix
-	id, err := d.CreateNetwork(ctx, docker.NetworkSpec{
+	id, err := d.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:     probe,
 		Internal: true,
 		Isolated: true,
-		Labels: docker.Ownership{
+		Labels: engine.Ownership{
 			// Not an instance: the preflight runs before one serves, and
 			// the sentinel is what keeps its probe out of any instance's
 			// sweep.
@@ -286,7 +287,7 @@ func probeSuffix() (string, error) {
 // driver, a missing controller. Reachable branches or untested refusals
 // — there is no third option.
 type daemonInfo interface {
-	Info(ctx context.Context) (docker.HostInfo, error)
+	Info(ctx context.Context) (engine.HostInfo, error)
 }
 
 func checkCgroups(ctx context.Context, d daemonInfo, cfg *config.Config) []Result {

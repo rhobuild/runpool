@@ -16,7 +16,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
@@ -25,16 +25,16 @@ import (
 // daemon: the instance uplink, its subnet, every subnet the daemon knows
 // and a probe container to look at the host with.
 type sandboxNetworks interface {
-	EnsureOwnedNetwork(ctx context.Context, spec docker.NetworkSpec) (string, error)
+	EnsureOwnedNetwork(ctx context.Context, spec engine.NetworkSpec) (string, error)
 	NetworkSubnet(ctx context.Context, id string) (string, error)
 	AllNetworkSubnets(ctx context.Context) ([]string, error)
-	RunTask(ctx context.Context, spec docker.ContainerSpec) (int64, string, error)
+	RunTask(ctx context.Context, spec engine.ContainerSpec) (int64, string, error)
 }
 
 // sandboxGateways is what installing one needs: find the gateways, hand
 // each the new sets, and remove the ones that will not take them.
 type sandboxGateways interface {
-	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]docker.OwnedContainer, error)
+	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error)
 	Exec(ctx context.Context, id string, cmd []string) (int, string, error)
 	ExecWithInput(ctx context.Context, id string, cmd []string, input []byte) (int, string, error)
 	RemoveContainer(ctx context.Context, id string) error
@@ -154,9 +154,9 @@ func (n *networkSandbox) build(ctx context.Context, budget time.Duration) (*caps
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
-	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, docker.NetworkSpec{
+	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, engine.NetworkSpec{
 		Name:   "runpool-uplink-" + string(n.instanceID)[:8],
-		Labels: docker.Ownership{Instance: n.instanceID, Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: n.instanceID, Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uplink network: %w", err)
@@ -492,7 +492,7 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 		return nil, err
 	}
 	var mu sync.Mutex
-	eachGateway(containers, func(c docker.OwnedContainer) {
+	eachGateway(containers, func(c engine.OwnedContainer) {
 		if c.Role != capsule.RoleGateway || !c.Running {
 			return
 		}
@@ -529,7 +529,7 @@ const gatewayControlTimeout = 30 * time.Second
 // on the context to end the wait. It is the same reason the exec and the
 // removal below are bounded, and leaving it out left the pass unbounded
 // at its very first step.
-func (n *networkSandbox) ownedContainers(ctx context.Context) ([]docker.OwnedContainer, error) {
+func (n *networkSandbox) ownedContainers(ctx context.Context) ([]engine.OwnedContainer, error) {
 	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
 	defer cancel()
 	return n.daemon.ListOwnedContainers(ctx, n.instanceID)
@@ -586,7 +586,7 @@ func (n *networkSandbox) closeGateways(ctx context.Context) error {
 		mu       sync.Mutex
 		failures int
 	)
-	eachGateway(containers, func(c docker.OwnedContainer) {
+	eachGateway(containers, func(c engine.OwnedContainer) {
 		if c.Role != capsule.RoleGateway || !c.Running {
 			return
 		}
@@ -613,13 +613,13 @@ func (n *networkSandbox) discoverHostCIDRs(ctx context.Context) ([]string, error
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	code, out, err := n.daemon.RunTask(ctx, docker.ContainerSpec{
+	code, out, err := n.daemon.RunTask(ctx, engine.ContainerSpec{
 		Name:        "runpool-" + string(n.instanceID)[:8] + "-hostnet-probe-" + hex.EncodeToString(nonce),
 		Image:       n.probeImage,
 		Entrypoint:  []string{"/bin/sh", "-c"},
 		Cmd:         []string{"ip -o -4 addr show scope global"},
 		NetworkMode: "host",
-		Labels:      docker.Ownership{Instance: n.instanceID, Role: "probe"}.Labels(),
+		Labels:      engine.Ownership{Instance: n.instanceID, Role: "probe"}.Labels(),
 	})
 	if err != nil {
 		return nil, err

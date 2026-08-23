@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // TestAnUndecidableExecutionIsHeldRatherThanSettled: absence ends an
@@ -28,11 +28,11 @@ func TestAnUndecidableExecutionIsHeldRatherThanSettled(t *testing.T) {
 		reports bool
 	}{
 		"a container that is gone ended": {
-			err:  fmt.Errorf("inspect: %w", docker.ErrNotFound),
+			err:  fmt.Errorf("inspect: %w", engine.ErrNotFound),
 			want: assignment.ObservedAbsent,
 		},
 		"a daemon that cannot be reached decides nothing": {
-			err:     fmt.Errorf("inspect: %w", docker.ErrUnavailable),
+			err:     fmt.Errorf("inspect: %w", engine.ErrUnavailable),
 			want:    assignment.ObservedUnavailable,
 			reports: true,
 		},
@@ -44,8 +44,8 @@ func TestAnUndecidableExecutionIsHeldRatherThanSettled(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			launcher := &Launcher{dock: &fakeDaemon{
-				status: func(string) (docker.ContainerState, error) {
-					return docker.ContainerState{}, testCase.err
+				status: func(string) (engine.ContainerState, error) {
+					return engine.ContainerState{}, testCase.err
 				},
 			}}
 			got, err := launcher.InspectExecution(t.Context(), prepared)

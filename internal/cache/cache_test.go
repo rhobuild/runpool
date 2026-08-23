@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -37,7 +37,7 @@ func (f *fakeVolumes) EnsureOwnedVolume(_ context.Context, name string, labels m
 
 func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	if f.foreign {
-		return "", docker.ErrForeignResource
+		return "", engine.ErrForeignResource
 	}
 	if _, ok := f.ensured[name]; !ok {
 		return "", nil
@@ -53,8 +53,8 @@ func (f *fakeVolumes) RemoveVolume(_ context.Context, name string) error {
 
 // sizes lets a GC test weigh volumes; unset names report unknown (-1),
 // like a daemon that could not compute a size.
-func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]docker.VolumeUsage, error) {
-	var out []docker.VolumeUsage
+func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]engine.VolumeUsage, error) {
+	var out []engine.VolumeUsage
 	for name, labels := range f.ensured {
 		size := int64(-1)
 		if f.sizes != nil {
@@ -66,7 +66,7 @@ func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) (
 		// adapter does: a fake that reports a volume without the role it
 		// was stamped with is a fake the caller cannot tell apart from a
 		// volume nobody owns.
-		out = append(out, docker.VolumeUsage{
+		out = append(out, engine.VolumeUsage{
 			Name:   name,
 			Role:   labels["io.runpool.role"],
 			Labels: labels,
@@ -356,7 +356,7 @@ func TestDeleteLaneStopsAtAForeignVolume(t *testing.T) {
 	}
 
 	vols.foreign = true
-	if err := m.DeleteLane(t.Context(), loc.LaneID); !errors.Is(err, docker.ErrForeignResource) {
+	if err := m.DeleteLane(t.Context(), loc.LaneID); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("deleting over a foreign volume = %v; want ErrForeignResource", err)
 	}
 	if len(vols.removed) != 0 {

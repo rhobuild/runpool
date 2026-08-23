@@ -10,7 +10,7 @@ import (
 	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -78,7 +78,7 @@ func TestStatusDiscrepanciesCoverEveryKind(t *testing.T) {
 		{ID: "lease-done", State: store.LeaseReleased},
 	}
 	obs := daemonObservation{
-		containers: []docker.OwnedContainer{
+		containers: []engine.OwnedContainer{
 			{Name: "c-orphan", LeaseID: "lease-done"},
 			// The instance's own helpers carry no lease. One in flight is
 			// the daemon and the books agreeing; one left stopped is a
@@ -86,11 +86,11 @@ func TestStatusDiscrepanciesCoverEveryKind(t *testing.T) {
 			{Name: "probe-running", Role: "probe", Running: true},
 			{Name: "probe-leaked", Role: "probe"},
 		},
-		networks: []docker.OwnedResource{
+		networks: []engine.OwnedResource{
 			{ID: "net-orphan", LeaseID: "lease-done"},
 			{ID: "uplink", Role: capsule.RoleUplink},
 		},
-		volumes: []docker.OwnedResource{
+		volumes: []engine.OwnedResource{
 			{ID: "vol-unclassified"},
 			{ID: "lane", Role: cache.RoleCacheLane},
 		},

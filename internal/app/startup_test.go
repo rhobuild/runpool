@@ -5,7 +5,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -31,7 +31,7 @@ func TestReconcileAdoptsWhatIsStillRunning(t *testing.T) {
 		})
 	}
 
-	h.objects.containers = []docker.OwnedContainer{
+	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-alive", Role: capsule.RoleCapsule, LeaseID: alive.ID, Running: true},
 	}
 	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
@@ -82,7 +82,7 @@ func TestSweepPeriodicallyKeepsWhatIsBeingWorkedOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	live, _ := leaseFor(t, h, "job-1")
-	h.objects.containers = []docker.OwnedContainer{
+	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-live", Role: capsule.RoleCapsule, LeaseID: live.ID, Running: true},
 		{ID: "runner-orphan", Role: capsule.RoleCapsule, LeaseID: "lse-vanished"},
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -92,7 +92,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 
-	runnerName := "runpool-" + docker.ShortID(string(lease.ID))
+	runnerName := "runpool-" + engine.ShortID(string(lease.ID))
 	jit, err := b.gh.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
 	if err != nil {
 		log.Error("jit generation failed", "error", err)
@@ -259,7 +259,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return
 	}
 	runnerContainer := prepared.RuntimeID
-	log.Info("capsule running", "runner", jit.RunnerName, "container", docker.ShortID(string(runnerContainer)))
+	log.Info("capsule running", "runner", jit.RunnerName, "container", engine.ShortID(string(runnerContainer)))
 
 	// From here the tier's ceiling governs, and only here: this is the
 	// wait for work the provider owns, and the ceiling is the backstop

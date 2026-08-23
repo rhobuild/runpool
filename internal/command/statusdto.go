@@ -7,7 +7,7 @@ import (
 	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -309,9 +309,9 @@ func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64
 // daemonObservation is what the daemon reported about this instance's
 // objects, or the error that prevented asking.
 type daemonObservation struct {
-	containers []docker.OwnedContainer
-	networks   []docker.OwnedResource
-	volumes    []docker.OwnedResource
+	containers []engine.OwnedContainer
+	networks   []engine.OwnedResource
+	volumes    []engine.OwnedResource
 	err        error
 }
 
@@ -349,7 +349,7 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 		}
 	}
 
-	check := func(kind string, resources []docker.OwnedResource, persistentRole string) {
+	check := func(kind string, resources []engine.OwnedResource, persistentRole string) {
 		for _, r := range resources {
 			switch {
 			case r.Role == persistentRole:

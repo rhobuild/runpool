@@ -28,7 +28,8 @@ cmd/capsule-supervisor           pid 1 inside a capsule: boots the runner,
     -> internal/egress
 
 internal/platform/githubactions  the provider adapter
-internal/platform/docker         the Moby adapter
+internal/engine                  the container engine Runpool asks for
+internal/engine/docker           the Moby adapter
 ```
 
 `internal/gateway` hangs off the second binary, not the controller: the relay

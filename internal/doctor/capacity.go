@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // configuredSwap is the swap that will actually be requested on a container,
@@ -78,7 +78,7 @@ func checkPhysicalCapacity(ctx context.Context, cfg *config.Config, d daemonInfo
 	return physicalCapacity(cfg, info)
 }
 
-func physicalCapacity(cfg *config.Config, info docker.HostInfo) Result {
+func physicalCapacity(cfg *config.Config, info engine.HostInfo) Result {
 	required := capacityRequirement(cfg)
 	needMem := saturatingAdd(required.memory, int64(cfg.Host.Reserve.Memory))
 	needCPU := saturatingAdd(required.nanoCPUs, int64(cfg.Host.Reserve.CPU))

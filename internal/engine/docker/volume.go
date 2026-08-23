@@ -8,6 +8,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // CreateVolume creates a named, labeled volume — an ephemeral capsule
@@ -39,7 +40,7 @@ func (c *Client) EnsureOwnedVolume(ctx context.Context, name string, labels map[
 	for k, want := range labels {
 		if got[k] != want {
 			return fmt.Errorf("%w: volume %q (label %s is %q, expected %q)",
-				ErrForeignResource, name, k, got[k], want)
+				engine.ErrForeignResource, name, k, got[k], want)
 		}
 	}
 	return nil
@@ -51,14 +52,15 @@ func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	return ignoreNotFound(err)
 }
 
-func (c *Client) ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]OwnedResource, error) {
+func (c *Client) ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error) {
 	resp, err := c.cli.VolumeList(ctx, client.VolumeListOptions{Filters: ownedFilter(instanceID)})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]OwnedResource, 0, len(resp.Items))
+	out := make([]engine.OwnedResource, 0, len(resp.Items))
 	for _, v := range resp.Items {
-		out = append(out, OwnedResource{ID: v.Name, LeaseID: assignment.LeaseID(v.Labels[labelLease]), Role: v.Labels[labelRole]})
+		own, _ := engine.OwnershipFrom(v.Labels)
+		out = append(out, engine.OwnedResource{ID: v.Name, LeaseID: own.Lease, Role: own.Role})
 	}
 	return out, nil
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/config"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 )
 
 // controlProtocolFile is where the supervisor declares what it speaks.

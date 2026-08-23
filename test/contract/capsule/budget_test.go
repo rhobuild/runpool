@@ -10,7 +10,8 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
@@ -37,9 +38,9 @@ func TestLeaseResourceBudget(t *testing.T) {
 
 	rec := &memRecorder{}
 
-	uplinkID, err := dock.CreateNetwork(ctx, docker.NetworkSpec{
+	uplinkID, err := dock.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:   leaseID + "-uplink",
-		Labels: docker.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatal(err)

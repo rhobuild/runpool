@@ -5,7 +5,7 @@
 /internal/egress/             @rhobuild/runpool-maintainers
 /internal/gateway/            @rhobuild/runpool-maintainers
 /internal/lease/              @rhobuild/runpool-maintainers
-/internal/platform/docker/    @rhobuild/runpool-maintainers
+/internal/engine/             @rhobuild/runpool-maintainers
 /cmd/capsule-supervisor/      @rhobuild/runpool-maintainers
 /build/                       @rhobuild/runpool-maintainers
 /deploy/                      @rhobuild/runpool-maintainers

@@ -11,35 +11,13 @@ import (
 	"strings"
 
 	"github.com/moby/moby/client"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
-// HostInfo is what the doctor needs to know about the daemon and its
-// kernel: enough to decide whether this host can honour the capsule
-// contract, and nothing more.
-type HostInfo struct {
-	ServerVersion string
-	APIVersion    string
-	Architecture  string
-	OSType        string
-	CgroupVersion string
-	CgroupDriver  string
-	MemoryLimit   bool
-	SwapLimit     bool
-	PidsLimit     bool
-	Rootless      bool
-	// Physical capacity as the daemon sees it, for the doctor's
-	// tiers-versus-host arithmetic.
-	NCPU           int
-	MemTotalBytes  int64
-	SwapTotalBytes int64
-	SwapTotalKnown bool
-	Warnings       []string
-}
-
-func (c *Client) Info(ctx context.Context) (HostInfo, error) {
+func (c *Client) Info(ctx context.Context) (engine.HostInfo, error) {
 	result, err := c.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return HostInfo{}, err
+		return engine.HostInfo{}, err
 	}
 	info := result.Info
 	// The daemon reports rootless mode as a security option, which is the
@@ -51,7 +29,7 @@ func (c *Client) Info(ctx context.Context) (HostInfo, error) {
 		}
 	}
 	swapTotal, swapErr := localSwapTotal()
-	return HostInfo{
+	return engine.HostInfo{
 		ServerVersion:  info.ServerVersion,
 		APIVersion:     c.cli.ClientVersion(),
 		Architecture:   info.Architecture,

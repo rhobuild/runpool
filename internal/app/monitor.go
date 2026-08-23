@@ -10,7 +10,7 @@ import (
 	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
-	"github.com/rhobuild/runpool/internal/platform/docker"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -26,8 +26,8 @@ const monitorInterval = time.Minute
 // because that is what lets a test present a filesystem with no room
 // left — the one state the daemon cannot be asked to be in.
 type diskProbe interface {
-	ProbeFilesystemFree(ctx context.Context, image string, instanceID assignment.InstanceID) (docker.FilesystemFree, error)
-	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]docker.VolumeUsage, error)
+	ProbeFilesystemFree(ctx context.Context, image string, instanceID assignment.InstanceID) (engine.FilesystemFree, error)
+	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]engine.VolumeUsage, error)
 }
 
 // admissionGate is the half of the credit pool a verdict acts on.

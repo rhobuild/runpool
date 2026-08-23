@@ -23,8 +23,9 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/cache"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/platform"
-	"github.com/rhobuild/runpool/internal/platform/docker"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -79,7 +80,7 @@ func TestContainerLifecycle(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	code, out, err := c.RunTask(ctx, docker.ContainerSpec{
+	code, out, err := c.RunTask(ctx, engine.ContainerSpec{
 		Name:   instance + "-task",
 		Image:  busybox,
 		Cmd:    []string{"sh", "-c", "echo marker-out; echo marker-err >&2; exit 7"},
@@ -106,7 +107,7 @@ func TestRemoveIsIdempotent(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-gone",
 		Image:  busybox,
 		Cmd:    []string{"true"},
@@ -145,7 +146,7 @@ func TestPullOnMissingImage(t *testing.T) {
 
 	// A tag no local daemon has cached: create must fail not-found,
 	// pull, and succeed on the second attempt.
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-pull",
 		Image:  missingImage,
 		Cmd:    []string{"true"},
@@ -165,7 +166,7 @@ func TestExec(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-exec",
 		Image:  busybox,
 		Cmd:    []string{"sleep", "60"},
@@ -211,7 +212,7 @@ func TestExecHonoursItsContext(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-exec-ctx",
 		Image:  busybox,
 		Cmd:    []string{"sleep", "300"},
@@ -254,7 +255,7 @@ func TestExecWithInput(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-stdin",
 		Image:  busybox,
 		Cmd:    []string{"sleep", "60"},
@@ -300,7 +301,7 @@ func TestOwnershipQueries(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   instance + "-owned",
 		Image:  busybox,
 		Cmd:    []string{"sleep", "60"},
@@ -324,7 +325,7 @@ func TestOwnershipQueries(t *testing.T) {
 		}
 	})
 
-	netID, err := c.CreateNetwork(ctx, docker.NetworkSpec{
+	netID, err := c.CreateNetwork(ctx, engine.NetworkSpec{
 		Name: instance + "-owned-net", Labels: labels(instance, "lease-owned", "network", "capsule"),
 	})
 	if err != nil {
@@ -392,7 +393,7 @@ func TestResourceLimits(t *testing.T) {
 		memBytes  = 64 * 1024 * 1024
 		swapBytes = 32 * 1024 * 1024
 	)
-	code, out, err := c.RunTask(ctx, docker.ContainerSpec{
+	code, out, err := c.RunTask(ctx, engine.ContainerSpec{
 		Name:  instance + "-limits",
 		Image: busybox,
 		// cgroup v2 reports the container's own envelope in these files.
@@ -449,7 +450,7 @@ func TestOwnedIDByName(t *testing.T) {
 	ctx := t.Context()
 
 	name := instance + "-owned-by-name"
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:   name,
 		Image:  busybox,
 		Cmd:    []string{"true"},
@@ -466,11 +467,11 @@ func TestOwnedIDByName(t *testing.T) {
 	}
 
 	// Same name, different lease: name equality is not ownership.
-	if _, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
+	if _, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Errorf("foreign resolution = %v; want ErrForeignResource — adopting by name "+
 			"would run work through someone else's object and later delete it", err)
 	}
-	if err := c.RemoveOwnedContainer(ctx, name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedContainer(ctx, name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign removal = %v; want ErrForeignResource", err)
 	}
 	if got, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "lease-own"); err != nil || got != id {
@@ -492,7 +493,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 	ctx := t.Context()
 
 	networkName := instance + "-owned-removal-network"
-	networkID, err := c.CreateNetwork(ctx, docker.NetworkSpec{
+	networkID, err := c.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:   networkName,
 		Labels: labels(instance, "lease-owner", "network", "capsule-net"),
 	})
@@ -504,7 +505,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 			t.Errorf("cleanup network %s: %v", networkID, err)
 		}
 	})
-	if err := c.RemoveOwnedNetwork(ctx, networkID, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedNetwork(ctx, networkID, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign network removal = %v; want ErrForeignResource", err)
 	}
 	if got, err := c.OwnedIDByName(ctx, "network", networkName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != networkID {
@@ -520,7 +521,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 			t.Errorf("cleanup volume %s: %v", volumeName, err)
 		}
 	})
-	if err := c.RemoveOwnedVolume(ctx, volumeName, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, docker.ErrForeignResource) {
+	if err := c.RemoveOwnedVolume(ctx, volumeName, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign volume removal = %v; want ErrForeignResource", err)
 	}
 	if got, err := c.OwnedIDByName(ctx, "volume", volumeName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != volumeName {
@@ -650,7 +651,7 @@ func TestEnsureOwnedVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := c.EnsureOwnedVolume(ctx, foreign, own)
-	if !errors.Is(err, docker.ErrForeignResource) {
+	if !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("ensuring over a foreign volume = %v; want ErrForeignResource", err)
 	}
 }
@@ -691,12 +692,12 @@ func TestCacheLaneVolumes(t *testing.T) {
 	// way a capsule mounts it.
 	job := func(name, volume, cmd string) (int64, string) {
 		t.Helper()
-		code, out, err := c.RunTask(ctx, docker.ContainerSpec{
+		code, out, err := c.RunTask(ctx, engine.ContainerSpec{
 			Name:   instance + "-" + name,
 			Image:  busybox,
 			Cmd:    []string{"sh", "-c", cmd},
 			Labels: labels(instance, "lease-"+name, "task", "helper"),
-			Mounts: []docker.Mount{{Volume: volume, Target: "/cache"}},
+			Mounts: []engine.Mount{{Volume: volume, Target: "/cache"}},
 		})
 		if err != nil {
 			t.Fatalf("job %s: %v", name, err)
@@ -776,12 +777,12 @@ func TestOwnedVolumeUsage(t *testing.T) {
 	if _, err := c.CreateVolume(ctx, name, labels(instance, "", "volume", cache.RoleCacheLane)); err != nil {
 		t.Fatal(err)
 	}
-	code, out, err := c.RunTask(ctx, docker.ContainerSpec{
+	code, out, err := c.RunTask(ctx, engine.ContainerSpec{
 		Name:   instance + "-usage-writer",
 		Image:  busybox,
 		Cmd:    []string{"sh", "-c", "dd if=/dev/zero of=/v/data bs=1024 count=512 2>/dev/null"},
 		Labels: labels(instance, "lease-usage", "task", "helper"),
-		Mounts: []docker.Mount{{Volume: name, Target: "/v"}},
+		Mounts: []engine.Mount{{Volume: name, Target: "/v"}},
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("writer: exit %d, %v, %s", code, err, out)
@@ -791,7 +792,7 @@ func TestOwnedVolumeUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found *docker.VolumeUsage
+	var found *engine.VolumeUsage
 	for i := range usage {
 		if usage[i].Name == name {
 			found = &usage[i]
@@ -817,7 +818,7 @@ func TestContainerDiskFull(t *testing.T) {
 	c, instance := client(t)
 	ctx := t.Context()
 
-	code, out, err := c.RunTask(ctx, docker.ContainerSpec{
+	code, out, err := c.RunTask(ctx, engine.ContainerSpec{
 		Name:   instance + "-diskfull",
 		Image:  busybox,
 		Cmd:    []string{"sh", "-c", "dd if=/dev/zero of=/scratch/fill bs=1M count=64"},
@@ -838,7 +839,7 @@ func TestContainerDiskFull(t *testing.T) {
 	if _, err := c.Info(ctx); err != nil {
 		t.Fatalf("daemon after disk-full: %v", err)
 	}
-	code, _, err = c.RunTask(ctx, docker.ContainerSpec{
+	code, _, err = c.RunTask(ctx, engine.ContainerSpec{
 		Name:   instance + "-after-diskfull",
 		Image:  busybox,
 		Cmd:    []string{"true"},
@@ -860,7 +861,7 @@ func TestCleanupSurvivesCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	_, _, err := c.RunTask(ctx, docker.ContainerSpec{
+	_, _, err := c.RunTask(ctx, engine.ContainerSpec{
 		Name:   instance + "-cancelled",
 		Image:  busybox,
 		Cmd:    []string{"sleep", "60"},
@@ -893,7 +894,7 @@ func mustRemoveContainer(t *testing.T, c *docker.Client, ctx context.Context, id
 	// Absence is verified, not assumed: a removal the daemon accepted
 	// but did not complete leaves a privileged leftover this suite
 	// exists to notice.
-	if _, err := c.ContainerStatus(cctx, id); !errors.Is(err, docker.ErrNotFound) {
+	if _, err := c.ContainerStatus(cctx, id); !errors.Is(err, engine.ErrNotFound) {
 		t.Errorf("cleanup: container %s still exists after removal (status error: %v)", id, err)
 	}
 }
@@ -917,7 +918,7 @@ func TestContainerRemovalSparesNamedVolumes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.RemoveVolume(context.Background(), named) })
 
-	id, err := c.CreateContainer(ctx, docker.ContainerSpec{
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
 		Name:  instance + "-anonvol",
 		Image: busybox,
 		Cmd:   []string{"true"},
@@ -925,7 +926,7 @@ func TestContainerRemovalSparesNamedVolumes(t *testing.T) {
 			"io.runpool.managed":  "true",
 			"io.runpool.instance": instance,
 		},
-		Mounts: []docker.Mount{
+		Mounts: []engine.Mount{
 			{Volume: named, Target: "/data"},
 			{Volume: "", Target: "/anon"},
 		},

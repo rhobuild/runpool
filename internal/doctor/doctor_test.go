@@ -12,8 +12,8 @@ import (
 
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/credential"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/platform"
-	"github.com/rhobuild/runpool/internal/platform/docker"
 )
 
 func TestReportOK(t *testing.T) {
@@ -110,7 +110,7 @@ func TestPhysicalCapacity(t *testing.T) {
 	}
 	cfg.Host.Reserve.Memory = 2 << 30
 	cfg.Host.Reserve.CPU = 1_000_000_000
-	host := docker.HostInfo{NCPU: 12, MemTotalBytes: 16 << 30, SwapTotalKnown: true}
+	host := engine.HostInfo{NCPU: 12, MemTotalBytes: 16 << 30, SwapTotalKnown: true}
 
 	// 4x2GiB + 2GiB = 10GiB of 16; 4x2 + 1 = 9 of 12 CPUs.
 	if res := physicalCapacity(cfg, host); res.Status != Pass {
@@ -140,7 +140,7 @@ func TestPhysicalCapacityUsesGlobalWorstCase(t *testing.T) {
 		},
 		Host: config.Host{Reserve: config.Reserve{Memory: 5 << 30, Swap: 2 << 30, CPU: 2e9}},
 	}
-	host := docker.HostInfo{
+	host := engine.HostInfo{
 		NCPU: 8, MemTotalBytes: 16 << 30, SwapTotalBytes: 4 << 30, SwapTotalKnown: true,
 	}
 	if res := physicalCapacity(cfg, host); res.Status != Pass {
@@ -158,7 +158,7 @@ func TestPhysicalCapacityRequiresKnownSufficientSwap(t *testing.T) {
 		ID: "std", Parallelism: 1,
 		Resources: config.Resources{Memory: 1 << 30, Swap: 1 << 30, CPU: 1e9},
 	}}}
-	host := docker.HostInfo{NCPU: 2, MemTotalBytes: 4 << 30}
+	host := engine.HostInfo{NCPU: 2, MemTotalBytes: 4 << 30}
 	if res := physicalCapacity(cfg, host); res.Status != Fail || !strings.Contains(res.Fix, "could not be read") {
 		t.Fatalf("unknown swap = %+v; want fail", res)
 	}
@@ -188,7 +188,7 @@ func TestSwapGatesKeyOnDifferentQuestions(t *testing.T) {
 	}
 
 	// The host still has to own the swap the reserve withholds.
-	host := docker.HostInfo{NCPU: 2, MemTotalBytes: 4 << 30, SwapTotalKnown: true, SwapTotalBytes: 1 << 30}
+	host := engine.HostInfo{NCPU: 2, MemTotalBytes: 4 << 30, SwapTotalKnown: true, SwapTotalBytes: 1 << 30}
 	if res := physicalCapacity(cfg, host); res.Status != Fail || !strings.Contains(res.Fix, "exceeds host swap") {
 		t.Fatalf("reserve larger than host swap = %+v; want fail", res)
 	}
@@ -283,13 +283,13 @@ type fakeNetworkProbe struct {
 	createErr    error
 	removeErr    error
 	cancel       context.CancelFunc
-	created      docker.NetworkSpec
+	created      engine.NetworkSpec
 	removed      string
 	removeCalls  int
 	removeCtxErr error
 }
 
-func (f *fakeNetworkProbe) CreateNetwork(_ context.Context, spec docker.NetworkSpec) (string, error) {
+func (f *fakeNetworkProbe) CreateNetwork(_ context.Context, spec engine.NetworkSpec) (string, error) {
 	f.created = spec
 	if f.cancel != nil {
 		f.cancel()
@@ -642,11 +642,11 @@ func TestCheckCredentialsNamesTheHost(t *testing.T) {
 
 // fakeDaemonInfo answers the one read checkCgroups makes.
 type fakeDaemonInfo struct {
-	info docker.HostInfo
+	info engine.HostInfo
 	err  error
 }
 
-func (f fakeDaemonInfo) Info(context.Context) (docker.HostInfo, error) { return f.info, f.err }
+func (f fakeDaemonInfo) Info(context.Context) (engine.HostInfo, error) { return f.info, f.err }
 
 // TestCheckCgroupsRefusesWhatItCannotEnforce: every branch here is a
 // refusal an operator can hit, and each was unreachable while the check
@@ -656,7 +656,7 @@ func (f fakeDaemonInfo) Info(context.Context) (docker.HostInfo, error) { return 
 // must close admission rather than warn.
 func TestCheckCgroupsRefusesWhatItCannotEnforce(t *testing.T) {
 	cfg := &config.Config{}
-	good := docker.HostInfo{CgroupVersion: "2", CgroupDriver: "systemd", MemoryLimit: true, PidsLimit: true}
+	good := engine.HostInfo{CgroupVersion: "2", CgroupDriver: "systemd", MemoryLimit: true, PidsLimit: true}
 
 	fails := func(res []Result) bool {
 		for _, r := range res {
@@ -746,12 +746,12 @@ func TestCheckDaemonFailsClosed(t *testing.T) {
 		"the daemon cannot be read": {
 			fakeDaemonInfo{err: errors.New("socket refused")}, false, "check the socket mount"},
 		"rootless": {
-			fakeDaemonInfo{info: docker.HostInfo{Rootless: true, ServerVersion: current}},
+			fakeDaemonInfo{info: engine.HostInfo{Rootless: true, ServerVersion: current}},
 			false, "requires rootful Docker"},
 		"below the engine floor": {
-			fakeDaemonInfo{info: docker.HostInfo{ServerVersion: tooOld}}, false, "upgrade to Docker Engine"},
+			fakeDaemonInfo{info: engine.HostInfo{ServerVersion: tooOld}}, false, "upgrade to Docker Engine"},
 		"a daemon that serves": {
-			fakeDaemonInfo{info: docker.HostInfo{ServerVersion: current}}, true, ""},
+			fakeDaemonInfo{info: engine.HostInfo{ServerVersion: current}}, true, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := checkDaemon(t.Context(), tc.d)
