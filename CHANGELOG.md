@@ -491,6 +491,13 @@ by its public and operational effects.
 - Public-repository gates include CodeQL, dependency review, Dependabot,
   vulnerability scanning, SHA-pinned actions, and least-privilege workflow
   permissions.
+- The release-qualification record is one typed document with two ends: the
+  job that writes it and the job that reads it back share the type, so a field
+  one of them renames is a build failure rather than a publication that
+  verifies nothing. It is assembled from the reviewed reference the controller
+  itself embeds, and refuses evidence that does not support the claim it would
+  make — a platform nobody qualified, an entry still pending, an end-to-end run
+  of other images.
 - Every workflow states the Go toolchain it builds with, held equal to the
   version `go.mod` declares by the same check that holds the builder images to
   it, so the binary a release ships is compiled by the toolchain its gates ran.

@@ -1,5 +1,11 @@
-// Command verify compares collected host facts with Runpool's release-
-// qualification reference. It fails closed when a fact is missing or differs.
+// Command verify-platform compares collected host facts with Runpool's
+// release-qualification reference. It fails closed when a fact is missing
+// or differs.
+//
+// It is the first of the three commands a release is assembled from: this
+// one decides whether the host that ran the suites is the host the
+// reference describes, record states what was qualified, and verify-record
+// checks that record against the build being published.
 package main
 
 import (

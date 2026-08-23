@@ -190,21 +190,11 @@ jobs:
           COMMIT: ${{ github.sha }}
           CONTROLLER_IMAGE: ${{ needs.candidate.outputs.controller_image }}
         run: |
-          python3 - <<'PY'
-          import json, os, sys
-
-          record = json.load(open("qualification/release-qualification.json", encoding="utf-8"))
-          expected = {
-              "commit": os.environ["COMMIT"],
-              "controller_image": os.environ["CONTROLLER_IMAGE"],
-              "capsule_image": os.environ["CAPSULE_IMAGE"],
-          }
-          for key, value in expected.items():
-              if record.get(key) != value:
-                  sys.exit(f"release-qualification record has the wrong {key}")
-          PY
+          go run ./internal/qualification/cmd/verify-record \
+            -record qualification/release-qualification.json
           (cd dist && sha256sum -c checksums.txt)
-          go run ./internal/platform/cmd/verify -observed qualification/evidence/live/platform-facts.json
+          go run ./internal/qualification/cmd/verify-platform \
+            -observed qualification/evidence/live/platform-facts.json
 
       - name: Authenticate to GHCR
         env:
