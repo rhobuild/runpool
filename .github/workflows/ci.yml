@@ -34,7 +34,7 @@ env:
 
 jobs:
   dependency-review:
-    name: dependency review
+    name: dependency changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -43,7 +43,7 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
 
   build:
-    name: build and test
+    name: the Go tree, its tests and its generated files
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -65,9 +65,9 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "not gofmt-clean:"; echo "$unformatted"; exit 1
           fi
-      - name: Vet
+      - name: Vet the packages
         run: go vet ./...
-      - name: Static analysis
+      - name: Run static analysis
         # The check set lives in staticcheck.conf (all checks, with the
         # generated persistence directory subtracting the package-comment
         # rule); a -checks flag here would override those files.
@@ -120,7 +120,7 @@ jobs:
         run: |
           go tool sqlc diff
           go tool sqlc vet
-      - name: Verify generated CLI documentation is current
+      - name: Verify the generated CLI documentation is current
         run: |
           go generate ./internal/command/...
           git diff --exit-code docs/reference/cli
@@ -176,7 +176,7 @@ jobs:
         #
         # Every script git knows about, rather than a glob. The globs
         # this replaces were one directory deep and missed
-        # test/drills/remote-drills.sh, which two workflows execute — a
+        # test/drills/remote-harness.sh, which two workflows execute — a
         # script CI runs and does not lint is the one place a quoting bug
         # reaches a real host unread. Untracked but unignored files
         # count: a script is worth linting from the moment it exists, not
@@ -191,7 +191,7 @@ jobs:
           # base image plus the image lock; pinning apt versions on top
           # of that pins us to a distribution's mirror lifetime.
           ignore: DL3008
-      - name: Validate the reference deployment
+      - name: Verify the reference deployment
         run: |
           mkdir -p /tmp/runpool-ci-credentials
           RUNPOOL_IMAGE=ghcr.io/rhobuild/runpool@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
@@ -200,7 +200,7 @@ jobs:
             docker compose -f deploy/compose/compose.yaml config --quiet
 
   vulnerabilities:
-    name: govulncheck
+    name: known vulnerabilities
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -231,10 +231,10 @@ jobs:
         # Built but not pushed: publishing is a release decision, and a
         # pull request must never be able to publish.
         run: docker build -f build/controller/Dockerfile -t runpool:ci .
-      - name: The runtime layer must carry no shell
+      - name: Verify the runtime layer carries no shell
         run: |
           if docker run --rm --entrypoint sh runpool:ci -c true 2>/dev/null; then
             echo "a shell is reachable in the runtime layer"; exit 1
           fi
-      - name: The image must run
+      - name: Verify the image runs
         run: docker run --rm runpool:ci version

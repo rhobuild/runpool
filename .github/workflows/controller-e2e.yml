@@ -57,7 +57,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Validate the fixture configuration
+      - name: Verify the fixture configuration is complete
         env:
           ORGANIZATION: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}
           REPOSITORY: ${{ vars.RUNPOOL_E2E_REPOSITORY }}
@@ -144,7 +144,7 @@ jobs:
           fi
           echo "safe=true" >> "$GITHUB_OUTPUT"
 
-      - name: Keep controller E2E evidence
+      - name: Keep the controller end-to-end evidence
         if: ${{ always() && steps.evidence-check.outputs.safe == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

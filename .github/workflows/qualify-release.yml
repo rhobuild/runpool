@@ -72,7 +72,7 @@ jobs:
           name: release-artifacts-candidate
           path: release-artifacts
 
-      - name: Validate SemVer
+      - name: Verify the standalone candidate is the tag it claims
         env:
           CAPSULE_IMAGE: ${{ inputs.capsule_image }}
           VERSION: ${{ github.ref_name }}
@@ -140,7 +140,7 @@ jobs:
           docker pull "$CAPSULE_IMAGE"
           docker tag "$CAPSULE_IMAGE" runpool-capsule:dev
 
-      - name: Docker contracts
+      - name: Run the Docker contracts
         env:
           RUNPOOL_DOCKER_CONTRACT: "1"
           RUNPOOL_CONTRACT_QUALIFY: "1"
@@ -148,27 +148,27 @@ jobs:
           docker image rm -f busybox:1.36.1-uclibc >/dev/null 2>&1 || true
           go test -count=1 -v ./test/contract/docker/... 2>&1 | tee docker-contract.log
 
-      - name: Capsule, egress and budget contracts
+      - name: Run the capsule, egress and budget contracts
         env:
           RUNPOOL_CAPSULE_CONTRACT: "1"
           RUNPOOL_CONTRACT_QUALIFY: "1"
         run: go test -count=1 -v -timeout 30m ./test/contract/capsule/... 2>&1 | tee capsule-contract.log
 
-      - name: SQLite durability
+      - name: Run the durability suite on a named volume
         run: |
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/sqlite-contract.test" ./test/contract/sqlite
           cp test/contract/sqlite/testdata/remote-harness.sh "$dir/"
           bash "$dir/remote-harness.sh" "$dir" 2>&1 | tee sqlite-contract.log
 
-      - name: Lifecycle drills
+      - name: Run the lifecycle drills
         run: |
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$dir/drill-seed" ./test/drills/seed
           git ls-files -coz --exclude-standard | tar --no-xattrs -czf "$dir/src.tgz" --null -T -
-          bash test/drills/remote-drills.sh "$dir" 2>&1 | tee lifecycle-drills.log
+          bash test/drills/remote-harness.sh "$dir" 2>&1 | tee lifecycle-drills.log
 
-      - name: Verify cleanup
+      - name: Verify no managed objects were left behind
         if: always()
         run: |
           status=0
@@ -190,13 +190,20 @@ jobs:
             docker volume ls --filter label=io.runpool.managed=true
             status=1
           fi
+          exit "$status"
+
+      # Its own step, and always: a leak this host reports must not also
+      # decide whether its registry session is closed. The reference host
+      # outlives the run.
+      - name: Close the registry session
+        if: always()
+        run: |
           if [ -n "${DOCKER_CONFIG:-}" ]; then
             docker --config "$DOCKER_CONFIG" logout ghcr.io >/dev/null 2>&1 || true
             rm -rf -- "$DOCKER_CONFIG"
           fi
-          exit "$status"
 
-      - name: Keep live evidence
+      - name: Keep the live evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -245,19 +252,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Download live evidence
+      - name: Download the live evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: live-evidence
           path: evidence/live
 
-      - name: Download upstream evidence
+      - name: Download the upstream evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: upstream-evidence
           path: evidence/upstream
 
-      - name: Download controller E2E evidence
+      - name: Download the controller end-to-end evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: controller-e2e-evidence
