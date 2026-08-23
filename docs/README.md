@@ -15,8 +15,8 @@ Documentation is organized by the question it answers.
 
 ## Operate Runpool
 
-- [Deployment](deployment.md): Docker Compose and Dokploy deployment
-  surfaces, credentials, upgrades, and removal.
+- [Deployment](deployment.md): the Compose contract, what a platform has to
+  provide, credentials, upgrades, and removal.
 - [Compose configuration example](../deploy/compose/config.example.yaml):
   multi-target file-mode deployment without embedded credentials.
 - [Runbook](runbook.md): startup, pressure response, backup, restore, upgrade,

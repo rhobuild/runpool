@@ -143,12 +143,12 @@ controller: no domain, reverse-proxy route, or public port is required.
 | Platform | Entry point |
 | --- | --- |
 | Docker Compose | [`deploy/compose/compose.yaml`](deploy/compose/compose.yaml) |
-| Dokploy | Deploy the canonical Compose file now; upstream One-Click catalog submission follows the first qualified release |
+| A Compose platform | Deploy the canonical Compose file now; a One-Click catalog entry, where the platform has one, follows the first qualified release |
 
 Read the [deployment guide](docs/deployment.md) before installing. The
 Compose contract reads an operator-managed
 [configuration file](deploy/compose/config.example.yaml); the example selects
-`shared-daemon` for Dokploy-style hosts and illustrates an explicit reserve for
+`shared-daemon` for a host shared with a platform, and illustrates an explicit reserve for
 colocated services. Measure that reserve before deployment. Choose
 `dedicated-daemon` only on an exclusive CI host.
 
@@ -156,7 +156,7 @@ colocated services. Measure that reserve before deployment. Choose
 
 | Guide | Purpose |
 | --- | --- |
-| [Deployment](docs/deployment.md) | Compose, Dokploy, credentials, and lifecycle |
+| [Deployment](docs/deployment.md) | Compose, platforms, credentials, and lifecycle |
 | [Product contract](docs/product-contract.md) | Guarantees, exclusions, and compatibility surfaces |
 | [Architecture](docs/architecture.md) | Components, dependency direction, state, and recovery |
 | [Configuration](docs/reference/configuration.md) | Supported settings and validation rules |
