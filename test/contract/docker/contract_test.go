@@ -190,11 +190,18 @@ func TestExec(t *testing.T) {
 	if !strings.Contains(out, "from-exec") {
 		t.Errorf("exec output = %q; want the command's stdout", out)
 	}
-	if !c.ExecOK(ctx, id, []string{"true"}) {
-		t.Error("ExecOK on a succeeding command reported failure")
-	}
-	if c.ExecOK(ctx, id, []string{"false"}) {
-		t.Error("ExecOK on a failing command reported success")
+	// Zero and non-zero both come back as codes rather than as errors: a
+	// command that ran and failed is an answer, and only a command that
+	// could not be run is an error.
+	for command, want := range map[string]int{"true": 0, "false": 1} {
+		code, _, err := c.Exec(ctx, id, []string{command})
+		if err != nil {
+			t.Errorf("exec %q: %v", command, err)
+			continue
+		}
+		if code != want {
+			t.Errorf("exec %q exited %d; want %d", command, code, want)
+		}
 	}
 }
 
