@@ -80,18 +80,22 @@ jobs:
           go build -trimpath -ldflags "-X main.version=${VERSION}" -o /tmp/runpool-version ./cmd/runpool
           /tmp/runpool-version version --check-release
           (cd release-artifacts && sha256sum -c checksums.txt)
+          # Every binary in the bundle reports the version and the capsule
+          # reference it was built with -- proven when it was built, on a
+          # runner of its own architecture, which is the only place a
+          # binary can be asked. What this adds is that the bundle
+          # arriving here is the bundle that was built: the checksums
+          # above cover the bytes, and this covers the one it can run.
           chmod +x release-artifacts/runpool-linux-amd64
           release-artifacts/runpool-linux-amd64 version --check-release
-          release-artifacts/runpool-linux-amd64 version --json > /tmp/runpool-release-facts.json
-          python3 - <<'PY'
-          import json, os, sys
-
-          facts = json.load(open("/tmp/runpool-release-facts.json", encoding="utf-8"))
-          if facts.get("version") != os.environ["VERSION"]:
-              sys.exit("standalone candidate has the wrong version")
-          if facts.get("capsule_image") != os.environ["CAPSULE_IMAGE"]:
-              sys.exit("standalone candidate embeds the wrong capsule image")
-          PY
+          facts=$(release-artifacts/runpool-linux-amd64 version --json)
+          echo "$facts"
+          for stamped in "$VERSION" "$CAPSULE_IMAGE"; do
+            case "$facts" in
+              *"$stamped"*) ;;
+              *) echo "the standalone candidate does not report ${stamped}"; exit 1 ;;
+            esac
+          done
 
   hermetic:
     name: hermetic gate

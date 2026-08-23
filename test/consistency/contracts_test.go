@@ -1,6 +1,7 @@
 package consistency
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -80,4 +81,14 @@ func stringConst(t *testing.T, file, name string) string {
 	}
 	t.Fatalf("%s declares no constant %s, so this proves nothing", file, name)
 	return ""
+}
+
+// readRepoJSON decodes one of the repository's own JSON documents.
+func readRepoJSON(t *testing.T, file string, into any) error {
+	t.Helper()
+	body, err := os.ReadFile(repoPath(filepath.FromSlash(file)))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, into)
 }

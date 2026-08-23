@@ -1,7 +1,6 @@
 # A lock records the platforms that were qualified, not the only one that works
 
-**Status:** accepted; the lock shape and the reader are built, the
-per-platform publishing is not
+**Status:** accepted and implemented
 **Date:** 2026-08-17
 
 `build/platform.lock.json` carries a single `policy.arch`, so one lock
@@ -82,38 +81,39 @@ without that evidence. Neither sentence promises the other.
 
 ## What is built
 
-The first, second and fourth decisions above. `platform.lock.json`
-records a list of entries, each with its own policy and its own facts;
-the reader selects by the platform being measured and reports a platform
-with no entry as one nobody has qualified rather than as an architecture
-mismatch. `images.lock.json` declares the platforms a release builds for.
-The support matrix states the two lists separately.
+All four decisions. `platform.lock.json` records a list of entries, each
+with its own policy and its own facts; the reader selects by the platform
+being measured and reports a platform with no entry as one nobody has
+qualified rather than as an architecture mismatch. `images.lock.json`
+declares the platforms a release builds for, and the release builds and
+publishes exactly those. The support matrix states the built list and the
+qualified list separately.
 
 Two things were loosened beyond what this record asked for, on the same
 argument it makes. The distribution was hard-coded next to the
 architecture, so a host on another one could not be recorded either; the
 reader now requires the selection to be *stated* rather than to be a
 particular value. And the operating system is derived from what the
-pinned images publish instead of being written as a rule, because that
-is where it actually comes from.
+pinned images publish instead of being written as a rule, because that is
+where it actually comes from.
 
-## What is not
+## The route the publishing took, which is not the one this record expected
 
-The third decision: the release publishing an index per image, and the
-standalone binaries per platform. Neither is built. The release workflow
-builds and pushes one image and ships one `linux/amd64` binary; what
-exists per platform is a compile-only gate in `ci.yml`, which builds to
-`/dev/null` and produces no artifact.
+This record anticipated `buildx` with a multi-platform push, and named
+the obstacle: `docker image inspect` returns nothing after one, and that
+digest is what is injected as the controller's capsule reference.
 
-What is verified is that it can be done: the capsule image builds for
-`linux/arm64`, with the Go stage compiling rather than reusing a cached
-layer. What is not is the publishing, which needs `buildx` with a push
-and a different way of reading back the digest — `docker image inspect`
-returns nothing after a multi-platform push, and that digest is what is
-injected as the controller's capsule reference. Its only real
-verification is a release run.
+That obstacle was avoided rather than solved. Every base image these
+build from is pinned to an index digest that publishes both platforms, so
+each platform is built on a runner of its own architecture, resolving the
+matching child of the same reviewed digest. `docker image inspect` then
+answers normally, because the image was built and pushed locally. The
+index is assembled afterwards from the digests the runners pushed, and
+its own digest is read back from the registry.
 
-Until it lands, a release publishes one platform's image while the lock
-declares two. The support matrix's *built* list is therefore a statement
-about what the build can produce, not about what the last release
-pushed.
+Two consequences follow. Nothing is emulated, which matters because the
+capsule's final stage installs packages, and because a standalone binary
+is verified by running it — on the architecture it is for. And the
+promotion is a manifest copy inside the registry rather than a pull and a
+retag: pulling an index brings down one child, and pushing that back
+under the release tag would publish one platform of what was qualified.

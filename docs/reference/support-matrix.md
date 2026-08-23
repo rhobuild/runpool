@@ -102,12 +102,12 @@ unsupported, and the gate says which it is: a host with no entry fails as
 *not qualified on this platform*, naming the ones that are, rather than
 as an architecture mismatch.
 
-**What a release actually publishes today is one platform.** The
-publishing half of that decision is not built: the release workflow
-builds and pushes a single image and ships a single `linux/amd64`
-binary. So *built* here describes what the build can produce, not what
-the last release put in the registry. Do not read it as a promise of an
-arm64 artifact.
+A release publishes an index per image covering both, and a standalone
+binary per platform. Each platform is built on a runner of its own
+architecture and the index is assembled from the digests they pushed, so
+one immutable reference is correct for either: the daemon resolves the
+matching child at pull time. The index assembly fails if it serves fewer
+platforms than the run built.
 
 The distribution is the same kind of statement. `debian 13 trixie` is
 the reviewed selection in the entry that exists, not a constraint the
