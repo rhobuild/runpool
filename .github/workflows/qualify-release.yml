@@ -37,6 +37,7 @@ jobs:
   validate-ref:
     name: validate release inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Require a protected release tag and immutable images
         env:
@@ -230,6 +231,7 @@ jobs:
     name: release-qualification record
     needs: [hermetic, live, upstream, controller-e2e]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       commit: ${{ github.sha }}
     steps:

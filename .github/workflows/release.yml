@@ -17,10 +17,18 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # The exact toolchain, kept equal to go.mod by
+  # scripts/verify/go-version.sh. This workflow compiles the binary that
+  # ships, so a compiler chosen here and nowhere else would be the one
+  # thing no gate ever exercised.
+  GOTOOLCHAIN: go1.26.6
+
 jobs:
   validate:
     name: validate release tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +51,12 @@ jobs:
     name: build immutable candidates
     needs: validate
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # The one job that writes to a registry before anything has been
+    # qualified. The protected tag is what authorizes the run; the
+    # environment is where that authorization is recorded and can be held
+    # for review, the same place the publication gate already lives.
+    environment: release-candidate
     permissions:
       contents: read
       packages: write
@@ -139,6 +153,7 @@ jobs:
     name: attest and publish qualified artifacts
     needs: [candidate, qualify]
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     environment: release
     permissions:
       contents: write

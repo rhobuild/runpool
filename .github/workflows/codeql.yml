@@ -14,10 +14,18 @@ concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The exact toolchain, kept equal to go.mod by
+  # scripts/verify/go-version.sh: autobuild compiles the tree, and the
+  # analysis describes whatever compiler it found. No `defaults.run` here
+  # because every step is an action; there is no shell to configure.
+  GOTOOLCHAIN: go1.26.6
+
 jobs:
   analyze:
     name: analyze Go
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read

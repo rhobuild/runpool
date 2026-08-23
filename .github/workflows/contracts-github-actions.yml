@@ -34,10 +34,16 @@ concurrency:
   group: contracts-github-actions
   cancel-in-progress: false
 
+env:
+  # Kept equal to go.mod by scripts/verify/go-version.sh.
+  GOTOOLCHAIN: go1.26.6
+
 jobs:
   contracts:
     name: runner scale set API
     runs-on: ubuntu-24.04
+    # Above the suite's own 40m, plus minting two installation tokens.
+    timeout-minutes: 60
     environment: upstream-contracts
     steps:
       - name: Check out the tree

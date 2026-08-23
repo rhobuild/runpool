@@ -36,6 +36,10 @@ concurrency:
   group: controller-e2e
   cancel-in-progress: false
 
+env:
+  # Kept equal to go.mod by scripts/verify/go-version.sh.
+  GOTOOLCHAIN: go1.26.6
+
 jobs:
   workload:
     name: real assignment, restart, cache and cleanup

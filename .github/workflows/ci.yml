@@ -12,13 +12,13 @@ on:
   # decides a release must be the one every change already passed.
   workflow_call:
 
-# Read-only by default; no job in this workflow needs more.
 defaults:
   run:
     # GitHub's default shell omits pipefail, so a step that pipes into tee
     # reports tee's exit status and a failing suite reads as a pass.
     shell: bash
 
+# Read-only by default; no job in this workflow needs more.
 permissions:
   contents: read
 
@@ -37,6 +37,7 @@ jobs:
     name: dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Review dependency changes
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
@@ -44,6 +45,7 @@ jobs:
   build:
     name: build and test
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,6 +151,7 @@ jobs:
   lint:
     name: workflows, scripts and containers
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,7 +173,15 @@ jobs:
         # shellcheck ships with the runner image; the harness scripts
         # run against real hosts, where a quoting bug deletes the wrong
         # thing.
-        run: shellcheck scripts/*/*.sh test/contract/*/testdata/*.sh
+        #
+        # Every script git knows about, rather than a glob. The globs
+        # this replaces were one directory deep and missed
+        # test/drills/remote-drills.sh, which two workflows execute — a
+        # script CI runs and does not lint is the one place a quoting bug
+        # reaches a real host unread. Untracked but unignored files count,
+        # the same set doc-links.sh checks: a script is worth linting from
+        # the moment it exists, not from the moment it is added.
+        run: git ls-files -coz --exclude-standard -- "*.sh" | xargs -0 shellcheck
       - name: Lint the Dockerfiles
         uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
@@ -184,9 +195,9 @@ jobs:
         # Offline by design: in-repo links only, which is what a
         # documentation reorganization breaks silently.
         run: scripts/verify/doc-links.sh
-      - name: Verify the builder images match go.mod
-        # An image tag and a module directive belong to different
-        # updaters, so nothing but this keeps them in step.
+      - name: Verify the builder images and workflows match go.mod
+        # An image tag, a workflow variable and a module directive belong
+        # to different updaters, so nothing but this keeps them in step.
         run: scripts/verify/go-version.sh
       - name: Validate the reference deployment
         run: |
@@ -199,6 +210,7 @@ jobs:
   vulnerabilities:
     name: govulncheck
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -217,6 +229,7 @@ jobs:
   image:
     name: controller image
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
