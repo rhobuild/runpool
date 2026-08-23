@@ -287,6 +287,60 @@ type fakeNetworkProbe struct {
 	removed      string
 	removeCalls  int
 	removeCtxErr error
+	// gateways is what the daemon assigned the probe network. Under the
+	// isolated mode it assigns none, so a non-empty answer is a daemon
+	// that took the request and ignored it.
+	gateways   []string
+	inspectErr error
+}
+
+// TestTheBridgeProbeAsksWhatTheDaemonDidNotWhatItWasAsked: a create that
+// succeeds proves the request was accepted, not that it was honoured.
+//
+// An option key the daemon does not recognise is dropped without
+// complaint, so a build that renamed the option, or never had it,
+// answers a create exactly like one that honours it. What differs is
+// what the daemon then did: under the isolated mode it assigns the
+// bridge no gateway, and the address a capsule would route through is
+// the address that does not exist.
+//
+// The probe network is removed either way. Readiness runs on an
+// interval, and a host that leaks one network per failing run runs out
+// of address pools.
+func TestTheBridgeProbeAsksWhatTheDaemonDidNotWhatItWasAsked(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		gateways []string
+		want     Status
+		detail   string
+	}{
+		"no gateway is the mode taking effect": {
+			want: Pass, detail: "no gateway address",
+		},
+		"a gateway is a daemon that took the request and ignored it": {
+			gateways: []string{"172.19.0.1"},
+			want:     Fail, detail: "172.19.0.1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			probe := &fakeNetworkProbe{gateways: testCase.gateways}
+			got := checkIsolatedBridge(t.Context(), probe)
+
+			if got.Status != testCase.want {
+				t.Errorf("status = %v; want %v (%s)", got.Status, testCase.want, got.Detail)
+			}
+			if !strings.Contains(got.Detail, testCase.detail) {
+				t.Errorf("detail = %q; it has to name %q", got.Detail, testCase.detail)
+			}
+			if probe.removeCalls != 1 {
+				t.Errorf("the probe network was removed %d times; a host that leaks one per "+
+					"readiness run runs out of address pools", probe.removeCalls)
+			}
+		})
+	}
+}
+
+func (f *fakeNetworkProbe) NetworkGateways(context.Context, string) ([]string, error) {
+	return f.gateways, f.inspectErr
 }
 
 func (f *fakeNetworkProbe) CreateNetwork(_ context.Context, spec engine.NetworkSpec) (string, error) {
