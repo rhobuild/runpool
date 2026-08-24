@@ -225,7 +225,7 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 		ID: 903,
 		Completed: []assignment.WorkloadLifecycleEvent{{
 			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-requeued",
-			RuntimeName: "runpool-first", Result: "canceled",
+			RuntimeName: "runpool-first", Result: "canceled", Canceled: true,
 		}},
 	})
 

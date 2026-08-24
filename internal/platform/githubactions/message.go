@@ -109,15 +109,15 @@ func workload(b scaleset.JobMessageBase) assignment.WorkloadAssignment {
 	}
 }
 
-// observation maps a lifecycle message, keeping the workload's own key:
-// events that named only the runner could not be correlated to the
-// attempt they belong to, and a cancellation aimed at an old attempt
-// could then hit a new one.
 // resultCanceled is the provider's word for a workload the requester
 // stopped. It is spelled once, here, because this is the only layer
 // allowed to know it.
 const resultCanceled = "canceled"
 
+// observation maps a lifecycle message, keeping the workload's own key:
+// events that named only the runner could not be correlated to the
+// attempt they belong to, and a cancellation aimed at an old attempt
+// could then hit a new one.
 func observation(kind assignment.LifecycleKind, b scaleset.JobMessageBase, runnerName, result string) assignment.WorkloadLifecycleEvent {
 	return assignment.WorkloadLifecycleEvent{
 		Kind:              kind,
