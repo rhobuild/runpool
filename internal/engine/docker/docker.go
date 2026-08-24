@@ -311,7 +311,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind engine.ObjectKind, ref
 // the destructive counterpart of OwnedIDByName: a stale intent must never
 // delete a foreign object that later reused its deterministic name.
 func (c *Client) RemoveOwnedContainer(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
-	id, err := c.resolveOwnedID(ctx, "container", reference, instanceID, leaseID)
+	id, err := c.resolveOwnedID(ctx, engine.KindContainer, reference, instanceID, leaseID)
 	if err != nil || id == "" {
 		return err
 	}
@@ -319,7 +319,7 @@ func (c *Client) RemoveOwnedContainer(ctx context.Context, reference string, ins
 }
 
 func (c *Client) RemoveOwnedNetwork(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
-	id, err := c.resolveOwnedID(ctx, "network", reference, instanceID, leaseID)
+	id, err := c.resolveOwnedID(ctx, engine.KindNetwork, reference, instanceID, leaseID)
 	if err != nil || id == "" {
 		return err
 	}
@@ -327,7 +327,7 @@ func (c *Client) RemoveOwnedNetwork(ctx context.Context, reference string, insta
 }
 
 func (c *Client) RemoveOwnedVolume(ctx context.Context, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) error {
-	name, err := c.resolveOwnedID(ctx, "volume", reference, instanceID, leaseID)
+	name, err := c.resolveOwnedID(ctx, engine.KindVolume, reference, instanceID, leaseID)
 	if err != nil || name == "" {
 		return err
 	}

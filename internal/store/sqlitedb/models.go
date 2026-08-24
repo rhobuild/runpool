@@ -17,8 +17,8 @@ type AssignmentAttempt struct {
 	ProjectKey        string
 	State             string
 	ExecutionEvidence string
-	Resolution        string
-	ReviewReason      string
+	Resolution        sql.NullString
+	ReviewReason      sql.NullString
 	ReviewedAt        sql.NullInt64
 	ReviewedBy        sql.NullString
 	ReceivedAt        int64

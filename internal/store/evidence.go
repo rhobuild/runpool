@@ -73,26 +73,41 @@ func (e Evidence) Retriable() bool {
 	return e == EvidenceNotStarted || e == EvidenceRuntimePrepared
 }
 
-// Review reasons an attempt can be held under. An attempt in manual
-// review is neither servable nor settled: it is visible, aged and
-// waiting for a person, which is the honest shape of "we cannot know".
+// ReviewReason is why an attempt is held. An attempt in manual review is
+// neither servable nor settled: it is visible, aged and waiting for a
+// person, which is the honest shape of "we cannot know".
+//
+// It is a named type because it travels as free text beside another free
+// text -- the actor resolving the hold -- through three packages, and the
+// compiler cannot see a transposition that files an operator's name as
+// the reason a job is held.
+type ReviewReason string
+
 const (
 	// ReviewReasonStartOutcomeUnknown: a start was authorized and the
 	// runtime could not be observed afterwards.
-	ReviewReasonStartOutcomeUnknown = "start_outcome_unknown"
+	ReviewReasonStartOutcomeUnknown ReviewReason = "start_outcome_unknown"
 	// ReviewReasonRetryBudgetExhausted: the work provably never began,
 	// again, for as many servings as the budget allows. Nothing here is
 	// unsafe to retry; what is unproven is whether retrying will ever
 	// stop, and that is a question for an operator.
-	ReviewReasonRetryBudgetExhausted = "retry_budget_exhausted"
+	ReviewReasonRetryBudgetExhausted ReviewReason = "retry_budget_exhausted"
 	// ReviewReasonIncompatibleCapsule: the image this tier launches does
 	// not speak the controller's control protocol. The work never began,
 	// so retrying is safe — and pointless, because the next attempt
 	// launches the same image. Holding it names the one thing that has to
 	// change, instead of spending the retry budget discovering it three
 	// times per job.
-	ReviewReasonIncompatibleCapsule = "capsule_incompatible"
+	ReviewReasonIncompatibleCapsule ReviewReason = "capsule_incompatible"
 )
+
+// AllReviewReasons is every reason an attempt can be held, for the test
+// that holds this list against the column's own constraint.
+var AllReviewReasons = []ReviewReason{
+	ReviewReasonStartOutcomeUnknown,
+	ReviewReasonRetryBudgetExhausted,
+	ReviewReasonIncompatibleCapsule,
+}
 
 // RecordEvidence advances what is known about an attempt's execution and
 // classifies every outcome instead of collapsing them into success:

@@ -148,7 +148,7 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	// Supersede-then-record commits together: the partial index admits
 	// the new attempt in the same transaction that closes the old one.
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.SupersedeOpenAttempt(binding, "job-r", "reassigned_by_provider", 0); err != nil {
+		if err := tx.SupersedeOpenAttempt(binding, "job-r", assignment.ResolutionSuperseded, 0); err != nil {
 			return err
 		}
 		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
@@ -1319,7 +1319,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		evidence       Evidence
-		reason         string
+		reason         ReviewReason
 		wantSuperseded bool
 	}{
 		{"nothing was prepared", EvidenceNotStarted, ReviewReasonIncompatibleCapsule, true},
@@ -1348,7 +1348,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 			})
 
 			err := s.Tx(t.Context(), func(tx *Tx) error {
-				serr := tx.SupersedeOpenAttempt(binding, "job-held", "reassigned_by_provider", 0)
+				serr := tx.SupersedeOpenAttempt(binding, "job-held", assignment.ResolutionSuperseded, 0)
 				if serr != nil {
 					return serr
 				}
@@ -1709,8 +1709,10 @@ func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
 
 	// A distinct value in every column, written directly. Driving the
 	// row there through the state machine leaves columns that cannot be
-	// told apart: resolution and reviewed_by are both the empty string
-	// until an operator resolves a review, reviewed_at and settled_at
+	// told apart: resolution and review_reason are both closed
+	// vocabularies whose columns constrain them -- so the sentinels for
+	// those two are real members, distinct from each other and from
+	// every other column's -- reviewed_at and settled_at
 	// are both null until one happens, and reviewed_at and received_at
 	// are both unixepoch() in the same second when one does. Any of
 	// those pairs could be swapped in one list and not the other, and
@@ -1723,8 +1725,8 @@ func TestTheSetReadAgreesWithTheGeneratedQuery(t *testing.T) {
 			project_key         = 'project-value',
 			state               = 'manual_review',
 			execution_evidence  = 'running_observed',
-			resolution          = 'resolution-value',
-			review_reason       = 'review-reason-value',
+			resolution          = 'superseded',
+			review_reason       = 'capsule_incompatible',
 			reviewed_by         = 'reviewed-by-value',
 			reviewed_at         = 111,
 			received_at         = 222,
@@ -1811,7 +1813,7 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-two-reviews", "job-two-reviews")
 
-	cycle := func(reason, actor, why string) {
+	cycle := func(reason ReviewReason, actor, why string) {
 		t.Helper()
 		inTx(t, s, func(tx *Tx) error {
 			if err := tx.HoldForReview(id, reason); err != nil {
@@ -1846,8 +1848,8 @@ func TestASecondReviewCycleIsItsOwnHistory(t *testing.T) {
 		t.Errorf("%d hold(s) recorded for two reviews: %v", len(holds), holds)
 	}
 	held := strings.Join(holds, " ")
-	for _, reason := range []string{ReviewReasonStartOutcomeUnknown, ReviewReasonRetryBudgetExhausted} {
-		if !strings.Contains(held, reason) {
+	for _, reason := range []ReviewReason{ReviewReasonStartOutcomeUnknown, ReviewReasonRetryBudgetExhausted} {
+		if !strings.Contains(held, string(reason)) {
 			t.Errorf("the record does not carry the hold for %s: %v", reason, holds)
 		}
 	}
@@ -2248,5 +2250,42 @@ func TestTheColumnRefusesAnEmptyLaneHolder(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CHECK") {
 		t.Errorf("the write failed with %v; the column's own constraint is what has to refuse it", err)
+	}
+}
+
+// TestTheVocabulariesCoverTheirColumns: resolution and review_reason are
+// closed in the schema and enumerated in Go, and the two lists are
+// written by different hands. A value the machine can produce and the
+// column refuses is a write that fails in production at the moment an
+// operator is being told what happened; a value the column admits and
+// the list omits is one no reader accounts for.
+func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+
+	for _, r := range assignment.AllResolutions {
+		id := seedAttempt(t, s, binding, "msg-res-"+string(r), assignment.SourceWorkloadKey("job-res-"+string(r)))
+		if err := s.Tx(t.Context(), func(tx *Tx) error {
+			return tx.CancelReady(id, r)
+		}); err != nil {
+			t.Errorf("the column refuses the resolution %q the machine produces: %v", r, err)
+		}
+	}
+	for _, r := range AllReviewReasons {
+		id := seedAttempt(t, s, binding, "msg-rr-"+string(r), assignment.SourceWorkloadKey("job-rr-"+string(r)))
+		if err := s.Tx(t.Context(), func(tx *Tx) error {
+			return tx.HoldForReview(id, r)
+		}); err != nil {
+			t.Errorf("the column refuses the review reason %q the machine produces: %v", r, err)
+		}
+	}
+
+	// And the other direction: a word neither list holds is refused by
+	// the table rather than stored as an outcome nothing can read.
+	bogus := seedAttempt(t, s, binding, "msg-bogus", "job-bogus")
+	if err := s.Tx(t.Context(), func(tx *Tx) error {
+		return tx.CancelReady(bogus, assignment.Resolution("reassigned_by_provider"))
+	}); err == nil {
+		t.Error("a resolution outside the vocabulary was stored")
 	}
 }
