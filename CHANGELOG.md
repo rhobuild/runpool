@@ -493,6 +493,25 @@ by its public and operational effects.
   providers, which is what keeps cleanup working when one is
   unreachable.
 
+- **A tier that validates is one the split can hand a usable share.**
+  Under the restricted profile a lease's envelope covers its capsule and
+  its egress gateway together, and only memory required the remainder to
+  be usable: `cpu: "0.500000001"` or `pids: 129` validated and handed the
+  capsule one nano-CPU or a pid limit of two. All three axes now carry the
+  floor, so a tier that reports itself valid is one a runner and a daemon
+  can start under.
+- **The operator surface answers with what it saw.** `runpool doctor`
+  reports the container engine's own connection error rather than the
+  check's fixed "mount the socket" remedy, so a socket that is mounted but
+  unreadable no longer tells an operator to do what they already did. A
+  `gc` preview refuses a schema the controller has not migrated with the
+  sentence explaining that the safe path is closed while the irreversible
+  one is open, and `gc --apply` exits non-zero when an eviction could not
+  be recorded in the audit log — a hole no later pass rewrites. And
+  `attempts resolve` without `--apply` reads the attempt it promises to
+  act on, so an id that does not exist, or one already settled, is
+  refused where it is read instead of previewing as a confident action.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
@@ -645,3 +664,13 @@ by its public and operational effects.
   candidates: restart recovery, cache reuse, generation isolation, restricted
   egress, inner Docker build and registry push, remote cleanup, and preservation
   of unrelated container, network and volume sentinels by exact id.
+- **A gate that authorizes a release is one that can fail.** The
+  qualification record names only the suites whose evidence the run holds:
+  each is paired with the artifact that proves it ran, and a missing or
+  empty one refuses the record rather than stamping a suite that may never
+  have executed. Every platform fact the reference declares is proven
+  compared against the host's, driven from the fact set itself, so a fact
+  added without a comparison is a failure rather than a silent hole. And
+  each release build matrix must name every platform the image lock
+  declares, because a union across the workflow stayed whole while one
+  matrix lost a leg and published an index without its child.
