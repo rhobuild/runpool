@@ -35,6 +35,26 @@ func TestSplitEnvelopeIsConserving(t *testing.T) {
 	if got := capsuleShare.PIDsLimit + gw.PIDsLimit; got != tier.PIDs {
 		t.Errorf("pids: %d + %d = %d; want %d", capsuleShare.PIDsLimit, gw.PIDsLimit, got, tier.PIDs)
 	}
+
+	// Conservation alone holds for any reserve, zero included: the
+	// identity (tier - K) + K == tier says nothing about K. And zero is
+	// the one value Docker reads as a different word — Memory 0,
+	// NanoCPUs 0 and PidsLimit 0 are unlimited, so a zeroed reserve turns
+	// the gateway into an unbounded container outside any tier budget,
+	// with this test green. Both shares are bounded, strictly.
+	for name, pair := range map[string][2]int64{
+		"memory": {gw.MemoryBytes, capsuleShare.MemoryBytes},
+		"cpu":    {gw.NanoCPUs, capsuleShare.NanoCPUs},
+		"pids":   {gw.PIDsLimit, capsuleShare.PIDsLimit},
+	} {
+		if pair[0] <= 0 {
+			t.Errorf("the gateway's %s share is %d; zero is unlimited to the daemon, an unbounded "+
+				"container outside any tier budget", name, pair[0])
+		}
+		if pair[1] <= 0 {
+			t.Errorf("the capsule's %s share is %d; nothing can boot under it", name, pair[1])
+		}
+	}
 }
 
 // TestSplitEnvelopeWithoutGateway: the unsafe-open profile has no
