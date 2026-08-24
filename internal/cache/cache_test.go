@@ -22,6 +22,7 @@ type fakeVolumes struct {
 	removed   []string
 	ensureErr error
 	foreign   bool
+	proofs    []ownershipProof
 }
 
 func (f *fakeVolumes) EnsureOwnedVolume(_ context.Context, name string, labels map[string]string) error {
@@ -36,6 +37,11 @@ func (f *fakeVolumes) EnsureOwnedVolume(_ context.Context, name string, labels m
 }
 
 func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind engine.ObjectKind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
+	// The scope is recorded because it is the argument under test: a
+	// proof asked for under a blank or foreign instance matches nothing
+	// at a real daemon, and the fakes discarding it was how deleting the
+	// proof call, or mis-scoping it, stayed green.
+	f.proofs = append(f.proofs, ownershipProof{kind, name, instanceID, leaseID})
 	if f.foreign {
 		return "", engine.ErrForeignResource
 	}
@@ -43,6 +49,13 @@ func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind engine.ObjectKind, n
 		return "", nil
 	}
 	return name, nil
+}
+
+type ownershipProof struct {
+	kind     engine.ObjectKind
+	name     string
+	instance assignment.InstanceID
+	lease    assignment.LeaseID
 }
 
 func (f *fakeVolumes) RemoveVolume(_ context.Context, name string) error {
