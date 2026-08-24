@@ -14,7 +14,7 @@ func TestQuickStartMinimal(t *testing.T) {
 	c, err := Load(env(map[string]string{
 		EnvGitHubURL:    "https://github.com/acme/app",
 		EnvGitHubToken:  "secret",
-		EnvHostTopology: HostTopologyDedicatedDaemon,
+		EnvHostTopology: string(HostTopologyDedicatedDaemon),
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestQuickStartOrganizationDisablesCache(t *testing.T) {
 		EnvGitHubURL:         "https://github.com/acme",
 		EnvGitHubToken:       "secret",
 		EnvGitHubRunnerGroup: "runpool",
-		EnvHostTopology:      HostTopologyDedicatedDaemon,
+		EnvHostTopology:      string(HostTopologyDedicatedDaemon),
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -58,19 +58,19 @@ func TestQuickStartOrganizationDisablesCache(t *testing.T) {
 func TestQuickStartErrors(t *testing.T) {
 	cases := map[string]map[string]string{
 		"missing topology": {EnvGitHubURL: "https://github.com/acme/app", EnvGitHubToken: "secret"},
-		"missing url":      {EnvGitHubToken: "secret", EnvHostTopology: HostTopologyDedicatedDaemon},
-		"missing token":    {EnvGitHubURL: "https://github.com/acme/app", EnvHostTopology: HostTopologyDedicatedDaemon},
+		"missing url":      {EnvGitHubToken: "secret", EnvHostTopology: string(HostTopologyDedicatedDaemon)},
+		"missing token":    {EnvGitHubURL: "https://github.com/acme/app", EnvHostTopology: string(HostTopologyDedicatedDaemon)},
 		"token and file": {
 			EnvGitHubURL:       "https://github.com/acme/app",
 			EnvGitHubToken:     "secret",
 			EnvGitHubTokenFile: "/run/secrets/token",
-			EnvHostTopology:    HostTopologyDedicatedDaemon,
+			EnvHostTopology:    string(HostTopologyDedicatedDaemon),
 		},
 		"bad parallelism": {
 			EnvGitHubURL:    "https://github.com/acme/app",
 			EnvGitHubToken:  "secret",
 			EnvParallelism:  "zero",
-			EnvHostTopology: HostTopologyDedicatedDaemon,
+			EnvHostTopology: string(HostTopologyDedicatedDaemon),
 		},
 		"config file with target var": {
 			EnvConfigFile: "testdata/example.yaml",
@@ -88,7 +88,7 @@ func TestQuickStartTokenFile(t *testing.T) {
 	c, err := Load(env(map[string]string{
 		EnvGitHubURL:       "https://github.com/acme/app",
 		EnvGitHubTokenFile: "/run/secrets/github-token",
-		EnvHostTopology:    HostTopologyDedicatedDaemon,
+		EnvHostTopology:    string(HostTopologyDedicatedDaemon),
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestQuickStartSharedDaemonRequiresReserve(t *testing.T) {
 	base := map[string]string{
 		EnvGitHubURL:    "https://github.com/acme/app",
 		EnvGitHubToken:  "secret",
-		EnvHostTopology: HostTopologySharedDaemon,
+		EnvHostTopology: string(HostTopologySharedDaemon),
 	}
 	if _, err := Load(env(base)); err == nil || !strings.Contains(err.Error(), "host.reserve") {
 		t.Fatalf("shared daemon without reserve: %v", err)

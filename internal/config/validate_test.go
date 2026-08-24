@@ -501,3 +501,21 @@ func TestTheEnvelopeFloorsApplyOnlyWhereAGatewayExists(t *testing.T) {
 		t.Errorf("a small tier under unsafe-open-egress was refused: %v", err)
 	}
 }
+
+// TestEveryLogLevelIsAccepted holds the list against the validator that
+// reads it. The list is built from the constants, so a typo cannot drift
+// -- but an omission can: delete LogLevelWarn from it and `warn`
+// configurations start being refused with nothing failing.
+func TestEveryLogLevelIsAccepted(t *testing.T) {
+	for _, level := range allLogLevels {
+		c := validConfig()
+		c.Observability.Log.Level = level
+		if err := Validate(c); err != nil {
+			t.Errorf("the validator refuses %q, which the vocabulary holds: %v", level, err)
+		}
+	}
+	if len(allLogLevels) != 4 {
+		t.Errorf("the vocabulary holds %d levels; slog has four this maps onto, and a fifth "+
+			"needs a case in the controller's own switch", len(allLogLevels))
+	}
+}

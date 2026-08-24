@@ -2,35 +2,54 @@ package config
 
 // Enumerated values the schema accepts. V1 qualifies exactly one restricted
 // network profile and one DNS mode; widening either is a design change.
+// The configuration's closed word vocabularies. This file already proves
+// the pattern for its measured values -- ByteSize, CPUQuantity, Duration
+// and CIDR all parse into named types -- and these decide as much: the
+// network profile is what builds a sandbox or does not, the topology is
+// what the host preflight rules on, and the credential type is what
+// picks an authentication scheme. A named string decodes from YAML with
+// no help, so the only thing a bare string bought was the freedom to
+// assign the wrong vocabulary's word.
+type (
+	HostTopology     string
+	NetworkProfile   string
+	IPv6Mode         string
+	DNSMode          string
+	CacheStorageMode string
+	CredentialType   string
+	LogFormat        string
+	LogLevel         string
+)
+
 const (
-	HostTopologySharedDaemon    = "shared-daemon"
-	HostTopologyDedicatedDaemon = "dedicated-daemon"
+	HostTopologySharedDaemon    HostTopology = "shared-daemon"
+	HostTopologyDedicatedDaemon HostTopology = "dedicated-daemon"
 
 	// NetworkProfilePublicInternetOnly is the restricted profile: the
 	// capsule has no route out, and its gateway relays what the policy
 	// allows. It is implemented and tested live; release qualification on
 	// the reference platform has not run.
-	NetworkProfilePublicInternetOnly = "public-internet-only"
+	NetworkProfilePublicInternetOnly NetworkProfile = "public-internet-only"
 	// NetworkProfileUnsafeOpen builds no sandbox: the capsule reaches
 	// whatever the host reaches. It is named so that no deployment can
 	// claim containment it does not have.
-	NetworkProfileUnsafeOpen = "unsafe-open-egress"
-	IPv6Disabled             = "disabled"
-	DNSModeGateway           = "gateway"
-	CacheStorageModeVolume   = "volume"
-	CredentialTypeToken      = "token"
+	NetworkProfileUnsafeOpen NetworkProfile   = "unsafe-open-egress"
+	IPv6Disabled             IPv6Mode         = "disabled"
+	DNSModeGateway           DNSMode          = "gateway"
+	CacheStorageModeVolume   CacheStorageMode = "volume"
+	CredentialTypeToken      CredentialType   = "token"
 	// CredentialTypeGitHubApp authenticates as an installation of a GitHub
 	// App rather than as a person. The provider client mints and refreshes
 	// the installation token itself from the App's own key.
-	CredentialTypeGitHubApp = "github_app"
+	CredentialTypeGitHubApp CredentialType = "github_app"
 
-	LogFormatJSON = "json"
-	LogFormatText = "text"
+	LogFormatJSON LogFormat = "json"
+	LogFormatText LogFormat = "text"
 
-	DefaultInstanceName    = "primary"
-	DefaultTierID          = "standard"
-	DefaultCacheGeneration = "default"
-	DefaultLogLevel        = "info"
+	DefaultInstanceName             = "primary"
+	DefaultTierID                   = "standard"
+	DefaultCacheGeneration          = "default"
+	DefaultLogLevel        LogLevel = LogLevelInfo
 	// MaxParallelism bounds allocator and preflight work for an untrusted
 	// configuration while remaining far above a practical single-host limit.
 	MaxParallelism = 10_000
@@ -82,7 +101,17 @@ const (
 	DefaultScaleSetPrefix = "runpool-"
 )
 
-var logLevels = []string{"debug", "info", "warn", "error"}
+// allLogLevels is the closed set the validator admits. It is the
+// vocabulary's totality list, and the constant below is one of its
+// members by construction.
+var allLogLevels = []LogLevel{LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError}
+
+const (
+	LogLevelDebug LogLevel = "debug"
+	LogLevelInfo  LogLevel = "info"
+	LogLevelWarn  LogLevel = "warn"
+	LogLevelError LogLevel = "error"
+)
 
 // ApplyDefaults fills unset optional fields in place. Mandatory fields
 // (apiVersion, kind, targets, credentials, tiers) are never invented here;

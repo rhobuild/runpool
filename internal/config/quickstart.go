@@ -90,7 +90,7 @@ func FromEnvironment(environ func(string) string) (*Config, error) {
 	c := &Config{
 		APIVersion: APIVersion,
 		Kind:       Kind,
-		Host:       Host{Topology: topology},
+		Host:       Host{Topology: HostTopology(topology)},
 		Targets: []Target{{
 			ID:           "default",
 			URL:          ref.CanonicalURL,
@@ -134,10 +134,10 @@ func FromEnvironment(environ func(string) string) (*Config, error) {
 		}
 	}
 	if level := environ(EnvLogLevel); level != "" {
-		c.Observability.Log.Level = level
+		c.Observability.Log.Level = LogLevel(level)
 	}
 	if profile := environ(EnvNetworkProfile); profile != "" {
-		c.Network.Profile = profile
+		c.Network.Profile = NetworkProfile(profile)
 	}
 	return c, nil
 }

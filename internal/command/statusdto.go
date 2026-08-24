@@ -170,7 +170,7 @@ type resourceDTO struct {
 func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptView, obs daemonObservation, shippedCapsule string) statusDoc {
 	topology := "unknown"
 	if cfg != nil {
-		topology = cfg.Host.Topology
+		topology = string(cfg.Host.Topology)
 	}
 	doc := statusDoc{
 		statusHead:    statusHead{APIVersion: statusAPIVersion, Served: true},
