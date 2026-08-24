@@ -96,11 +96,7 @@ func exitCodeFor(err error, root *cobra.Command, streams IO) int {
 		fmt.Fprintf(streams.Err, "run 'runpool --help' for usage.\n")
 		return exitUsage
 	}
-	// A command that already reported its own failure says so by
-	// returning errSilent; printing again would double the message.
-	if !errors.Is(err, errSilent) {
-		fmt.Fprintln(streams.Err, "runpool:", err)
-	}
+	fmt.Fprintln(streams.Err, "runpool:", err)
 	return exitError
 }
 
@@ -196,9 +192,3 @@ func NewRootCommand(build BuildInfo, streams IO) *cobra.Command {
 // operational marks a command as past parsing: from here a failure is
 // the world's, not the caller's, so the usage text would be noise.
 func operational(cmd *cobra.Command) { cmd.SilenceUsage = true }
-
-// errSilent is a failure whose detail a command already wrote to its
-// own output — the doctor's per-check lines, a gc pass's per-eviction
-// errors. Returning it sets the exit code without printing a second,
-// emptier version of the same news.
-var errSilent = errors.New("")
