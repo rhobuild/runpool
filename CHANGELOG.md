@@ -529,6 +529,14 @@ by its public and operational effects.
   called off. The word is now spelled once, in the adapter, and what
   crosses into the domain is the fact.
 
+- **The trail says when a start was authorized.** Evidence records how far
+  an attempt got and never when it got there, so an attempt held because a
+  start was authorized and its runtime could not be observed showed a
+  timeline that jumped from the lease to the hold — with the authorization
+  that caused it, the at-most-once line a person resolving the hold is
+  deciding about, durable nowhere but a log that rotates. Every advance is
+  in `runpool attempts inspect` now, with a time and with who observed it.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage

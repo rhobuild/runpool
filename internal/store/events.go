@@ -1,6 +1,6 @@
 package store
 
-// EventKind is what an attempt_events row records. The fourteen values
+// EventKind is what an attempt_events row records. The twelve values
 // are closed by the column and were spelled as literals in four
 // packages, with no list anywhere -- so a kind the schema does not admit
 // failed at the write, in a delivery path, at the moment the trail was
@@ -27,10 +27,9 @@ const (
 	EventRunningObserved EventKind = "running_observed"
 	// EventExitObserved: the runtime was seen to exit.
 	EventExitObserved EventKind = "exit_observed"
-	// EventRuntimeObservationFailed: the daemon could not be asked.
-	EventRuntimeObservationFailed EventKind = "runtime_observation_failed"
-	// EventCleanupStarted and EventCleanupCompleted bracket the release.
-	EventCleanupStarted   EventKind = "cleanup_started"
+	// EventCleanupCompleted is the serving's finalizing transaction:
+	// the disposition commits with it. There is no started event -- the
+	// trail rules on evidence, never on how far cleanup got.
 	EventCleanupCompleted EventKind = "cleanup_completed"
 	// EventManualReviewRequested: the attempt is waiting for a person.
 	EventManualReviewRequested EventKind = "manual_review_requested"
@@ -56,8 +55,6 @@ var AllEventKinds = []EventKind{
 	EventStartAuthorized,
 	EventRunningObserved,
 	EventExitObserved,
-	EventRuntimeObservationFailed,
-	EventCleanupStarted,
 	EventCleanupCompleted,
 	EventManualReviewRequested,
 	EventOperatorResolved,
