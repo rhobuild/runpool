@@ -194,13 +194,13 @@ func deleteConfiguredScaleSets(ctx context.Context, streams IO, bindings []store
 		if err != nil {
 			return err
 		}
-		if !found {
-			fmt.Fprintf(streams.Out, "  scale set %s is already absent\n", gb.ScaleSetName)
-			continue
+		delete, note, err := scaleSetVerdict(gb, int64(remote.ID), found)
+		if err != nil {
+			return err
 		}
-		if int64(remote.ID) != gb.ScaleSetID {
-			return fmt.Errorf("scale set %s now has id %d, but this instance recorded %d; refusing to delete a different resource",
-				gb.ScaleSetName, remote.ID, gb.ScaleSetID)
+		if !delete {
+			fmt.Fprintf(streams.Out, "  %s\n", note)
+			continue
 		}
 		if err := gh.DeleteScaleSet(ctx, int(gb.ScaleSetID)); err != nil {
 			return fmt.Errorf("delete scale set %s: %w", gb.ScaleSetName, err)
@@ -419,4 +419,26 @@ func liveLeaseCount(snap store.Snapshot) int {
 		}
 	}
 	return n
+}
+
+// scaleSetVerdict decides what uninstall does about one recorded scale
+// set, given what the provider currently answers for its name.
+//
+// The refusal is the reason this is a function rather than four lines
+// inline: a scale set whose remote id no longer matches the recorded one
+// is a different resource wearing a name this instance used, and
+// deleting it destroys somebody else's runners. The path that decides
+// that builds its own provider client, so nothing could reach it from a
+// test; the decision is separated so the one ruling that must never be
+// wrong can be.
+func scaleSetVerdict(gb store.GitHubBinding, remoteID int64, found bool) (delete bool, note string, err error) {
+	if !found {
+		return false, fmt.Sprintf("scale set %s is already absent", gb.ScaleSetName), nil
+	}
+	if remoteID != gb.ScaleSetID {
+		return false, "", fmt.Errorf(
+			"scale set %s now has id %d, but this instance recorded %d; refusing to delete a different resource",
+			gb.ScaleSetName, remoteID, gb.ScaleSetID)
+	}
+	return true, "", nil
 }

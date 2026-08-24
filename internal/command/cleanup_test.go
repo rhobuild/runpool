@@ -162,3 +162,50 @@ func TestUninstallRefusesBeforeItDescribes(t *testing.T) {
 		t.Errorf("the refusal printed a description first:\n%s", stdout)
 	}
 }
+
+// TestUninstallRefusesAScaleSetThatIsNoLongerTheOneItRecorded: names are
+// reusable and ids are not. A scale set deleted and recreated under the
+// same name — by a person, by another instance, by a rerun of setup — is
+// a different resource, and deleting it destroys runners this instance
+// never owned.
+//
+// The path that decides this builds its own provider client from
+// configuration, so nothing could reach it from a test; the ruling is
+// separated so the one that must never be wrong can be held.
+func TestUninstallRefusesAScaleSetThatIsNoLongerTheOneItRecorded(t *testing.T) {
+	recorded := store.GitHubBinding{ScaleSetName: "runpool-standard", ScaleSetID: 42}
+
+	for name, tc := range map[string]struct {
+		remoteID   int64
+		found      bool
+		wantDelete bool
+		wantRefuse bool
+	}{
+		"the same resource is deleted":             {42, true, true, false},
+		"a different id under the name is refused": {77, true, false, true},
+		"an absent scale set is skipped":           {0, false, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			del, note, err := scaleSetVerdict(recorded, tc.remoteID, tc.found)
+			if tc.wantRefuse {
+				if err == nil {
+					t.Fatal("a scale set wearing the recorded name with another id was deleted")
+				}
+				if !strings.Contains(err.Error(), "77") || !strings.Contains(err.Error(), "42") {
+					t.Errorf("error = %q; it has to name both ids, which is what tells an "+
+						"operator this is not their resource", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+			if del != tc.wantDelete {
+				t.Errorf("delete = %v; want %v", del, tc.wantDelete)
+			}
+			if !del && note == "" {
+				t.Error("a skipped scale set says nothing; the operator reads this output")
+			}
+		})
+	}
+}
