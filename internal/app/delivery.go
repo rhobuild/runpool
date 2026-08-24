@@ -524,26 +524,39 @@ func (s *Controller) scheduleReadyAttempts(ctx context.Context, b *binding) {
 	}
 
 	for _, attempt := range ready {
-		if !s.alloc.TryReserve(b.key) {
+		if !s.admit(ctx, b, attempt) {
 			return // admission is full; the attempt stays durable and waits
 		}
-		lease, err := s.createLease(ctx, b, attempt)
-		if err != nil {
-			s.alloc.Release(b.key)
-			if errors.Is(err, store.ErrConflict) {
-				continue // another pass claimed it; nothing is lost
-			}
-			s.log.Error("lease creation failed", "binding", b.key, "error", err)
-			continue
-		}
-		// Claim before the goroutine exists. The lease is already committed
-		// and `reserved` is a live state, so between this commit and
-		// runCapsule's own claim the periodic reconciler could see it as
-		// ownerless and tear down a job that is starting.
-		s.claimLease(lease.ID)
-		s.wg.Add(1)
-		go s.launch(b, lease)
 	}
+}
+
+// admit takes one credit and turns one ready attempt into a running
+// launch. It reports false only when admission is full, because that is
+// the one answer that stops the pass: everything after the reserve keeps
+// going, and everything after the reserve that fails returns the credit
+// -- the claim is a compare-and-swap two passes can race for, so losing
+// it is ordinary, and a credit reserved for a lease that was never
+// created would otherwise be burned for the life of the process.
+func (s *Controller) admit(ctx context.Context, b *binding, attempt store.Attempt) bool {
+	if !s.alloc.TryReserve(b.key) {
+		return false
+	}
+	lease, err := s.createLease(ctx, b, attempt)
+	if err != nil {
+		s.alloc.Release(b.key)
+		if !errors.Is(err, store.ErrConflict) {
+			s.log.Error("lease creation failed", "binding", b.key, "error", err)
+		}
+		return true
+	}
+	// Claim before the goroutine exists. The lease is already committed
+	// and `reserved` is a live state, so between this commit and
+	// runCapsule's own claim the periodic reconciler could see it as
+	// ownerless and tear down a job that is starting.
+	s.claimLease(lease.ID)
+	s.wg.Add(1)
+	go s.launch(b, lease)
+	return true
 }
 
 // sessionGrace is how long a run of broker session conflicts stays the

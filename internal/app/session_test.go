@@ -32,6 +32,10 @@ type stubSession struct {
 	fail     error
 	block    bool
 	offerErr error
+	// ackErr is returned from every Acknowledge: the broker took the
+	// message and the confirmation could not be delivered, which is the
+	// uncertain outcome.
+	ackErr error
 
 	// backlog is what this session reports it opened holding.
 	backlog *githubactions.Statistics
@@ -66,7 +70,7 @@ func (s *stubSession) Receive(ctx context.Context) (*githubactions.Message, erro
 	return nil, s.fail
 }
 
-func (s *stubSession) Acknowledge(context.Context, int) error { return nil }
+func (s *stubSession) Acknowledge(context.Context, int) error { return s.ackErr }
 func (s *stubSession) SetCapacity(int)                        {}
 func (s *stubSession) Initial() *githubactions.Statistics     { return s.backlog }
 
