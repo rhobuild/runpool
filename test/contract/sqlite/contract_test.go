@@ -207,6 +207,10 @@ func TestVerifyExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 	max := queryInt(t, open(t, dbPath), `SELECT coalesce(max(n), 0) FROM entries`)
+	if max == 0 {
+		t.Fatal("the recovered database holds no committed work: the writer was killed before " +
+			"it started, so this round verified recovery of nothing")
+	}
 	t.Logf("verified %s: %d entries survived a container kill", filepath.Base(dbPath), max)
 }
 
