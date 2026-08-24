@@ -19,10 +19,7 @@ func (c *Client) CreateNetwork(ctx context.Context, spec engine.NetworkSpec) (st
 		Labels:   spec.Labels,
 	}
 	if spec.Isolated {
-		opts.Options = map[string]string{
-			"com.docker.network.bridge.gateway_mode_ipv4": "isolated",
-			"com.docker.network.bridge.gateway_mode_ipv6": "isolated",
-		}
+		opts.Options = isolatedGatewayOptions()
 	}
 	resp, err := c.cli.NetworkCreate(ctx, spec.Name, opts)
 	if err != nil {
@@ -162,4 +159,21 @@ func (c *Client) ListOwnedNetworks(ctx context.Context, instanceID assignment.In
 		out = append(out, engine.OwnedResource{ID: n.ID, LeaseID: own.Lease, Role: own.Role})
 	}
 	return out, nil
+}
+
+// isolatedGatewayOptions asks the bridge driver to assign the network no
+// host address, on both families. The IPv6 half is sent even though
+// capsules deny IPv6: the option is a property of the network the daemon
+// builds, and a daemon with IPv6 enabled would otherwise give the bridge
+// a v6 gateway — a second address a capsule could route through.
+//
+// It is a function so the pair can be asserted. On a v4-only host the
+// v6 key is inert: the daemon assigns no v6 gateway whether it was sent
+// or not, so no observation of a running host there proves the key is
+// still being requested.
+func isolatedGatewayOptions() map[string]string {
+	return map[string]string{
+		"com.docker.network.bridge.gateway_mode_ipv4": "isolated",
+		"com.docker.network.bridge.gateway_mode_ipv6": "isolated",
+	}
 }
