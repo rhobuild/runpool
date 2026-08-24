@@ -53,7 +53,7 @@ type LaneMount struct {
 // measure what this instance's volumes weigh, for the GC planner.
 type laneVolumes interface {
 	EnsureOwnedVolume(ctx context.Context, name string, labels map[string]string) error
-	OwnedIDByName(ctx context.Context, kind, name string,
+	OwnedIDByName(ctx context.Context, kind engine.ObjectKind, name string,
 		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
 	RemoveVolume(ctx context.Context, name string) error
 	OwnedVolumeUsage(ctx context.Context, instanceID assignment.InstanceID) ([]engine.VolumeUsage, error)
@@ -136,7 +136,7 @@ func (m *LaneManager) DeleteLane(ctx context.Context, laneID string) error {
 		return err
 	}
 	name := VolumeName(laneID)
-	if _, err := m.volumes.OwnedIDByName(ctx, "volume", name, m.instanceID, ""); err != nil {
+	if _, err := m.volumes.OwnedIDByName(ctx, engine.KindVolume, name, m.instanceID, ""); err != nil {
 		return fmt.Errorf("lane volume %s: %w", name, err)
 	}
 	return m.volumes.RemoveVolume(ctx, name)

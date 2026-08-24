@@ -306,7 +306,7 @@ func (f *fakeProbe) OwnedVolumeUsage(context.Context, assignment.InstanceID) ([]
 type nopVolumes struct{}
 
 func (nopVolumes) EnsureOwnedVolume(context.Context, string, map[string]string) error { return nil }
-func (nopVolumes) OwnedIDByName(_ context.Context, _, name string, _ assignment.InstanceID, _ assignment.LeaseID) (string, error) {
+func (nopVolumes) OwnedIDByName(_ context.Context, _ engine.ObjectKind, name string, _ assignment.InstanceID, _ assignment.LeaseID) (string, error) {
 	return name, nil
 }
 func (nopVolumes) RemoveVolume(context.Context, string) error { return nil }

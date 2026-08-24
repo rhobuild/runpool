@@ -153,7 +153,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}
@@ -186,7 +186,7 @@ func dumpSandboxDiag(ctx context.Context, t *testing.T, dock *docker.Client,
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Logf("could not resolve gateway for diagnostics: %v", err)
 		return

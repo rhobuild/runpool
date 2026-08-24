@@ -62,7 +62,7 @@ func (c *Client) ProbeFilesystemFree(ctx context.Context, image string, instance
 		Cmd:        []string{"df -Pk / && df -Pi /"},
 		Labels: engine.Ownership{
 			Instance: instanceID,
-			Kind:     "container",
+			Kind:     engine.KindContainer,
 			Role:     "probe",
 		}.Labels(),
 	})

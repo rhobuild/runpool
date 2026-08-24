@@ -35,6 +35,25 @@ const (
 	labelTier     = "io.runpool.tier"
 )
 
+// ObjectKind is the kind of daemon object an ownership stamp describes,
+// and the kind a name is resolved as.
+//
+// It is a named type because it crosses this port in both directions and
+// is dispatched on at the far end: the adapter picks which inspect to
+// call from it, so a value spelled a second time somewhere else is a
+// resolution that silently finds nothing. The store carries the same
+// vocabulary for what it persists, as store.ResourceKind, and the two
+// meet only where an intent is written -- neither is derived from the
+// other, because one is a fact about a running object and the other is a
+// row that outlives it.
+type ObjectKind string
+
+const (
+	KindContainer ObjectKind = "container"
+	KindNetwork   ObjectKind = "network"
+	KindVolume    ObjectKind = "volume"
+)
+
 // Ownership is what a Runpool instance stamps on everything it creates,
 // and the only thing that proves an object is its to remove. A name is
 // not proof: a foreign object can carry the name a plan expects, and
@@ -49,7 +68,7 @@ const (
 type Ownership struct {
 	Instance assignment.InstanceID
 	Lease    assignment.LeaseID
-	Kind     string
+	Kind     ObjectKind
 	Role     string
 	Attempt  string
 	Target   string
@@ -67,7 +86,7 @@ func (o Ownership) Labels() map[string]string {
 		labelInstance: string(o.Instance),
 	}
 	for key, value := range map[string]string{
-		labelKind:    o.Kind,
+		labelKind:    string(o.Kind),
 		labelLease:   string(o.Lease),
 		labelRole:    o.Role,
 		labelAttempt: o.Attempt,
@@ -168,7 +187,7 @@ type ContainerState struct {
 type OwnedContainer struct {
 	ID      string
 	Name    string
-	Kind    string
+	Kind    ObjectKind
 	Role    string
 	LeaseID assignment.LeaseID
 	Running bool
@@ -328,7 +347,7 @@ func OwnershipFrom(labels map[string]string) (Ownership, bool) {
 	return Ownership{
 		Instance: assignment.InstanceID(labels[labelInstance]),
 		Lease:    assignment.LeaseID(labels[labelLease]),
-		Kind:     labels[labelKind],
+		Kind:     ObjectKind(labels[labelKind]),
 		Role:     labels[labelRole],
 		Attempt:  labels[labelAttempt],
 		Target:   labels[labelTarget],

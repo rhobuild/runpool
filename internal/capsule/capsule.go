@@ -64,9 +64,9 @@ const (
 // Resource kinds and roles stamped on every capsule object, mirrored
 // into the resource intents so reconciliation can find and order them.
 const (
-	KindContainer = "container"
-	KindNetwork   = "network"
-	KindVolume    = "volume"
+	KindContainer = engine.KindContainer
+	KindNetwork   = engine.KindNetwork
+	KindVolume    = engine.KindVolume
 
 	RoleNetwork  = "capsule-net"
 	RoleDindData = "dind-data"
@@ -168,9 +168,14 @@ type ResourceRecorder interface {
 // is ours from an earlier incarnation of this same intent — adopted by
 // proven ownership, never by name — or it is foreign and the launch
 // fails closed.
-func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind, role, name string,
+func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind engine.ObjectKind, role, name string,
 	createFn func() (string, error), resolve func() (string, error)) (string, error) {
-	intentID, err := rec.Plan(kind, role, name)
+	// The kind crosses as a string on purpose: the recorder is the lease
+	// machine, which may not know a container runtime -- cleanup that
+	// depends on one stops working exactly when the runtime is what
+	// failed. It names the same vocabulary in its own type on the far
+	// side, and this is the one place the two meet.
+	intentID, err := rec.Plan(string(kind), role, name)
 	if err != nil {
 		return "", err
 	}
@@ -229,7 +234,7 @@ type capsuleDaemon interface {
 	ContainerStatus(ctx context.Context, id string) (engine.ContainerState, error)
 	Exec(ctx context.Context, containerID string, cmd []string) (int, string, error)
 	ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error)
-	OwnedIDByName(ctx context.Context, kind, name string,
+	OwnedIDByName(ctx context.Context, kind engine.ObjectKind, name string,
 		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
 }
 
@@ -294,7 +299,7 @@ func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
 func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
 	short := engine.ShortID(string(spec.LeaseID))
 	name := func(role string) string { return "runpool-" + role + "-" + short }
-	labels := func(kind, role string) map[string]string {
+	labels := func(kind engine.ObjectKind, role string) map[string]string {
 		return engine.Ownership{
 			Instance: spec.InstanceID,
 			Lease:    spec.LeaseID,
@@ -305,7 +310,7 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 			Tier:     string(spec.TierID),
 		}.Labels()
 	}
-	resolve := func(kind, objName string) func() (string, error) {
+	resolve := func(kind engine.ObjectKind, objName string) func() (string, error) {
 		return func() (string, error) {
 			return m.dock.OwnedIDByName(ctx, kind, objName, spec.InstanceID, spec.LeaseID)
 		}
@@ -505,8 +510,8 @@ func protocolVerdict(code int, out string) error {
 // gateway reporting ready. Any failure here fails the launch closed;
 // a capsule is never started with a half-made sandbox.
 func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRecorder, netID string,
-	name func(string) string, labels func(string, string) map[string]string,
-	resolve func(string, string) func() (string, error)) (netip.Addr, string, error) {
+	name func(string) string, labels func(engine.ObjectKind, string) map[string]string,
+	resolve func(engine.ObjectKind, string) func() (string, error)) (netip.Addr, string, error) {
 
 	subnet, err := m.dock.NetworkSubnet(ctx, netID)
 	if err != nil {

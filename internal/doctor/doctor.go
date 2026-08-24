@@ -270,7 +270,7 @@ func checkIsolatedBridge(ctx context.Context, d networkProbeClient, cfg *config.
 			// the sentinel is what keeps its probe out of any instance's
 			// sweep.
 			Instance: "doctor",
-			Kind:     "network",
+			Kind:     engine.KindNetwork,
 			Role:     "preflight-probe",
 		}.Labels(),
 	})
