@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,11 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -229,7 +232,7 @@ func TestTheReadinessProbeIsBounded(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	start := time.Now()
-	err := probeDockerd(t.Context())
+	err := probeDockerd(t.Context(), testReaper())
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -468,3 +471,91 @@ func TestTheStartSubcommandAuthorizesThroughTheOrderedPath(t *testing.T) {
 			"beside that and prove nothing", fset.Position(clause.Pos()))
 	}
 }
+
+// TestDeliverIsTheCredentialChannel: the bundle lands 0600 with exactly
+// the bytes that arrived, an empty delivery is refused, and one past the
+// bound is refused rather than silently truncated — a truncated
+// credential is a corrupt one the runner fails on later with nothing
+// naming the cause. Nothing here covered this verb at all, and it is the
+// channel the JIT credential crosses.
+func TestDeliverIsTheCredentialChannel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jitconfig")
+	var stderr bytes.Buffer
+
+	if code := deliver(strings.NewReader(""), &stderr, path, -1, -1); code != 1 {
+		t.Errorf("an empty delivery returned %d; want refusal", code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("a refused delivery left a file behind")
+	}
+
+	if code := deliver(strings.NewReader(strings.Repeat("x", maxJITBundle+1)), &stderr, path, -1, -1); code != 1 {
+		t.Errorf("a bundle past the bound returned %d; want refusal, not truncation", code)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("an oversized delivery left a truncated credential behind")
+	}
+
+	bundle := `{"runner":{},"credentials":{}}`
+	if code := deliver(strings.NewReader(bundle), &stderr, path, -1, -1); code != 0 {
+		t.Fatalf("deliver = %d, stderr %q", code, stderr.String())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != bundle {
+		t.Errorf("the file holds %q, %v; want the bytes that arrived", got, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v; want 0600 — the bundle is readable by whoever the mode admits", info.Mode().Perm())
+	}
+}
+
+// TestTheReaperDeliversEachTrackedExitOnce: the reaper is the one place
+// that calls wait4, and a wrong status here is a wrong disposition — the
+// runner's exit code is the whole of what the observation machine rules
+// on. A child that dies instantly must still be reaped as tracked,
+// because registration and the reap loop hold the same lock.
+//
+// It runs real children, so nothing else in this package may exec
+// concurrently: the reaper's wait4(-1) would steal their statuses. The
+// package's other tests are pure, which is what makes this one safe.
+func TestTheReaperDeliversEachTrackedExitOnce(t *testing.T) {
+	r := testReaper()
+
+	ch, err := r.start(exec.Command("true"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-ch:
+		if code != 0 {
+			t.Errorf("true exited %d; want 0", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tracked exit never arrived; a child that died instantly was reaped as an orphan")
+	}
+
+	cmd := exec.Command("sh", "-c", "exit 7")
+	ch, err = r.start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-ch:
+		if code != 7 {
+			t.Errorf("the child exited %d; want its own 7 — a wrong status is a wrong disposition", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tracked exit never arrived")
+	}
+}
+
+// testReaper is the one reaper the package's tests share. Two reapers in
+// one process are two wait4(-1) loops racing for every child — the exact
+// hazard the reaper exists to remove — and under shuffle the loser's
+// tracked channel never fires. The production process has one; the test
+// process gets one.
+var testReaper = sync.OnceValue(newReaper)
