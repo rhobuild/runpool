@@ -144,9 +144,10 @@ jobs:
           /tmp/runpool config validate --file deploy/compose/config.example.yaml
       - name: Verify the locked image digests have not drifted
         # Only the registry half: that each locked tag still resolves to the
-        # digest recorded beside it. That the Dockerfiles build from those
-        # digests is hermetic, so internal/app carries it as a test.
-        run: scripts/verify/image-lock.sh
+        # digest recorded beside it, and still publishes every platform the
+        # lock declares. That the Dockerfiles build from those digests is
+        # hermetic, so internal/imagelock carries it as a test.
+        run: go run ./internal/qualification/cmd/image-lock
 
   lint:
     name: workflows, scripts and containers

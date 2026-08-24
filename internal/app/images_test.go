@@ -30,26 +30,40 @@ func TestBuildInputImagesArePinned(t *testing.T) {
 	}
 }
 
-func TestPinnedStripsTagKeepsRegistryPort(t *testing.T) {
-	lock := imageLock{Images: map[string]struct {
-		Ref    string `json:"ref"`
-		Digest string `json:"digest"`
-	}{
-		"a": {Ref: "registry.example:5000/team/img:1.2.3", Digest: "sha256:abc"},
-		"b": {Ref: "img:tag", Digest: "sha256:def"},
-		"c": {Ref: "img", Digest: ""},
-	}}
-	got, err := pinned(lock, "a")
-	if err != nil || got != "registry.example:5000/team/img@sha256:abc" {
-		t.Errorf("registry port case = %q, %v", got, err)
+// Development may select a local capsule image. A release carries the
+// qualified digest and refuses a runtime replacement.
+func TestCapsuleImageResolution(t *testing.T) {
+	fromEnv := func(k string) string {
+		if k == "RUNPOOL_CAPSULE_IMAGE" {
+			return "runpool-capsule:local-test"
+		}
+		return ""
 	}
-	if got, err := pinned(lock, "b"); err != nil || got != "img@sha256:def" {
-		t.Errorf("plain tag case = %q, %v", got, err)
+	img, err := CapsuleImage(fromEnv, "runpool-capsule:dev")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := pinned(lock, "c"); err == nil {
-		t.Error("an entry without a digest must be rejected, not run unpinned")
+	if img != "runpool-capsule:local-test" {
+		t.Errorf("with the override set, image = %q; want the override", img)
 	}
-	if _, err := pinned(lock, "missing"); err == nil {
-		t.Error("a missing entry must be rejected")
+	img, err = CapsuleImage(func(string) string { return "" }, "runpool-capsule:dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img != "runpool-capsule:dev" {
+		t.Errorf("without override or lock entry, image = %q; want the dev tag", img)
+	}
+
+	release := "ghcr.io/rhobuild/runpool/capsule@sha256:" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	img, err = CapsuleImage(func(string) string { return release }, release)
+	if err != nil || img != release {
+		t.Fatalf("release image = %q, %v; want stamped digest", img, err)
+	}
+	if _, err := CapsuleImage(fromEnv, release); err == nil {
+		t.Fatal("a runtime override replaced the release capsule image")
+	}
+	if _, err := CapsuleImage(func(string) string { return "" }, "ghcr.io/rhobuild/runpool/capsule:v1"); err == nil {
+		t.Fatal("a mutable release capsule reference was accepted")
 	}
 }

@@ -114,11 +114,15 @@ A script is shell when its job is to run other programs: `ssh`, `tar`, `docker`,
 decide something — those get parsed with the parser for the format, and they get
 tests of their own.
 
-Two scripts still call `python3`, both to read JSON a shell cannot:
-`scripts/verify/image-lock.sh` and `scripts/qualification/start-jit-runner.sh`.
-They are what is left of a second toolchain the contribution guide says this
-repository does not add, and the way out of the first one is to lift the image
-lock into a package both the controller and a gate can import, the way the
-platform lock already is. Where a Go template can answer instead, it does:
-`docker buildx imagetools inspect --format` prints the platforms an index
-serves, so the release verifies its own indexes without parsing anything.
+No script calls a second language runtime. Reading the image lock was the
+last thing that did, from two of them, and the way out was the one the rule
+asks for: the lock is a package both the controller and a gate import
+(`internal/imagelock`), and what is asked of it from outside a Go program is
+asked of a Go command (`internal/qualification/cmd/image-lock`). A reference
+and a digest are parsed by the libraries that define them rather than cut out
+of a string, which is not only tidiness — cutting at the leftmost colon
+renames `host:5000/img:tag` to `host`.
+
+Where a Go template can answer instead, it does: `docker buildx imagetools
+inspect --format` prints the platforms an index serves, so the release and
+that gate verify indexes without parsing a manifest at all.

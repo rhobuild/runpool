@@ -23,12 +23,7 @@ cd "$(dirname "$0")/../.."
 name=${1:?usage: start-jit-runner.sh <runner-name>}
 container="runpool-contract-${name}"
 
-image=$(python3 -c '
-import json
-lock = json.load(open("build/images.lock.json"))
-entry = lock["images"]["runner"]
-print(entry["ref"].split(":")[0] + "@" + entry["digest"])
-')
+image=$(go run ./internal/qualification/cmd/image-lock -ref runner)
 
 # The container waits for the bundle instead of receiving it as an argument or
 # an environment value, both of which would be readable from the host for as
