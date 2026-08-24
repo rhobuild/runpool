@@ -78,7 +78,11 @@ CREATE TABLE cache_lanes (
 	id          TEXT PRIMARY KEY,
 	project_id  TEXT NOT NULL REFERENCES cache_projects (id),
 	generation  TEXT NOT NULL,
-	leased_by   TEXT,
+	-- NULL is a free lane, and the column refuses the empty string so Go
+	-- and SQL cannot disagree about freeness: GC reads LeasedBy == "" off
+	-- a coalesce while the delete guards on IS NULL, and a stored empty
+	-- string would read as free to one and leased to the other.
+	leased_by   TEXT CHECK (leased_by IS NULL OR length(leased_by) > 0),
 	last_used   INTEGER NOT NULL DEFAULT (unixepoch())
 );
 

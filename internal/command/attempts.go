@@ -24,7 +24,12 @@ type attemptView struct {
 	ReviewReason string `json:"review_reason,omitempty"`
 	Resolution   string `json:"resolution,omitempty"`
 	ReviewedBy   string `json:"reviewed_by,omitempty"`
-	AgeSeconds   int64  `json:"age_seconds"`
+	// ReviewedAt and SettledAt complete the review record: who resolved
+	// it says half, and an operator auditing a decision needs the when.
+	// Absent means the event has not happened, and the field is omitted.
+	ReviewedAt string `json:"reviewed_at,omitempty"`
+	SettledAt  string `json:"settled_at,omitempty"`
+	AgeSeconds int64  `json:"age_seconds"`
 	// Evidence is the furthest this attempt's execution was ever shown to
 	// have got. It is what a resolution turns on — retrying is safe only
 	// where the work provably never began — so a report that withheld it
@@ -46,6 +51,8 @@ func viewOf(a store.Attempt, now time.Time) attemptView {
 		ReviewReason: a.ReviewReason,
 		Resolution:   a.Resolution,
 		ReviewedBy:   a.ReviewedBy,
+		ReviewedAt:   epochRFC3339(a.ReviewedAt),
+		SettledAt:    epochRFC3339(a.SettledAt),
 		AgeSeconds:   int64(now.Sub(time.Unix(a.ReceivedAt, 0)).Seconds()),
 	}
 }
@@ -169,7 +176,10 @@ func runAttemptsInspect(streams IO, id string, asJSON bool) error {
 			fmt.Fprintf(streams.Out, "held      %s\n", v.ReviewReason)
 		}
 		if v.Resolution != "" {
-			fmt.Fprintf(streams.Out, "resolved  %s by %s\n", v.Resolution, v.ReviewedBy)
+			fmt.Fprintf(streams.Out, "resolved  %s by %s at %s\n", v.Resolution, v.ReviewedBy, v.ReviewedAt)
+		}
+		if v.SettledAt != "" {
+			fmt.Fprintf(streams.Out, "settled   %s\n", v.SettledAt)
 		}
 		for _, name := range slices.Sorted(maps.Keys(v.Provider)) {
 			fmt.Fprintf(streams.Out, "provider  %-18s %s\n", name, v.Provider[name])
@@ -260,4 +270,14 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 	}
 	fmt.Fprintf(streams.Out, "attempt %s: %s (by %s)\n", id, decision, actor)
 	return nil
+}
+
+// epochRFC3339 renders a unix-seconds timestamp, or nothing for the
+// zero: these columns are NULL until their event happens, and the zero
+// epoch rendered as 1970 would date every unreviewed attempt to it.
+func epochRFC3339(sec int64) string {
+	if sec == 0 {
+		return ""
+	}
+	return rfc3339(time.Unix(sec, 0))
 }
