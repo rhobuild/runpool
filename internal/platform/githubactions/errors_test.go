@@ -2,7 +2,6 @@ package githubactions
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/actions/scaleset"
@@ -22,16 +21,21 @@ func TestDeregistrationRefusalsStayDistinguishable(t *testing.T) {
 		notFound  bool
 		stillBusy bool
 	}{
+		// Through the production wrap, not a wrap the test builds:
+		// constructed here, the same assertion held fmt.Errorf and
+		// nothing of this adapter -- flattening the wrap in the client
+		// left it green while recovery logged a leaked registration as
+		// an ordinary cleanup failure.
 		"already removed": {
-			err:      fmt.Errorf("remove runner 7: %w", scaleset.RunnerNotFoundError),
+			err:      wrapRemoveRunner(7, scaleset.RunnerNotFoundError),
 			notFound: true,
 		},
 		"the provider holds it busy": {
-			err:       fmt.Errorf("remove runner 7: %w", scaleset.JobStillRunningError),
+			err:       wrapRemoveRunner(7, scaleset.JobStillRunningError),
 			stillBusy: true,
 		},
 		"some other failure": {
-			err: fmt.Errorf("remove runner 7: %w", errors.New("503 from the broker")),
+			err: wrapRemoveRunner(7, errors.New("503 from the broker")),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

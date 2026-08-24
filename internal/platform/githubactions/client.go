@@ -328,7 +328,17 @@ var (
 // opposite outcomes, and a caller that cannot tell them apart logs the
 // same line for a successful cleanup and for a leaked registration.
 func (c *Client) RemoveRunner(ctx context.Context, id int) error {
-	if err := c.c.RemoveRunner(ctx, int64(id)); err != nil {
+	return wrapRemoveRunner(id, c.c.RemoveRunner(ctx, int64(id)))
+}
+
+// wrapRemoveRunner adds the runner to the provider's answer without
+// flattening it: the recovery path switches on the sentinels inside, and
+// a wrap that dropped them would log a leaked registration as an
+// ordinary cleanup failure. Named so the wrap itself is what the test
+// holds -- constructed in the test, the same assertion proved only the
+// standard library.
+func wrapRemoveRunner(id int, err error) error {
+	if err != nil {
 		return fmt.Errorf("remove runner %d: %w", id, err)
 	}
 	return nil
