@@ -235,11 +235,19 @@ func TestAttemptStrandedOnAReleasedLeaseIsRecovered(t *testing.T) {
 			"leased to a released lease is invisible to every other query", stranded)
 	}
 
-	h.resolveWithoutRuntime(t.Context(), reloadLease(t, h, lease.ID))
+	// The real startup pass, not the resolver handed the lease: finding
+	// the stranded attempt is the half that matters. Its lease is
+	// released, so it is outside the live working set, invisible to
+	// ReadyAttempts, and retried by nothing -- the sweep that pulls it
+	// back in by the attempt is the only thing that ever will, and a
+	// build that deleted the sweep kept every other test green.
+	if err := h.srv.reconcile(t.Context()); err != nil {
+		t.Fatalf("startup reconciliation: %v", err)
+	}
 
 	if got := len(h.ready()); got != 1 {
-		t.Errorf("ready attempts = %d; want 1 — recovery did not dispose of an "+
-			"attempt left behind by a crash between the two commits", got)
+		t.Errorf("ready attempts = %d; want 1 — startup did not find the "+
+			"attempt a crash between the two commits left behind", got)
 	}
 }
 
@@ -570,5 +578,78 @@ func TestAnUnrecordedLifecycleEventIsReported(t *testing.T) {
 	if err := h.srv.recordLifecycleEvents(ctx, h.bind, msg); err == nil {
 		t.Fatal("a lifecycle event that could not be recorded reported success; " +
 			"the message that carried it would be acknowledged and never sent again")
+	}
+}
+
+// TestALostLeaseClaimReturnsItsCredit: the reserve and the lease commit
+// are two steps, and losing the second is ordinary — two passes racing
+// one ready attempt is the reason the claim is a compare-and-swap. A
+// credit reserved for a lease that was never created has to come back,
+// or every lost race burns one permanently: a tier at parallelism four
+// decays to zero over a day of contention, and nothing reports why.
+func TestALostLeaseClaimReturnsItsCredit(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-raced", "app", 95)); err != nil {
+		t.Fatal(err)
+	}
+	// The race, made deterministic: the pass read the attempt as ready,
+	// and the other pass wins the claim before this one reserves for it,
+	// so the compare-and-swap refuses.
+	var raced store.Attempt
+	h.inStore(func(tx *store.Tx) error {
+		ready, err := tx.ReadyAttempts(h.bind.bindingID)
+		if err != nil {
+			return err
+		}
+		raced = ready[0]
+		return nil
+	})
+	leaseFor(t, h, "job-raced")
+
+	if !h.srv.admit(t.Context(), h.bind, raced) {
+		t.Fatal("a lost claim reported admission full; the pass would stop instead of continuing")
+	}
+	if got := h.srv.alloc.Active(h.bind.key); got != 0 {
+		t.Errorf("active credits = %d after a claim this pass lost; want 0 — "+
+			"the credit is burned for the life of the process", got)
+	}
+	if !h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("the pool refused a reserve after the lost claim; the credit did not come back")
+	}
+	h.srv.alloc.Release(h.bind.key)
+}
+
+// TestAFailedAcknowledgementStaysRetryable: the broker took the message
+// and the confirmation could not be delivered — an outcome that is
+// uncertain, not final. Recorded as confirmed, the broker's redelivery
+// of the same message reads as one this binding already acknowledged,
+// which nothing retries: the queue is ordered, so the binding stops
+// serving permanently, one warn line per poll.
+func TestAFailedAcknowledgementStaysRetryable(t *testing.T) {
+	h := newHarness(t, 1)
+	var delivery assignment.DeliveryID
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		delivery, err = tx.RecordDelivery(h.bind.bindingID,
+			assignment.DeliveryKey(h.bind.scaleSetID, 701), [32]byte{}, nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.session = &stubSession{ackErr: errors.New("broker unreachable")}
+
+	if h.srv.acknowledgeDelivery(t.Context(), h.bind, delivery, 701) {
+		t.Fatal("a failed acknowledgement reported the cursor advanced")
+	}
+
+	var proceed bool
+	h.inStore(func(tx *store.Tx) error {
+		var err error
+		proceed, err = tx.AckRequested(delivery)
+		return err
+	})
+	if !proceed {
+		t.Error("the delivery reads as already acknowledged; the broker's redelivery will " +
+			"never be re-acknowledged and the binding stops advancing")
 	}
 }

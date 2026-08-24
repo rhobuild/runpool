@@ -101,6 +101,21 @@ type Relay struct {
 	// so a revocation can be observed without waiting out the real
 	// interval.
 	pollInterval time.Duration
+
+	// resolve and dialAddr are how the one property this relay exists for
+	// can be asserted: that the address a policy was checked against is
+	// the address the connection is made to. Zero means the host resolver
+	// and a real dialer, which is what production runs.
+	//
+	// They are two fields because the property has two halves. A name
+	// that answers differently the second time it is asked is the attack
+	// -- so a test has to control what a name resolves to, and observe
+	// which of those answers was dialed. Neither half is decidable
+	// against a real resolver, and the alternative is a control the live
+	// suite cannot see either: its own rebinding case uses literal
+	// addresses, which prove what the literal-address tests already do.
+	resolve  func(ctx context.Context, host string) ([]netip.Addr, error)
+	dialAddr func(ctx context.Context, addr netip.Addr, port int) (net.Conn, error)
 }
 
 func (r *Relay) poll() time.Duration {
@@ -692,7 +707,7 @@ func (r *Relay) dial(ctx context.Context, host string, port int) (net.Conn, erro
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, DNSTimeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupNetIP(resolveCtx, "ip4", host)
+	addrs, err := r.resolver()(resolveCtx, host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", host, err)
 	}
@@ -707,8 +722,7 @@ func (r *Relay) dial(ctx context.Context, host string, port int) (net.Conn, erro
 			lastErr = fmt.Errorf("%w: %s resolves to %s", ErrDenied, host, addr)
 			continue
 		}
-		dialer := net.Dialer{Timeout: DialTimeout}
-		conn, err := dialer.DialContext(ctx, "tcp4", net.JoinHostPort(addr.String(), strconv.Itoa(port)))
+		conn, err := r.dialer()(ctx, addr, port)
 		if err == nil {
 			return conn, nil
 		}
@@ -784,4 +798,25 @@ func (c *limitConn) CloseWrite() error {
 		return errors.New("the underlying connection cannot be half-closed")
 	}
 	return cw.CloseWrite()
+}
+
+func (r *Relay) resolver() func(context.Context, string) ([]netip.Addr, error) {
+	if r.resolve != nil {
+		return r.resolve
+	}
+	return func(ctx context.Context, host string) ([]netip.Addr, error) {
+		return net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
+	}
+}
+
+func (r *Relay) dialer() func(context.Context, netip.Addr, int) (net.Conn, error) {
+	if r.dialAddr != nil {
+		return r.dialAddr
+	}
+	// The validated address, never the name: re-resolving here is what
+	// rebinding needs, and there is nothing to re-resolve.
+	return func(ctx context.Context, addr netip.Addr, port int) (net.Conn, error) {
+		d := net.Dialer{Timeout: DialTimeout}
+		return d.DialContext(ctx, "tcp4", net.JoinHostPort(addr.String(), strconv.Itoa(port)))
+	}
 }

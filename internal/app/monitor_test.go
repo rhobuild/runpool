@@ -65,6 +65,11 @@ func TestAFailedMeasurementKeepsTheLevelInForce(t *testing.T) {
 // than admitting, and the change is audited.
 func TestPassClosesAdmissionAndPersistsIt(t *testing.T) {
 	h := newHarness(t, 1)
+	h.srv.alloc.SetAssignedDemand(h.bind.key, 2)
+	before := h.srv.alloc.Advertised(h.bind.key)
+	if before == 0 {
+		t.Fatal("a binding with demand and room must advertise before the emergency")
+	}
 	h.probe.free = engine.FilesystemFree{FreeBytes: 0, FreeInodes: 0}
 
 	h.srv.disk.pass(t.Context())
@@ -72,6 +77,15 @@ func TestPassClosesAdmissionAndPersistsIt(t *testing.T) {
 	level := h.srv.currentPressure()
 	if !level.AdmissionClosed() {
 		t.Fatalf("level on a full filesystem = %s; admission must be closed", level)
+	}
+	// The gate itself, not only the level: the pass owns its own Hold
+	// call, separate from resume's, and a pass that recorded the level
+	// without moving the gate kept the broker fed on a full filesystem.
+	if got := h.srv.alloc.Advertised(h.bind.key); got != 0 {
+		t.Errorf("advertised %d under the emergency; want 0", got)
+	}
+	if h.srv.alloc.TryReserve(h.bind.key) {
+		t.Error("a reserve succeeded under the emergency; the capsule would start on the full filesystem")
 	}
 	h.inStore(func(tx *store.Tx) error {
 		p, err := tx.Pressure()
@@ -92,6 +106,19 @@ func TestPassClosesAdmissionAndPersistsIt(t *testing.T) {
 	}
 	if got := resumed.current(); got != level {
 		t.Errorf("resumed level = %s; want %s", got, level)
+	}
+
+	// And the way back. No test drove recovery through the pass itself:
+	// the one that covered the closing direction lifted the hold by hand,
+	// so a host that recovered kept advertising nothing -- silently out
+	// of service while status reported normal pressure.
+	h.probe.free = engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}
+	h.srv.disk.pass(t.Context())
+	if got := h.srv.currentPressure(); got.AdmissionClosed() {
+		t.Fatalf("level after recovery = %s; admission must reopen", got)
+	}
+	if got := h.srv.alloc.Advertised(h.bind.key); got != before {
+		t.Errorf("advertised %d after recovery; want %d back", got, before)
 	}
 }
 

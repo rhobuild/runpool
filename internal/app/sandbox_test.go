@@ -480,6 +480,21 @@ func TestNewNetworkSandboxFailsServeClosed(t *testing.T) {
 		uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24",
 		probeOut: "2: eth0    inet 192.0.2.10/24 scope global eth0",
 	}
+	// The operator's own lists ride the constructor too. They are the
+	// only mechanism for denying a range discovery cannot see, and the
+	// only test that exercised them set the fields past the constructor
+	// -- so the two loops that read the configuration could be deleted
+	// and every deployment's denyCIDRs silently ignored.
+	deny, err := config.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow, err := config.ParseCIDR("10.9.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Network.DenyCIDRs = []config.CIDR{deny}
+	cfg.Network.AllowPrivateCIDRs = []config.CIDR{allow}
 	n, err := newNetworkSandbox(t.Context(), seeing, "instance-0001", "probe", cfg, log)
 	if err != nil {
 		t.Fatal(err)
@@ -491,6 +506,12 @@ func TestNewNetworkSandboxFailsServeClosed(t *testing.T) {
 	}
 	if sb == nil || sb.UplinkNetworkID != "up-1" {
 		t.Errorf("the first launch would get %+v; want the policy just built", sb)
+	}
+	if !slices.Contains(sb.Deny, "100.64.0.0/10") {
+		t.Errorf("deny = %v; the operator's configured range is not in it", sb.Deny)
+	}
+	if !slices.Contains(sb.Allow, "10.9.0.0/16") {
+		t.Errorf("allow = %v; the operator's configured range is not in it", sb.Allow)
 	}
 }
 
