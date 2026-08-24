@@ -85,12 +85,20 @@ func TestOfferablePairingIsSpentOnce(t *testing.T) {
 	if len(ids) != 1 {
 		t.Fatalf("offered %v; want the one available", ids)
 	}
-	if _, ok := byID[7]; !ok {
-		t.Fatal("the offered id has no workload")
+
+	// The broker answers with the same grant twice. The production merge
+	// is what spends the pairing -- the previous form of this test
+	// deleted from the map itself and asserted the deletion, which is
+	// Go's delete builtin under test, not this package: the merge could
+	// stop spending pairings and every test here stayed green while one
+	// CI job was admitted twice.
+	var out Message
+	mergeAcquired(&out, []int64{7, 7}, byID)
+	if len(out.Acquired) != 1 {
+		t.Fatalf("acquired %d workloads from a duplicated grant; want 1 -- the job would be admitted twice", len(out.Acquired))
 	}
-	delete(byID, 7)
-	if _, ok := byID[7]; ok {
-		t.Error("the pairing survived being spent; a second grant would claim the same workload")
+	if len(out.StrandedGrants) != 1 || out.StrandedGrants[0] != 7 {
+		t.Errorf("stranded = %v; want the duplicate named, which is what makes it visible", out.StrandedGrants)
 	}
 }
 
