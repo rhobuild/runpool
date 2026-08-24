@@ -167,8 +167,15 @@ type WorkloadLifecycleEvent struct {
 	// rather than instead of it.
 	RuntimeName RuntimeName
 	// Result is the provider's stated outcome, populated on completed
-	// observations only.
+	// observations only. It is opaque: the domain reports it and never
+	// rules on it, because its words are the provider's to change.
 	Result string
+	// Canceled is that outcome translated -- the one thing the domain
+	// decides differently for, and therefore the one thing that must
+	// cross the boundary as a fact rather than a word. Read from Result
+	// here, a provider that respelled it would stop cancellations
+	// cancelling, silently, with every test still green.
+	Canceled bool
 }
 
 // ExecutionObservation is what can be proven about a prepared runtime. It

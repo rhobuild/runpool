@@ -470,10 +470,10 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 		// one line up converts, and this one did not, so the key carried
 		// the type of the thing it names.
 		kind, idempotency := "exit_observed", "remote_exit_observed:"+string(ev.RuntimeName)
-		if ev.Result == "canceled" {
+		if ev.Canceled {
 			kind, idempotency = "remote_canceled", "remote_canceled"
 		}
-		if err := record(ev, kind, idempotency, ev.Result == "canceled"); err != nil {
+		if err := record(ev, kind, idempotency, ev.Canceled); err != nil {
 			return err
 		}
 	}

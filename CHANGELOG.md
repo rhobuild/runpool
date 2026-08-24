@@ -520,6 +520,15 @@ by its public and operational effects.
   refused by the table when they are not a member, and NULL until the
   event they name has happened, like the review timestamps beside them.
 
+- **A cancellation the provider reports is translated where the provider
+  is known.** The controller decided what to do about a cancelled
+  workload by comparing GitHub's own word for it, in the core. A
+  provider that respelled it would have stopped cancellations
+  cancelling — silently, because a comparison that stops matching raises
+  nothing — and Runpool would have burned a capsule on a job already
+  called off. The word is now spelled once, in the adapter, and what
+  crosses into the domain is the fact.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage

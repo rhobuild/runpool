@@ -482,8 +482,8 @@ func TestRemoteCancellationClosesOnlyReadyWork(t *testing.T) {
 	_, busyAttempt := leaseFor(t, h, "job-busy") // now leased, not ready
 
 	cancelled := &githubactions.Message{ID: 900, Completed: []assignment.WorkloadLifecycleEvent{
-		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-idle", Result: "canceled"},
-		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-busy", Result: "canceled"},
+		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-idle", Result: "canceled", Canceled: true},
+		{Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-busy", Result: "canceled", Canceled: true},
 	}}
 	s := h.srv
 	s.recordLifecycleEvents(t.Context(), h.bind, cancelled)
