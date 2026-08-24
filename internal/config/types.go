@@ -79,8 +79,8 @@ type Host struct {
 	// Topology states who else relies on the Docker daemon. Shared-daemon
 	// enables the coexistence contract used by platforms such as Dokploy;
 	// dedicated-daemon gives Runpool exclusive operational ownership.
-	Topology string  `yaml:"topology"`
-	Reserve  Reserve `yaml:"reserve"`
+	Topology HostTopology `yaml:"topology"`
+	Reserve  Reserve      `yaml:"reserve"`
 }
 
 // Reserve is capacity withheld from tier scheduling so the host, the
@@ -133,8 +133,8 @@ type TierBinding struct {
 //
 // No secret value ever appears here. Every field is a reference to one.
 type Credential struct {
-	ID   string `yaml:"id"`
-	Type string `yaml:"type"`
+	ID   string         `yaml:"id"`
+	Type CredentialType `yaml:"type"`
 	// Exactly one of TokenEnv (an environment variable name) or TokenFile
 	// (a mounted secret path) references the token of a `token`
 	// credential; the value itself never appears in configuration.
@@ -188,7 +188,7 @@ type Cache struct {
 }
 
 type CacheStorage struct {
-	Mode string `yaml:"mode"`
+	Mode CacheStorageMode `yaml:"mode"`
 }
 
 type CacheGlobal struct {
@@ -210,8 +210,8 @@ type Observability struct {
 }
 
 type LogConfig struct {
-	Format string `yaml:"format"`
-	Level  string `yaml:"level"`
+	Format LogFormat `yaml:"format"`
+	Level  LogLevel  `yaml:"level"`
 }
 
 type MetricsConfig struct {
@@ -219,15 +219,15 @@ type MetricsConfig struct {
 }
 
 type Network struct {
-	Profile           string    `yaml:"profile"`
-	IPv6              string    `yaml:"ipv6"`
-	DNS               DNSConfig `yaml:"dns"`
-	AllowPrivateCIDRs []CIDR    `yaml:"allowPrivateCIDRs"`
-	DenyCIDRs         []CIDR    `yaml:"denyCIDRs"`
+	Profile           NetworkProfile `yaml:"profile"`
+	IPv6              IPv6Mode       `yaml:"ipv6"`
+	DNS               DNSConfig      `yaml:"dns"`
+	AllowPrivateCIDRs []CIDR         `yaml:"allowPrivateCIDRs"`
+	DenyCIDRs         []CIDR         `yaml:"denyCIDRs"`
 }
 
 type DNSConfig struct {
-	Mode string `yaml:"mode"`
+	Mode DNSMode `yaml:"mode"`
 }
 
 // ByteSize is a byte quantity written as a non-negative integer with a
