@@ -235,4 +235,11 @@ const (
 	// cannot boot, so a tier that small is a configuration error rather
 	// than a small tier.
 	MinCapsuleMemory = 512 << 20
+	// MinCapsuleCPUs and MinCapsulePIDs are the same floor on the other
+	// two axes. Memory had one and they did not, so a tier of
+	// cpu "0.500000001" or pids 129 validated and handed the capsule one
+	// nano-CPU or a pid limit of two -- shares no runner plus a daemon can
+	// run under, on a tier that reported itself valid.
+	MinCapsuleCPUs = 500_000_000
+	MinCapsulePIDs = 256
 )
