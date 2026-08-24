@@ -3,7 +3,9 @@ package capsule
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/engine"
@@ -59,5 +61,60 @@ func TestAnUndecidableExecutionIsHeldRatherThanSettled(t *testing.T) {
 				t.Errorf("a decided observation carried an error: %v", err)
 			}
 		})
+	}
+}
+
+// TestAnUnreadableStateSaysWhyItCouldNotBeRead: this inspection is what
+// an ambiguous start is held on, and the operator deciding about that
+// attempt reads its error. A transport failure leaves the exec's output
+// empty, so reporting the exit code alone handed them a page with no
+// reason on it — "capsule state unreadable (exit -1): " and nothing more.
+func TestAnUnreadableStateSaysWhyItCouldNotBeRead(t *testing.T) {
+	boom := errors.New("daemon connection reset")
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusRunning}, nil
+		},
+		exec: func(string, []string) (int, string, error) { return -1, "", boom },
+	}}
+
+	obs, err := m.InspectExecution(t.Context(), PreparedRuntime{RuntimeID: "runner-1"})
+	if obs != assignment.ObservedUnavailable {
+		t.Errorf("observation = %s; an unreadable state proves nothing either way", obs)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v; the cause has to travel, or the page names no reason", err)
+	}
+}
+
+// TestACapsuleThatDiedIsRefusedAsIncompatible: a tier may name its own
+// capsule image, and one whose entrypoint crashes writes no protocol
+// file — ever. Waiting out the declaration deadline for it spent thirty
+// seconds per attempt and then reported a read failure, which is not the
+// incompatibility the caller holds on: the tier retried the same broken
+// image until its budget ran out, under a reason that named none of it.
+func TestACapsuleThatDiedIsRefusedAsIncompatible(t *testing.T) {
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: 127}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return -1, "", errors.New("container is not running")
+		},
+	}}
+
+	start := time.Now()
+	err := m.awaitProtocol(t.Context(), "runner-1")
+	if !errors.Is(err, ErrIncompatibleImage) {
+		t.Fatalf("error = %v; want ErrIncompatibleImage, which is what holds the attempt "+
+			"instead of retrying the same image", err)
+	}
+	if !strings.Contains(err.Error(), "127") {
+		t.Errorf("error = %q; it has to name the exit code, which is the one fact "+
+			"an operator can act on", err)
+	}
+	if elapsed := time.Since(start); elapsed > protocolTimeout/2 {
+		t.Errorf("refusing a dead capsule took %s against a %s deadline; the point is "+
+			"not spending it", elapsed.Round(time.Millisecond), protocolTimeout)
 	}
 }
