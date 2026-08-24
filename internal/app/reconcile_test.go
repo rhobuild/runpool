@@ -185,3 +185,55 @@ func TestPrunePeriodicallyHonoursTheWindow(t *testing.T) {
 		})
 	}
 }
+
+// TestRecoveryRefinesFromTheRuntimeItStillHolds is the half of the
+// matrix above that a crash with a surviving container reaches: the
+// authorized start whose outcome the container itself can answer. The
+// matrix hands recovery no runtime, so its start_authorized row is held
+// for a person — right when nothing remains to ask, and the only
+// answer when something does. An exited runtime settles the attempt as
+// completed; one the daemon proves never started returns it to the
+// queue. Both otherwise land in manual review, which is a person paged
+// for a question the pass could have answered itself.
+func TestRecoveryRefinesFromTheRuntimeItStillHolds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		obs            assignment.ExecutionObservation
+		wantState      store.AttemptState
+		wantResolution string
+	}{
+		"an exited runtime settles as completed": {
+			obs: assignment.ObservedExited, wantState: store.AttemptSettled,
+			wantResolution: assignment.ResolutionCompletedObserved,
+		},
+		"a runtime that never started returns the attempt to the queue": {
+			obs: assignment.ObservedCreated, wantState: store.AttemptReady,
+		},
+		"a runtime that cannot answer holds the attempt for a person": {
+			obs: assignment.ObservedUnavailable, wantState: store.AttemptManualReview,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, 1)
+			workload := "job-refine-" + string(tc.obs)
+			if err := h.deliver(demand(workload, "app", 4)); err != nil {
+				t.Fatal(err)
+			}
+			lease, attemptID := leaseFor(t, h, assignment.SourceWorkloadKey(workload))
+			driveLeaseTo(t, h, lease.ID, store.LeaseWorkloadRunning)
+			h.recordEvidence(lease.ID, store.EvidenceStartAuthorized)
+
+			h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), tc.obs)
+
+			if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+				t.Errorf("lease = %s; want released", got.State)
+			}
+			got := attemptState(t, h, attemptID)
+			if got.State != tc.wantState {
+				t.Errorf("attempt = %s with observation %s; want %s", got.State, tc.obs, tc.wantState)
+			}
+			if got.Resolution != tc.wantResolution {
+				t.Errorf("resolution = %q; want %q", got.Resolution, tc.wantResolution)
+			}
+		})
+	}
+}

@@ -232,6 +232,27 @@ func TestStartFaultMatrix(t *testing.T) {
 			want: store.AttemptSettled, wantRes: assignment.ResolutionCompletedObserved,
 		},
 		{
+			// A clean start whose wait returns the code the supervisor
+			// reserves for "the runner never owned the job". A clean wait
+			// is not an execution: recording an observed exit here settles
+			// an attempt that never ran as complete, and nothing requeues
+			// it afterwards.
+			name: "clean start, supervisor reports the runner never started",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{},
+			wait: &fakeWaiter{exit: int64(capsule.SupervisorAbortedExitCode)},
+			want: store.AttemptReady,
+		},
+		{
+			// The same reserved code against a provider that still holds
+			// the runner busy: the party that assigned the work outranks
+			// the capsule's own account, on the wait path exactly as on
+			// the failed-start path above.
+			name: "clean start, reserved code, provider holds the runner busy",
+			caps: &fakeCapsule{}, reg: &fakeRegistry{removeErr: githubactions.ErrJobStillRunning},
+			wait: &fakeWaiter{exit: int64(capsule.SupervisorAbortedExitCode)},
+			want: store.AttemptSettled, wantRes: assignment.ResolutionStartedObserved,
+		},
+		{
 			// Start errored and the container is gone: nothing can be
 			// proven in either direction, so a person decides.
 			name: "start error, runtime absent",

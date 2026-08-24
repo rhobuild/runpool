@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -535,5 +536,57 @@ func TestARefusedNameStaysRefusedOnTheNextPass(t *testing.T) {
 	}
 	if h.bind.ensured {
 		t.Error("the binding reports itself ensured against a scale set it does not own")
+	}
+}
+
+// TestTheTierImageIsResolvedWhereBindingsAreBuilt: a deployment's
+// tiers[].capsuleImage reaches the binding through one line, and the
+// test that proves the image reaches the capsule sets the binding's
+// field itself — so that line could resolve to the shipped image
+// unconditionally, every test stayed green, and every deployment's
+// configured capsule image was silently ignored.
+func TestTheTierImageIsResolvedWhereBindingsAreBuilt(t *testing.T) {
+	const operators = "ghcr.io/acme/capsule@sha256:" +
+		"2222222222222222222222222222222222222222222222222222222222222222"
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := &Controller{
+		log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
+		store:               st,
+		alloc:               allocator.New(),
+		byBinding:           map[assignment.BindingID]*binding{},
+		shippedCapsuleImage: "runpool-capsule:dev",
+	}
+	cfg := &config.Config{
+		Instance:    config.Instance{Name: "test"},
+		Credentials: []config.Credential{{ID: "gh", TokenEnv: "TOKEN"}},
+		Targets: []config.Target{{
+			ID: "app", URL: "https://github.com/acme/app", CredentialID: "gh",
+			Tiers: []config.TierBinding{
+				{TierID: "standard", ScaleSetName: "runpool-standard"},
+				{TierID: "extended", ScaleSetName: "runpool-extended"},
+			},
+		}},
+		Tiers: []config.Tier{
+			{ID: "standard", Parallelism: 1},
+			{ID: "extended", Parallelism: 1, CapsuleImage: operators},
+		},
+	}
+	if err := s.buildBindings(t.Context(), cfg, func(k string) string { return "t0ken" }); err != nil {
+		t.Fatal(err)
+	}
+
+	images := map[string]string{}
+	for _, b := range s.bindings {
+		images[b.tier.ID] = b.capsuleImage
+	}
+	if images["extended"] != operators {
+		t.Errorf("the extended tier's binding runs %q; the configured image was ignored", images["extended"])
+	}
+	if images["standard"] != "runpool-capsule:dev" {
+		t.Errorf("the standard tier's binding runs %q; want the shipped capsule", images["standard"])
 	}
 }
