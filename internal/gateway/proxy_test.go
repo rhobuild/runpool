@@ -3,6 +3,8 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -902,6 +905,83 @@ func TestAPoolIsNeverOlderThanTheGenerationItServes(t *testing.T) {
 			if got.gen < c.ask {
 				t.Errorf("a caller that observed generation %d was handed a pool built for %d; "+
 					"its connections were authorised by a policy that no longer applies", c.ask, got.gen)
+			}
+		})
+	}
+}
+
+// TestTheAddressCheckedIsTheAddressDialed is the DNS rebinding defence,
+// and until now nothing held it.
+//
+// The attack is a name that answers one address while the policy is
+// consulted and another when the connection is made. This relay is not
+// vulnerable to it because it dials the address it checked rather than
+// the name -- but that is a property of one line, and the line could be
+// changed back to a name with every test in this package and the live
+// bypass suite still passing. That suite calls its own section the
+// rebinding case and gives it literal addresses, which prove what the
+// literal-address tests already prove.
+//
+// So the resolver and the dial are both seams here: one to say what the
+// name answers, the other to observe which of those answers was used.
+func TestTheAddressCheckedIsTheAddressDialed(t *testing.T) {
+	metadata := netip.MustParseAddr("169.254.169.254")
+	allowed := netip.MustParseAddr("93.184.216.34")
+
+	for name, tc := range map[string]struct {
+		answers    []netip.Addr
+		wantDial   string // empty means no connection may be made
+		wantDenied bool
+	}{
+		"a name that answers the metadata address is refused": {
+			answers: []netip.Addr{metadata}, wantDenied: true,
+		},
+		"a name that answers an allowed address is dialed at that address": {
+			answers: []netip.Addr{allowed}, wantDial: allowed.String(),
+		},
+		"a denied answer does not poison the allowed one beside it": {
+			answers: []netip.Addr{metadata, allowed}, wantDial: allowed.String(),
+		},
+		"every answer denied refuses rather than falling through": {
+			answers: []netip.Addr{metadata, netip.MustParseAddr("10.1.2.3")}, wantDenied: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, _ := policyFile(t, "10.0.0.0/8")
+			var dialed []string
+			r := &Relay{
+				Policy: store,
+				Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+				resolve: func(context.Context, string) ([]netip.Addr, error) {
+					return tc.answers, nil
+				},
+				dialAddr: func(_ context.Context, addr netip.Addr, _ int) (net.Conn, error) {
+					dialed = append(dialed, addr.String())
+					client, server := net.Pipe()
+					t.Cleanup(func() { client.Close(); server.Close() })
+					return client, nil
+				},
+			}
+
+			conn, err := r.dial(t.Context(), "rebinding.test", 443)
+			if conn != nil {
+				conn.Close()
+			}
+			if tc.wantDenied {
+				if !errors.Is(err, ErrDenied) {
+					t.Fatalf("dial = %v; want ErrDenied", err)
+				}
+				if len(dialed) != 0 {
+					t.Errorf("connected to %v; a denied answer must reach no network at all", dialed)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			if len(dialed) != 1 || dialed[0] != tc.wantDial {
+				t.Errorf("connected to %v; want exactly %q — the address the policy was checked "+
+					"against is the address the connection is made to", dialed, tc.wantDial)
 			}
 		})
 	}
