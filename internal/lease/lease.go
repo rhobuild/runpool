@@ -379,7 +379,7 @@ func (m *Manager) applyDisposition(tx *store.Tx, attempt store.Attempt,
 // launch the same configured image, meet the same answer, and spend
 // another of the three servings finding out. Naming the reason is what
 // turns three identical failures per job into one thing to change.
-func (m *Manager) HoldAttempt(ctx context.Context, leaseID assignment.LeaseID, reason string) {
+func (m *Manager) HoldAttempt(ctx context.Context, leaseID assignment.LeaseID, reason store.ReviewReason) {
 	m.withAttemptOfLease(ctx, leaseID, func(tx *store.Tx, attempt store.Attempt) error {
 		m.log.Warn("holding the attempt for review", "attempt", attempt.ID,
 			"lease", leaseID, "reason", reason)

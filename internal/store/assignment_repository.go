@@ -141,7 +141,7 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 // anything further along is settled or reviewed through its own path,
 // and the redelivery waits for that to happen.
 func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkloadKey assignment.SourceWorkloadKey,
-	resolution string, exceptDelivery assignment.DeliveryID) error {
+	resolution assignment.Resolution, exceptDelivery assignment.DeliveryID) error {
 	open, err := t.q.GetOpenAttemptByWorkload(t.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
 		BindingID: int64(bindingID), SourceWorkloadKey: string(sourceWorkloadKey),
 	})
@@ -163,7 +163,7 @@ func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkload
 		return ErrNotFound
 	}
 	affected, err := t.q.SupersedeAttempt(t.ctx, sqlitedb.SupersedeAttemptParams{
-		Resolution: resolution, AttemptID: open.ID,
+		Resolution: nullVocabulary(resolution), AttemptID: open.ID,
 	})
 	if err != nil {
 		return err

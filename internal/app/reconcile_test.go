@@ -72,7 +72,7 @@ func TestRecoveryMatrix(t *testing.T) {
 
 				var (
 					wantState      store.AttemptState
-					wantResolution string
+					wantResolution assignment.Resolution
 				)
 				switch evidence {
 				case store.EvidenceNotStarted, store.EvidenceRuntimePrepared:
@@ -199,7 +199,7 @@ func TestRecoveryRefinesFromTheRuntimeItStillHolds(t *testing.T) {
 	for name, tc := range map[string]struct {
 		obs            assignment.ExecutionObservation
 		wantState      store.AttemptState
-		wantResolution string
+		wantResolution assignment.Resolution
 	}{
 		"an exited runtime settles as completed": {
 			obs: assignment.ObservedExited, wantState: store.AttemptSettled,

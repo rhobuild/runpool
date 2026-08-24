@@ -70,9 +70,9 @@ type Ownership struct {
 	Lease    assignment.LeaseID
 	Kind     ObjectKind
 	Role     string
-	Attempt  string
-	Target   string
-	Tier     string
+	Attempt  assignment.AttemptID
+	Target   assignment.TargetID
+	Tier     assignment.TierID
 }
 
 // Labels renders the ownership as the labels an object carries. The
@@ -89,9 +89,9 @@ func (o Ownership) Labels() map[string]string {
 		labelKind:    string(o.Kind),
 		labelLease:   string(o.Lease),
 		labelRole:    o.Role,
-		labelAttempt: o.Attempt,
-		labelTarget:  o.Target,
-		labelTier:    o.Tier,
+		labelAttempt: string(o.Attempt),
+		labelTarget:  string(o.Target),
+		labelTier:    string(o.Tier),
 	} {
 		if value != "" {
 			labels[key] = value
@@ -349,9 +349,9 @@ func OwnershipFrom(labels map[string]string) (Ownership, bool) {
 		Lease:    assignment.LeaseID(labels[labelLease]),
 		Kind:     ObjectKind(labels[labelKind]),
 		Role:     labels[labelRole],
-		Attempt:  labels[labelAttempt],
-		Target:   labels[labelTarget],
-		Tier:     labels[labelTier],
+		Attempt:  assignment.AttemptID(labels[labelAttempt]),
+		Target:   assignment.TargetID(labels[labelTarget]),
+		Tier:     assignment.TierID(labels[labelTier]),
 	}, true
 }
 

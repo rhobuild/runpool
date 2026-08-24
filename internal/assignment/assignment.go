@@ -108,26 +108,49 @@ const (
 	LifecycleCompleted LifecycleKind = "completed"
 )
 
-// Attempt resolutions say exactly what was observed and what was
-// decided, never more. "Executed" is not in the vocabulary on purpose:
-// the provider keeps the truth about the workload's functional result,
-// and Runpool records only its own observations and decisions.
+// Resolution says exactly what was observed and what was decided, never
+// more. "Executed" is not in the vocabulary on purpose: the provider
+// keeps the truth about the workload's functional result, and Runpool
+// records only its own observations and decisions.
+//
+// It is a named type because it crosses three packages -- lease decides
+// it, store records it, command reports it -- and it travels beside two
+// free-text strings whose transposition the compiler could not see: a
+// reason written into the vocabulary column reads as an outcome nothing
+// in the vocabulary can answer for.
+type Resolution string
+
 const (
+	// Unresolved is the zero value: nothing has been decided. An attempt
+	// carries it from the moment it is recorded until something settles
+	// it, and the empty literal is spelled here and nowhere else.
+	Unresolved Resolution = ""
 	// ResolutionCompletedObserved: the runtime was seen to exit.
-	ResolutionCompletedObserved = "completed_observed"
+	ResolutionCompletedObserved Resolution = "completed_observed"
 	// ResolutionStartedObserved: the runtime was seen running; its exit
 	// was not observed locally.
-	ResolutionStartedObserved = "started_observed"
+	ResolutionStartedObserved Resolution = "started_observed"
 	// ResolutionMayHaveExecuted: a start was authorized and nothing
 	// could prove the outcome either way; settled to honour
 	// at-most-once.
-	ResolutionMayHaveExecuted = "may_have_executed"
+	ResolutionMayHaveExecuted Resolution = "may_have_executed"
 	// ResolutionRemoteCanceled: the provider canceled the workload.
-	ResolutionRemoteCanceled = "remote_canceled"
+	ResolutionRemoteCanceled Resolution = "remote_canceled"
 	// ResolutionSuperseded: a newer delivery of the same workload
 	// replaced this attempt before it started anything.
-	ResolutionSuperseded = "superseded"
+	ResolutionSuperseded Resolution = "superseded"
 )
+
+// AllResolutions is every decision Runpool can reach, for the tests that
+// hold the vocabulary against the schema and against the machine that
+// produces it.
+var AllResolutions = []Resolution{
+	ResolutionCompletedObserved,
+	ResolutionStartedObserved,
+	ResolutionMayHaveExecuted,
+	ResolutionRemoteCanceled,
+	ResolutionSuperseded,
+}
 
 // WorkloadLifecycleEvent is a provider observation about one workload.
 // It carries the workload's own key: an event that names only the

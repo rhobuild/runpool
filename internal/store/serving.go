@@ -63,8 +63,8 @@ type Attempt struct {
 	ProjectKey        string
 	State             AttemptState
 	Evidence          Evidence
-	ReviewReason      string
-	Resolution        string
+	ReviewReason      ReviewReason
+	Resolution        assignment.Resolution
 	ReviewedBy        string
 	ReceivedAt        int64
 	ReviewedAt        int64
@@ -84,8 +84,8 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		ProjectKey:        r.ProjectKey,
 		State:             AttemptState(r.State),
 		Evidence:          Evidence(r.ExecutionEvidence),
-		ReviewReason:      r.ReviewReason,
-		Resolution:        r.Resolution,
+		ReviewReason:      ReviewReason(r.ReviewReason.String),
+		Resolution:        assignment.Resolution(r.Resolution.String),
 		ReviewedBy:        r.ReviewedBy.String,
 		ReceivedAt:        r.ReceivedAt,
 		ReviewedAt:        r.ReviewedAt.Int64,
@@ -323,9 +323,9 @@ func (t *Tx) RequeueProvenInert(attemptID assignment.AttemptID) error {
 // It takes the attempt rather than the workload because a workload can
 // hold more than one attempt over its life, and only the caller that
 // correlated the event knows which of them the cancellation is about.
-func (t *Tx) CancelReady(attemptID assignment.AttemptID, resolution string) error {
+func (t *Tx) CancelReady(attemptID assignment.AttemptID, resolution assignment.Resolution) error {
 	affected, err := t.q.CancelReadyAttempt(t.ctx, sqlitedb.CancelReadyAttemptParams{
-		Resolution: resolution, AttemptID: string(attemptID),
+		Resolution: nullVocabulary(resolution), AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -367,7 +367,7 @@ func (t *Tx) CountReadyAttempts(bindingID assignment.BindingID) (int64, error) {
 // in the event.
 func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor string) error {
 	affected, err := t.q.ResolveManualReviewToReady(t.ctx, sqlitedb.ResolveManualReviewToReadyParams{
-		Resolution: "", ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
+		Resolution: nullVocabulary(assignment.Unresolved), ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -383,9 +383,9 @@ func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor 
 // have run and must never run again. Audited the same way; the row's
 // resolution keeps the vocabulary value, and the operator's words live
 // in the event.
-func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution, reason, actor string) error {
+func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution assignment.Resolution, reason, actor string) error {
 	affected, err := t.q.ResolveManualReviewToSettled(t.ctx, sqlitedb.ResolveManualReviewToSettledParams{
-		Resolution: resolution, ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
+		Resolution: nullVocabulary(resolution), ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -398,9 +398,9 @@ func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution, 
 }
 
 // Settle closes an attempt with an evidence-accurate resolution.
-func (t *Tx) Settle(attemptID assignment.AttemptID, currentState AttemptState, resolution string) error {
+func (t *Tx) Settle(attemptID assignment.AttemptID, currentState AttemptState, resolution assignment.Resolution) error {
 	affected, err := t.q.SettleAttempt(t.ctx, sqlitedb.SettleAttemptParams{
-		Resolution: resolution, AttemptID: string(attemptID), Current: string(currentState),
+		Resolution: nullVocabulary(resolution), AttemptID: string(attemptID), Current: string(currentState),
 	})
 	if err != nil {
 		return err
@@ -437,9 +437,9 @@ func (t *Tx) RequeueServing(attempt Attempt) error {
 
 // HoldForReview parks an attempt for an operator with the reason the
 // queue will show.
-func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error {
+func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason ReviewReason) error {
 	affected, err := t.q.MarkAttemptManualReview(t.ctx, sqlitedb.MarkAttemptManualReviewParams{
-		ReviewReason: reason, AttemptID: string(attemptID),
+		ReviewReason: nullVocabulary(reason), AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -448,7 +448,7 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason string) error 
 		return fmt.Errorf("%w: attempt %s cannot enter review from its state", ErrConflict, attemptID)
 	}
 	return t.RecordRepeatableEvent(attemptID, "manual_review_requested",
-		map[string]string{"reason": reason})
+		map[string]string{"reason": string(reason)})
 }
 
 // RecordRepeatableEvent appends one lifecycle event whose kind can
@@ -632,4 +632,12 @@ func (t *Tx) ForgetUnclaimedBindings(claimed []assignment.BindingID) (int, error
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+// nullVocabulary maps a closed vocabulary to its column. NULL is the
+// absence -- nothing decided, nothing held -- and each type's own zero
+// value is that absence by name, so the empty string never reaches the
+// table and a stored value is always one the vocabulary can answer for.
+func nullVocabulary[T ~string](v T) sql.NullString {
+	return sql.NullString{String: string(v), Valid: v != ""}
 }

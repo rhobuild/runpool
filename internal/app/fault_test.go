@@ -156,8 +156,8 @@ func TestStartFaultMatrix(t *testing.T) {
 		caps    *fakeCapsule
 		reg     *fakeRegistry
 		wait    *fakeWaiter
-		want    store.AttemptState // attempt state afterwards
-		wantRes string             // attempt resolution, when settled
+		want    store.AttemptState    // attempt state afterwards
+		wantRes assignment.Resolution // attempt resolution, when settled
 	}{
 		{
 			// The credential could not be minted: nothing was prepared,

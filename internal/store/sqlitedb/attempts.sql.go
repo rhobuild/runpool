@@ -62,7 +62,7 @@ WHERE id = ?2 AND state = 'ready'
 `
 
 type CancelReadyAttemptParams struct {
-	Resolution string
+	Resolution sql.NullString
 	AttemptID  string
 }
 
@@ -401,7 +401,7 @@ WHERE id = ?2
 `
 
 type MarkAttemptManualReviewParams struct {
-	ReviewReason string
+	ReviewReason sql.NullString
 	AttemptID    string
 }
 
@@ -500,13 +500,13 @@ func (q *Queries) RequeueProvenInertAttempt(ctx context.Context, attemptID strin
 
 const resolveManualReviewToReady = `-- name: ResolveManualReviewToReady :execrows
 UPDATE assignment_attempts
-SET state = 'ready', execution_evidence = 'not_started', review_reason = '',
+SET state = 'ready', execution_evidence = 'not_started', review_reason = NULL,
     resolution = ?1, reviewed_at = unixepoch(), reviewed_by = ?2
 WHERE id = ?3 AND state = 'manual_review'
 `
 
 type ResolveManualReviewToReadyParams struct {
-	Resolution string
+	Resolution sql.NullString
 	ReviewedBy sql.NullString
 	AttemptID  string
 }
@@ -533,7 +533,7 @@ WHERE id = ?3 AND state = 'manual_review'
 `
 
 type ResolveManualReviewToSettledParams struct {
-	Resolution string
+	Resolution sql.NullString
 	ReviewedBy sql.NullString
 	AttemptID  string
 }
@@ -553,7 +553,7 @@ WHERE id = ?2 AND state = ?3
 `
 
 type SettleAttemptParams struct {
-	Resolution string
+	Resolution sql.NullString
 	AttemptID  string
 	Current    string
 }
@@ -575,7 +575,7 @@ WHERE id = ?2
 `
 
 type SupersedeAttemptParams struct {
-	Resolution string
+	Resolution sql.NullString
 	AttemptID  string
 }
 

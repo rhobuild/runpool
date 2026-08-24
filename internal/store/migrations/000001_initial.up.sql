@@ -93,8 +93,18 @@ CREATE TABLE assignment_attempts (
 		CHECK (execution_evidence IN
 			('not_started', 'runtime_prepared', 'execution_start_authorized',
 			 'running_observed', 'exit_observed')),
-	resolution           TEXT NOT NULL DEFAULT '',
-	review_reason        TEXT NOT NULL DEFAULT '',
+	-- Both closed vocabularies, and both NULL until the event they name
+	-- happens -- the same absence reviewed_at and reviewed_by beside them
+	-- record. The IN list is what the column is for: each value arrives
+	-- through a signature that carries free-text prose beside it, and a
+	-- transposition the compiler cannot see writes an operator's sentence
+	-- where an outcome nothing can answer for is expected.
+	resolution           TEXT CHECK (resolution IS NULL OR resolution IN (
+	                         'completed_observed', 'started_observed', 'may_have_executed',
+	                         'remote_canceled', 'superseded')),
+	review_reason        TEXT CHECK (review_reason IS NULL OR review_reason IN (
+	                         'start_outcome_unknown', 'retry_budget_exhausted',
+	                         'capsule_incompatible')),
 	reviewed_at          INTEGER,
 	-- NULL until a person resolves the attempt, beside reviewed_at which
 	-- already is: the pair records one event, and recording its absence

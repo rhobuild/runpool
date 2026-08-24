@@ -221,7 +221,7 @@ WHERE id = @attempt_id
 -- the next serving starts from nothing, and what this one observed
 -- remains in attempt_events.
 UPDATE assignment_attempts
-SET state = 'ready', execution_evidence = 'not_started', review_reason = '',
+SET state = 'ready', execution_evidence = 'not_started', review_reason = NULL,
     resolution = @resolution, reviewed_at = unixepoch(), reviewed_by = @reviewed_by
 WHERE id = @attempt_id AND state = 'manual_review';
 

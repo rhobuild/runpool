@@ -512,6 +512,14 @@ by its public and operational effects.
   act on, so an id that does not exist, or one already settled, is
   refused where it is read instead of previewing as a confident action.
 
+- **The two vocabularies that record what was decided are constrained by
+  their columns.** An attempt's resolution and its review reason are
+  closed sets, and both travelled to the database as bare strings beside
+  free-text prose an operator wrote — a transposition the compiler could
+  not see, into columns that accepted anything. Both are named types now,
+  refused by the table when they are not a member, and NULL until the
+  event they name has happened, like the review timestamps beside them.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage

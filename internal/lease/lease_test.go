@@ -233,7 +233,7 @@ func TestFinalizeDisposesByEvidence(t *testing.T) {
 		startObs       assignment.ExecutionObservation
 		wantErr        bool
 		wantState      store.AttemptState
-		wantResolution string
+		wantResolution assignment.Resolution
 	}{
 		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptSettled, assignment.ResolutionCompletedObserved},
 		{"running observed", store.EvidenceRunningObserved, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptSettled, assignment.ResolutionStartedObserved},

@@ -305,9 +305,9 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 			Lease:    spec.LeaseID,
 			Kind:     kind,
 			Role:     role,
-			Attempt:  string(spec.AttemptID),
-			Target:   string(spec.TargetID),
-			Tier:     string(spec.TierID),
+			Attempt:  spec.AttemptID,
+			Target:   spec.TargetID,
+			Tier:     spec.TierID,
 		}.Labels()
 	}
 	resolve := func(kind engine.ObjectKind, objName string) func() (string, error) {
