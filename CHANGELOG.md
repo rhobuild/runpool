@@ -190,6 +190,17 @@ by its public and operational effects.
   nothing keeps the row its whole history hangs off. Bindings the
   configuration no longer claims are forgotten on the next start, unless
   they still own a delivery — that trail is kept.
+- **A scale set that merely shares a name is a stranger's, and stays one.**
+  Runpool adopts an existing scale set only when it can show it created that
+  one: either the id matches what it recorded, or an earlier pass wrote down
+  the intention to create that exact name and did not live to record the id.
+  The intention is now written only once the provider has said the name is
+  free, so a refusal leaves nothing behind — before, the refused pass wrote
+  the very record that tells a refusal from a crash, and the next poll adopted
+  the stranger it had just declined, served its owner's jobs on this host and
+  would later have deleted it. Two targets differing only in letter case are
+  refused as the duplicate they are, for the same reason: GitHub logins are
+  case-insensitive, so accepting both would put two bindings on one remote set.
 - **A schema this build cannot account for is refused, not repaired** —
   by reporting as well as by the controller. `status`, a `gc` dry run and
   a `cleanup` or `uninstall` preview apply no migrations, so each says

@@ -422,7 +422,7 @@ type runtimeWaiter interface {
 // session keeps its own seam through newSession: the loop's session
 // handling is a subject of its own.
 type provider interface {
-	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool) (githubactions.ScaleSet, error)
+	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool, recordIntent func() error) (githubactions.ScaleSet, error)
 	GenerateJITConfig(ctx context.Context, scaleSetID int, runnerName, workFolder string) (githubactions.JITConfig, error)
 	RemoveRunner(ctx context.Context, id int) error
 	OpenSession(ctx context.Context, scaleSetID int, owner string) (*githubactions.Session, error)

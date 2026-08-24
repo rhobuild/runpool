@@ -72,7 +72,7 @@ func TestAnAdoptedScaleSetForbidsRunnerSelfUpdate(t *testing.T) {
 			"this test cannot tell adoption from creation")
 	}
 
-	adopted, err := gh.EnsureScaleSet(ctx, "", permissive.Name, permissive.ID, false)
+	adopted, err := gh.EnsureScaleSet(ctx, "", permissive.Name, permissive.ID, false, adoption(t).record)
 	if err != nil {
 		t.Fatalf("adopt scale set %q: %v", permissive.Name, err)
 	}
@@ -129,7 +129,7 @@ func TestAdoptionLeavesACorrectScaleSetAlone(t *testing.T) {
 		}
 	})
 
-	adopted, err := gh.EnsureScaleSet(ctx, "", name, created.ID, false)
+	adopted, err := gh.EnsureScaleSet(ctx, "", name, created.ID, false, adoption(t).record)
 	if err != nil {
 		t.Fatalf("adopt scale set %q: %v", name, err)
 	}

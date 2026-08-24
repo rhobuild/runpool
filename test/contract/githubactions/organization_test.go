@@ -20,7 +20,7 @@ func TestOrganizationDefaultGroupScaleSet(t *testing.T) {
 
 	// A second ensure adopts only when the caller proves ownership with
 	// the id it recorded; the restart path.
-	again, err := gh.EnsureScaleSet(testCtx(t), "", name, created.ID, false)
+	again, err := gh.EnsureScaleSet(testCtx(t), "", name, created.ID, false, adoption(t).record)
 	if err != nil {
 		t.Fatalf("re-ensure: %v", err)
 	}
