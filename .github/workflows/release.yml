@@ -27,7 +27,7 @@ env:
   # suite. This workflow compiles the binary that
   # ships, so a compiler chosen here and nowhere else would be the one
   # thing no gate ever exercised.
-  GOTOOLCHAIN: go1.26.6
+  GOTOOLCHAIN: go1.26.7
 
 jobs:
   version:

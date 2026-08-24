@@ -38,7 +38,7 @@ concurrency:
 
 env:
   # Held equal to go.mod by the consistency suite.
-  GOTOOLCHAIN: go1.26.6
+  GOTOOLCHAIN: go1.26.7
 
 jobs:
   workload:
