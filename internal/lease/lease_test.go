@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -755,5 +756,43 @@ func TestOnlyAMeasurementIsRecorded(t *testing.T) {
 				t.Errorf("the serving recorded %q; want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestTheColumnRefusesAnEmptyMeasurement: the storage represents a
+// serving that recorded nothing as NULL, and the empty string is not a
+// second way to spell it. Two representations of one state is what a
+// reader of the table would have to know about and nothing would tell
+// them, so the column refuses one of them outright -- below the Go guard
+// rather than beside it, because a guard that can be removed is not what
+// keeps a table honest.
+func TestTheColumnRefusesAnEmptyMeasurement(t *testing.T) {
+	f := newFixture(t, nopRemover{})
+	err := f.m.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.RecordLeaseStartObservation(f.lease.ID, "")
+	})
+	if err == nil {
+		t.Fatal("the column accepted an empty measurement; NULL and the empty string now both mean nothing")
+	}
+	if !strings.Contains(err.Error(), "CHECK") {
+		t.Errorf("the write failed with %v; the column's own constraint is what has to refuse it", err)
+	}
+}
+
+// TestTheColumnRefusesAnEmptyRuntimeName: a lease that has registered no
+// runtime has no name, and the lookup that answers "which attempt ran as
+// this runtime" searches by that value. An empty name stored here would
+// be a name a caller could ask for, matching a lease that registered
+// nothing -- so the column refuses it and the absence is NULL.
+func TestTheColumnRefusesAnEmptyRuntimeName(t *testing.T) {
+	f := newFixture(t, nopRemover{})
+	err := f.m.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.SetLeaseRuntimeName(f.lease.ID, "")
+	})
+	if err == nil {
+		t.Fatal("the column accepted an empty runtime name; a lookup for one would match a lease that registered nothing")
+	}
+	if !strings.Contains(err.Error(), "CHECK") {
+		t.Errorf("the write failed with %v; the column's own constraint is what has to refuse it", err)
 	}
 }

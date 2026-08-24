@@ -93,16 +93,23 @@ CREATE TABLE capsule_leases (
 	-- The name the runtime registered under. Lifecycle events correlate
 	-- by workload key; this is the cross-check that says a runner is
 	-- executing the workload it was provisioned for.
-	runtime_name  TEXT NOT NULL DEFAULT '',
+	--
+	-- NULL until a runtime registers, because the lookup below is by this
+	-- value: an empty one stored here would be a name a caller could ask
+	-- for and match a lease that never registered anything.
+	runtime_name  TEXT CHECK (runtime_name IS NULL OR length(runtime_name) > 0),
 	-- What this serving measured about whether the workload began. The
 	-- proof outranks the evidence -- an attempt whose capsule reports the
 	-- runner never owned the job returns to the queue even though the
 	-- capsule reported itself up -- and a cleanup that has to be retried
 	-- would otherwise carry no proof into the retry and settle the
 	-- attempt as one that ran. Only a value that establishes something is
-	-- recorded; absent and unavailable establish nothing and stay NoObservation ('').
-	start_observation TEXT NOT NULL DEFAULT '' CHECK (start_observation IN (
-		'', 'created', 'never_started', 'running', 'exited')),
+	-- recorded. NULL is a serving that recorded nothing, which is what a
+	-- lease is born with: absent and unavailable establish nothing, so
+	-- they are never written, and the empty string is refused outright --
+	-- one representation of nothing, not two.
+	start_observation TEXT CHECK (start_observation IS NULL OR start_observation IN (
+		'created', 'never_started', 'running', 'exited')),
 	created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
 	updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
 );

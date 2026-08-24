@@ -74,8 +74,8 @@ type CapsuleLease struct {
 	AttemptID        string
 	TierID           string
 	State            string
-	RuntimeName      string
-	StartObservation string
+	RuntimeName      sql.NullString
+	StartObservation sql.NullString
 	CreatedAt        int64
 	UpdatedAt        int64
 }

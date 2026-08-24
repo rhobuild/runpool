@@ -328,8 +328,17 @@ type rowScanner interface{ Scan(...any) error }
 func (t *Tx) scanLease(r rowScanner) (Lease, error) {
 	var l Lease
 	var created, updated int64
+	// NULL is an absence: a serving that recorded nothing, a runtime that
+	// never registered. NullString renders both as the empty string, which
+	// is each type's own zero -- NoObservation by name for the measurement,
+	// and for the runtime a name no lookup will answer for. The storage
+	// represents the absence and the domain's zero value means it; this is
+	// the one line where they meet.
+	var observed, runtime sql.NullString
 	err := r.Scan(&l.ID, &l.BindingID, &l.AttemptID, &l.TierID, &l.State,
-		&l.RuntimeName, &l.StartObservation, &created, &updated)
+		&runtime, &observed, &created, &updated)
+	l.RuntimeName = assignment.RuntimeName(runtime.String)
+	l.StartObservation = assignment.ExecutionObservation(observed.String)
 	l.CreatedAt = time.Unix(created, 0).UTC()
 	l.UpdatedAt = time.Unix(updated, 0).UTC()
 	return l, err
