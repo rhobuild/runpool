@@ -103,6 +103,14 @@ type fakeSandboxDaemon struct {
 	// refuse names the containers whose exec fails, which is how a
 	// gateway that will not take a new policy is expressed.
 	refuse map[string]bool
+	// removeErr names the containers the daemon will not remove, which is
+	// how a gateway that can neither be reloaded nor closed is expressed.
+	removeErr map[string]error
+	// onList runs inside the enumeration, after the answer to this call
+	// has been taken. Appending there is how a gateway appears between a
+	// pass listing them and that pass finishing, which is the moment a
+	// launch creates one.
+	onList func(*fakeSandboxDaemon)
 	// delay is how long each gateway control command takes, which is
 	// what makes a serial pass distinguishable from a concurrent one.
 	delay time.Duration
@@ -128,8 +136,11 @@ type fakeSandboxDaemon struct {
 	// holds the lock before any gateway has been reached.
 	listDeadline time.Time
 	listBounded  bool
-	reloaded     []string
-	removed      []string
+	// lists counts enumerations, which is what separates a confirmation
+	// that had nothing to do from one that reached the daemon.
+	lists    int
+	reloaded []string
+	removed  []string
 	// events is what the daemon was asked to do, in order, as
 	// "<verb>:<container>". Two sorted sets cannot say that the
 	// revocation came before the removal, and per-gateway order is
@@ -220,11 +231,16 @@ func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ engine.ContainerSpec)
 func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]engine.OwnedContainer, error) {
 	f.mu.Lock()
 	f.listDeadline, f.listBounded = ctx.Deadline()
+	f.lists++
+	answer := slices.Clone(f.containers)
+	if f.onList != nil {
+		f.onList(f)
+	}
 	f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return f.containers, nil
+	return answer, nil
 }
 func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, cmd []string) (int, string, error) {
 	f.serve()
@@ -250,6 +266,9 @@ func (f *fakeSandboxDaemon) RemoveContainer(ctx context.Context, id string) erro
 	f.mu.Unlock()
 	f.serve()
 	f.note(&f.events, "remove:"+id)
+	if err := f.removeErr[id]; err != nil {
+		return err
+	}
 	f.note(&f.removed, id)
 	return nil
 }
@@ -810,5 +829,183 @@ func TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency(t *testing.T) {
 	if len(daemon.events) != 0 || len(daemon.removed) != 0 {
 		t.Errorf("a stopped rediscovery reached the daemon: %v, removed %v",
 			daemon.events, daemon.removed)
+	}
+}
+
+// tighter returns the deny set of s with one more range in it.
+func tighter(s *capsule.Sandbox) *capsule.Sandbox {
+	next := *s
+	next.Deny = append(slices.Clone(s.Deny), "192.168.0.0/16")
+	return &next
+}
+
+func sandboxFixture() *capsule.Sandbox {
+	return &capsule.Sandbox{
+		UplinkNetworkID: "uplink-1",
+		UplinkSubnet:    "172.30.0.0/24",
+		Deny:            []string{"10.0.0.0/8"},
+	}
+}
+
+// TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy: a pass
+// fans a change out to the gateways it can enumerate, and one still being
+// created is not among them. Nothing comes back for it afterwards either,
+// because the pass records the new set as in force and every later pass
+// compares that set against itself. The launch that created the gateway
+// is what closes the gap, before its capsule is authorized to start.
+func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T) {
+	daemon := &fakeSandboxDaemon{
+		refuse: map[string]bool{},
+		containers: []engine.OwnedContainer{
+			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
+		},
+	}
+	// The launch's gateway appears just after the pass has listed, which
+	// is the whole of the window this closes.
+	daemon.onList = func(f *fakeSandboxDaemon) {
+		f.containers = append(f.containers, engine.OwnedContainer{
+			ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"})
+		f.onList = nil
+	}
+	n := newTestSandbox(t, daemon, sandboxFixture())
+	launched := n.state.snapshot()
+
+	if err := n.applyPolicy(t.Context(), tighter(launched)); err != nil {
+		t.Fatalf("applyPolicy: %v", err)
+	}
+	if got := daemon.reloads(); len(got) != 1 || got[0] != "gw-1" {
+		t.Fatalf("the pass reloaded %v; a gateway it never named cannot be among them", got)
+	}
+
+	if err := n.confirmLaunch(t.Context(), "lse-late", launched); err != nil {
+		t.Fatalf("confirmLaunch: %v", err)
+	}
+	if got := daemon.reloads(); !slices.Contains(got, "gw-late") {
+		t.Errorf("reloaded %v; the launch must install the set in force into the gateway it created", got)
+	}
+}
+
+// TestAConfirmedLaunchUnderAnUnchangedPolicyTouchesNoDaemon: the ordinary
+// case is that nothing moved while the capsule was being built, and it
+// has to stay free. Re-asserting the policy on every launch instead would
+// cost one exec per gateway per launch, which is the cost the fan-out is
+// bounded to avoid.
+func TestAConfirmedLaunchUnderAnUnchangedPolicyTouchesNoDaemon(t *testing.T) {
+	daemon := &fakeSandboxDaemon{
+		refuse: map[string]bool{},
+		containers: []engine.OwnedContainer{
+			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
+		},
+	}
+	n := newTestSandbox(t, daemon, sandboxFixture())
+
+	if err := n.confirmLaunch(t.Context(), "lse-1", n.state.snapshot()); err != nil {
+		t.Fatalf("confirmLaunch: %v", err)
+	}
+	if got := daemon.reloads(); len(got) != 0 {
+		t.Errorf("reloaded %v; a launch whose policy did not move reaches no gateway", got)
+	}
+	if daemon.lists != 0 {
+		t.Errorf("the daemon was enumerated %d times; a launch whose policy did not move does not ask",
+			daemon.lists)
+	}
+}
+
+// TestAConfirmationThatCannotReachTheGatewayFailsTheLaunch: an unprovable
+// policy refuses a launch everywhere else in this file, and a gateway that
+// will not take the set in force is exactly that. The teardown belongs to
+// the launch's own recovery, which removes every resource of the lease --
+// so this must not remove anything itself.
+func TestAConfirmationThatCannotReachTheGatewayFailsTheLaunch(t *testing.T) {
+	launched := sandboxFixture()
+	for name, tc := range map[string]struct {
+		containers []engine.OwnedContainer
+		refuse     map[string]bool
+	}{
+		"the gateway refuses the policy in force": {
+			containers: []engine.OwnedContainer{
+				{ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"},
+			},
+			refuse: map[string]bool{"gw-late": true},
+		},
+		"the lease owns no running gateway": {
+			containers: []engine.OwnedContainer{
+				{ID: "gw-other", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-other"},
+			},
+			refuse: map[string]bool{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			daemon := &fakeSandboxDaemon{refuse: tc.refuse, containers: tc.containers}
+			n := newTestSandbox(t, daemon, tighter(launched))
+
+			if err := n.confirmLaunch(t.Context(), "lse-late", launched); err == nil {
+				t.Fatal("the launch was confirmed against a policy no gateway of its own carries")
+			}
+			if got := daemon.removes(); len(got) != 0 {
+				t.Errorf("removed %v; the launch's own recovery owns the teardown", got)
+			}
+		})
+	}
+}
+
+// TestAConfirmationThatWasOvertakenFailsTheLaunch: a pass that moved the
+// set while the confirmation ran leaves the gateway one generation behind,
+// and could not have reached it either. A capsule must not start under a
+// set that was current a moment ago.
+func TestAConfirmationThatWasOvertakenFailsTheLaunch(t *testing.T) {
+	launched := sandboxFixture()
+	daemon := &fakeSandboxDaemon{
+		refuse: map[string]bool{},
+		containers: []engine.OwnedContainer{
+			{ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"},
+		},
+	}
+	n := newTestSandbox(t, daemon, tighter(launched))
+	daemon.onList = func(f *fakeSandboxDaemon) {
+		f.onList = nil
+		moved := *launched
+		moved.Deny = []string{"10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"}
+		n.state.replace(&moved)
+	}
+
+	if err := n.confirmLaunch(t.Context(), "lse-late", launched); err == nil {
+		t.Fatal("the launch was confirmed against a set that had already been superseded")
+	}
+}
+
+// TestARestrictionThatCouldNotBeClosedIsRetried: a restriction that
+// reached no gateway and could not close it either is not in force. The
+// books must not move, for the same reason an enumeration failure leaves
+// them alone -- recorded, the next pass compares the new set against
+// itself and never attempts it again, while a gateway keeps relaying past
+// a deny the operator was promised.
+func TestARestrictionThatCouldNotBeClosedIsRetried(t *testing.T) {
+	daemon := &fakeSandboxDaemon{
+		refuse:    map[string]bool{"gw-bad": true},
+		removeErr: map[string]error{"gw-bad": errors.New("container is wedged")},
+		containers: []engine.OwnedContainer{
+			{ID: "gw-bad", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-bad"},
+		},
+	}
+	n := newTestSandbox(t, daemon, sandboxFixture())
+	tightened := tighter(sandboxFixture())
+
+	if err := n.applyPolicy(t.Context(), tightened); err == nil {
+		t.Fatal("a restriction that reached no gateway and closed none reported success")
+	}
+	if got := n.state.snapshot().Deny; len(got) != 1 {
+		t.Fatalf("the books record %v as in force; it is in no gateway", got)
+	}
+
+	// The daemon recovers, and the pass that follows must see the change
+	// again rather than compare the new set against itself.
+	daemon.refuse = map[string]bool{}
+	daemon.removeErr = nil
+	if err := n.applyPolicy(t.Context(), tightened); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	if got := n.state.snapshot().Deny; len(got) != 2 {
+		t.Errorf("the books record %v after a retry that reached the gateway", got)
 	}
 }

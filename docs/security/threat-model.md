@@ -90,6 +90,7 @@ policy remain necessary in either topology.
 | The host cannot be starved by a job | One envelope per lease, split between the capsule and its egress gateway and placed under one parent cgroup: the capsule's aggregate covers runner, daemon and every inner container; the gateway holds the rest of the same tier, because every connection a job opens is work it performs. The doctor refuses a configuration whose full tiers plus reserve exceed the host, and the validator refuses a tier too small to split | Kernel-proven on the reference host: inner OOM charged to the capsule; both containers report one parent cgroup and their limits sum to the tier; a fork storm in the gateway stops at its own ceiling |
 | The host cannot be filled | Disk monitor probes the daemon's filesystem from inside it; admission closes at the soft floor, fails closed at the hard floor, and GC evicts only free lanes | Pressure transitions table-tested; disk-full behaviour live for both SQLite and containers |
 | Egress confinement | Under `public-internet-only`, the host kernel drops anything the capsule addresses beyond its bridge; the gateway relays DNS and HTTP(S) under default-deny, resolving before dialing (rebinding defence) | Live bypass suite: no direct route anywhere, denied addresses refused by name and by address, gateway loss removes egress |
+| A capsule runs under the deny set in force, not the one its launch was handed | A policy change fans out to the gateways that exist; a gateway created during that window is proved by the launch that created it, before its capsule is authorized to start. A gateway that cannot be reached fails the launch, and a restriction that could neither be installed nor closed leaves the record unmoved so the next pass attempts it again | Table-tested: a gateway appearing after a pass enumerated is reloaded by its launch; an unreachable one fails it; an unchanged policy reaches no daemon; an unclosable restriction is retried |
 
 ## Known weakness
 
@@ -133,6 +134,13 @@ These are consequences of the design, not oversights:
   policy, not hardware. On `shared-daemon`, the operator explicitly accepts
   that kernel-level compromise can reach colocated services; use
   `dedicated-daemon` when that impact is unacceptable.
+- **A relaxation that did not reach a gateway is not retried.** When a
+  policy change widens what a capsule may reach and one gateway does not
+  take it, that capsule stays confined more tightly than the policy for
+  the life of its job. The controller records the wider set and moves on:
+  the cost is a job that cannot reach something it was entitled to, not a
+  boundary that was crossed. A restriction that does not land is treated
+  the opposite way, and closes the gateway.
 - **Platform-wide volume prune bypasses Runpool's ownership model.** Docker
   treats an unattached cache lane as unused. On a shared daemon, disable
   unused-volume cleanup and any system prune that includes volumes. Image

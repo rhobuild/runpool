@@ -336,6 +336,69 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 	return n.state.snapshot(), nil
 }
 
+// confirmLaunch proves the gateway this launch created carries the set in
+// force, before the capsule it fronts is authorized to start.
+//
+// A policy pass fans a change out to the gateways it can enumerate. One
+// still being created is not among them, and it should not be: it is not
+// relaying anything yet. What the pass cannot do is come back for it once
+// it starts, because the record it leaves behind reports the new set as in
+// force, and every later pass compares that set against itself and finds
+// nothing to do. Without this, a capsule launched across a tightening
+// keeps the older, more permissive set for the whole life of its job.
+//
+// The launch is what closes that gap, at the one moment its gateway is
+// both enumerable and not yet serving work. It costs two comparisons in
+// the ordinary case, where the policy did not move while the capsule was
+// being built, and reaches the daemon only when it did.
+func (n *networkSandbox) confirmLaunch(ctx context.Context, leaseID assignment.LeaseID, launched *capsule.Sandbox) error {
+	if n == nil || launched == nil {
+		return nil
+	}
+	inForce := n.state.snapshot()
+	if sameSandbox(launched, inForce) {
+		return nil
+	}
+	containers, err := n.ownedContainers(ctx)
+	if err != nil {
+		return fmt.Errorf("enumerate gateways: %w", err)
+	}
+	payload, err := json.Marshal(egress.Policy{Allow: inForce.Allow, Deny: inForce.Deny})
+	if err != nil {
+		return err
+	}
+	var confirmed int
+	for _, c := range containers {
+		if c.Role != capsule.RoleGateway || c.LeaseID != leaseID || !c.Running {
+			continue
+		}
+		if err := n.reloadGateway(ctx, c, payload); err != nil {
+			return fmt.Errorf("install the policy in force into gateway %s: %w", engine.ShortID(c.ID), err)
+		}
+		confirmed++
+	}
+	if confirmed == 0 {
+		// Nothing to install the policy into means nothing proves this
+		// capsule's egress is confined, which is the same answer as a
+		// gateway that refused it.
+		return fmt.Errorf("lease %s owns no running gateway to confirm the egress policy against", leaseID)
+	}
+	// A pass that moved the set while this ran leaves the gateway one
+	// generation behind. A capsule must not start under a set that was
+	// current a moment ago, and the pass that moved it could not have
+	// reached this gateway either.
+	if after := n.state.snapshot(); !sameSandbox(inForce, after) {
+		return fmt.Errorf("the egress policy moved while the gateway was being confirmed")
+	}
+	return nil
+}
+
+// sameSandbox reports whether two sandboxes confine a capsule the same
+// way: the same deny set, reached through the same uplink.
+func sameSandbox(a, b *capsule.Sandbox) bool {
+	return ClassifyPolicy(a.Deny, b.Deny) == PolicyUnchanged && a.UplinkNetworkID == b.UplinkNetworkID
+}
+
 func (n *networkSandbox) refresh(ctx context.Context) error {
 	select {
 	case n.state.refreshing <- struct{}{}:
@@ -407,31 +470,54 @@ func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox)
 		// landed nowhere would never be attempted again.
 		return fmt.Errorf("enumerate gateways: %w", err)
 	}
-	// Recorded only now: the set has reached every gateway that could be
-	// named, so this is what is in force rather than what was intended.
-	// The refresh slot is held across both, so no launch can observe the
-	// window between them.
-	n.state.replace(next)
-	if len(failed) == 0 {
-		return nil
-	}
-	if !change.restricts() {
-		// A relaxation that did not land leaves the capsule with the
-		// stricter policy it started under. Its work continues.
-		n.log.Warn("some gateways kept the previous, stricter policy",
-			"gateways", len(failed), "change", change.String())
-		return nil
-	}
-	// A restriction that did not land leaves a capsule able to reach
-	// something the policy now denies. Close those gateways.
-	n.log.Error("a restriction could not be installed; closing the affected gateways",
-		"gateways", len(failed))
-	eachGateway(failed, func(id string) {
-		if err := n.closeGateway(ctx, id); err != nil {
-			n.log.Error("a gateway could not be closed and may still relay a denied address",
-				"container", id, "error", err)
+	if len(failed) > 0 {
+		if !change.restricts() {
+			// A relaxation that did not land leaves the capsule with the
+			// stricter policy it started under. Its work continues.
+			n.log.Warn("some gateways kept the previous, stricter policy",
+				"gateways", len(failed), "change", change.String())
+		} else {
+			// A restriction that did not land leaves a capsule able to
+			// reach something the policy now denies. Close those
+			// gateways.
+			n.log.Error("a restriction could not be installed; closing the affected gateways",
+				"gateways", len(failed))
+			var mu sync.Mutex
+			var open []string
+			eachGateway(failed, func(id string) {
+				if err := n.closeGateway(ctx, id); err != nil {
+					n.log.Error("a gateway could not be closed and may still relay a denied address; "+
+						"the remedy is the daemon holding it, not the policy",
+						"container", id, "error", err)
+					mu.Lock()
+					open = append(open, id)
+					mu.Unlock()
+				}
+			})
+			if len(open) > 0 {
+				// The books do not move. A restriction that neither
+				// reached a gateway nor removed it is not in force, and
+				// recording it would have the next pass compare the new
+				// set against itself, report it unchanged, and never
+				// attempt it again -- the same reason an enumeration
+				// failure leaves the snapshot alone. The caller closes
+				// every gateway on this host, which is what a set that
+				// cannot be shown to be current costs everywhere else
+				// here: a gateway relaying past a deny the operator was
+				// promised is a stronger reason for that than not
+				// knowing what the deny set should be.
+				return fmt.Errorf("a restriction could not be installed and the gateway could not be closed: %s",
+					strings.Join(open, ", "))
+			}
 		}
-	})
+	}
+	// Recorded only now: the set is in force in every gateway that was
+	// relaying, either because it was installed there or because that
+	// gateway is gone. A gateway created while this ran is not covered
+	// by this record and is not meant to be -- the launch that creates
+	// one confirms it against this snapshot before its capsule is
+	// authorized to start.
+	n.state.replace(next)
 	return nil
 }
 
@@ -496,20 +582,36 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 		if c.Role != capsule.RoleGateway || !c.Running {
 			return
 		}
-		code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
-			return n.daemon.ExecWithInput(ctx, c.ID,
-				[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
-		})
-		if err != nil || code != 0 {
+		if err := n.reloadGateway(ctx, c, payload); err != nil {
 			mu.Lock()
 			failed = append(failed, c.ID)
 			mu.Unlock()
-			n.log.Error("gateway policy reload failed", "container", c.Name, "exit", code, "error", err, "output", out)
+			n.log.Error("gateway policy reload failed", "container", c.Name, "error", err)
 			return
 		}
 		n.log.Info("gateway policy reloaded", "container", c.Name)
 	})
 	return failed, nil
+}
+
+// reloadGateway installs one policy into one gateway. It is spelled once
+// because two callers reach it for different reasons -- a pass fanning a
+// change out to every gateway that was relaying, and a launch proving the
+// gateway it just created carries the set in force -- and a reload that
+// judged its exit code differently on those two paths would be two
+// answers to the same question.
+func (n *networkSandbox) reloadGateway(ctx context.Context, c engine.OwnedContainer, payload []byte) error {
+	code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
+		return n.daemon.ExecWithInput(ctx, c.ID,
+			[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("gateway-reload exited %d: %s", code, out)
+	}
+	return nil
 }
 
 // gatewayControlTimeout bounds one gateway control operation — an exec

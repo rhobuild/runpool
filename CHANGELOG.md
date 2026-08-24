@@ -140,6 +140,19 @@ by its public and operational effects.
   public internet — which is how a capsule reaches a service on the
   host's own public address, an address the runtime deny set withholds
   from facts static validation cannot see.
+- **A capsule runs under the deny set in force, not the one its launch was
+  handed.** A policy change reaches the gateways that exist when it is
+  installed, and a gateway still being created is not one of them — so the
+  launch that creates one proves it carries the current set before its job
+  is authorized to start. Without that, a capsule launched while a network
+  appeared kept the older, more permissive set for the whole life of its
+  job, and no later pass revisited it: the record said the change was in
+  force everywhere, so every pass after compared that set against itself
+  and found nothing to do. In the ordinary case, where nothing moved while
+  the capsule was being built, the check reaches no daemon at all. A
+  restriction that could neither be installed into a gateway nor close it
+  no longer enters the record either, so the next pass attempts it again
+  rather than never trying it again.
 
 ### State and operations
 
