@@ -7,6 +7,7 @@ import (
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/engine"
 )
 
 // gcFixture builds lanes with controlled ages and sizes. Ages are set
@@ -224,6 +225,95 @@ func TestAggressiveCollectionPlansLanesTheDaemonCannotSize(t *testing.T) {
 	for _, e := range plan.Evictions {
 		if e.Reason != "emergency" {
 			t.Errorf("lane %s evicted as %q, want emergency", e.LaneID, e.Reason)
+		}
+	}
+}
+
+// TestTheOrphanSweepProvesOwnershipUnderThisInstance: the volume
+// namespace is shared, so the sweep re-proves ownership before removing
+// — and the proof is only a proof under the right scope. Deleting the
+// call, or asking under another instance's id, was invisible: the fake
+// discarded the arguments, and the adapter's own refusal runs only in
+// the live contracts.
+func TestTheOrphanSweepProvesOwnershipUnderThisInstance(t *testing.T) {
+	m, st, vols := gcFixture(t)
+	loc := addLane(t, m, st, vols, repoURL, "gen", "l1", 1, 50)
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.DeleteCacheLane(loc.LaneID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := m.PlanGC(t.Context(), GCOptions{TargetBytes: -1, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vols.proofs = nil
+	if _, err := m.RunGC(t.Context(), plan, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(vols.proofs) != 1 {
+		t.Fatalf("ownership was proven %d times for 1 removal; the namespace is shared and the "+
+			"proof is the only thing between the sweep and somebody else's volume", len(vols.proofs))
+	}
+	p := vols.proofs[0]
+	if p.kind != engine.KindVolume || p.name != loc.Volume ||
+		p.instance != st.InstanceID() || p.lease != "" {
+		t.Errorf("proof = %+v; want volume %q under instance %q with no lease — an orphan has none",
+			p, loc.Volume, st.InstanceID())
+	}
+
+	// And a volume that fails the proof is left alone.
+	loc2 := addLane(t, m, st, vols, repoURL, "gen", "l2", 1, 50)
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.DeleteCacheLane(loc2.LaneID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan2, err := m.PlanGC(t.Context(), GCOptions{TargetBytes: -1, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vols.foreign = true
+	before := len(vols.removed)
+	res, err := m.RunGC(t.Context(), plan2, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vols.removed) != before {
+		t.Error("a volume that failed the ownership proof was removed anyway")
+	}
+	if len(res.Failed) == 0 {
+		t.Error("a refused removal must be reported, not absorbed")
+	}
+}
+
+// TestTheSweepIsBlindToRolesItDoesNotOwn: the GC's universe is the role
+// label. The fake used to synthesize usage only from Acquire, so every
+// volume it reported was a lane and the two role guards could be deleted
+// with everything green — while the real client returns every volume
+// this instance owns, dind data and workspaces included, and a sweep
+// without the guards would evict a live capsule's daemon state as an
+// "orphan" with no row.
+func TestTheSweepIsBlindToRolesItDoesNotOwn(t *testing.T) {
+	m, _, vols := gcFixture(t)
+	if vols.ensured == nil {
+		vols.ensured = map[string]map[string]string{}
+	}
+	vols.ensured["runpool-dind-1"] = map[string]string{
+		"io.runpool.managed":  "true",
+		"io.runpool.role":     "dind-data",
+		"io.runpool.instance": "instance-1",
+	}
+	vols.sizes["runpool-dind-1"] = 500
+
+	plan, err := m.PlanGC(t.Context(), GCOptions{TargetBytes: -1, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range plan.Evictions {
+		if ev.Volume == "runpool-dind-1" {
+			t.Fatalf("the plan evicts %q, a dind data volume: the sweep reached past its role "+
+				"into a live capsule's daemon state", ev.Volume)
 		}
 	}
 }

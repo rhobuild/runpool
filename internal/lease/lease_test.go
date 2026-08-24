@@ -29,6 +29,37 @@ func (nopRemover) RemoveOwnedVolume(context.Context, string, assignment.Instance
 	return nil
 }
 
+// recordingRemover keeps every removal it was asked for, with the
+// ownership scope it was asked under. The fakes before it declared those
+// parameters and discarded them, so a removal that blanked its lease id
+// — or swapped in another instance's — reached the daemon unnoticed by
+// every hermetic test: the adapter's refusal is proved live, and the
+// caller's wiring was proved by nothing.
+type recordingRemover struct {
+	calls []removal
+}
+
+type removal struct {
+	kind     store.ResourceKind
+	handle   string
+	instance assignment.InstanceID
+	lease    assignment.LeaseID
+}
+
+func (r *recordingRemover) record(kind store.ResourceKind, handle string, i assignment.InstanceID, l assignment.LeaseID) error {
+	r.calls = append(r.calls, removal{kind, handle, i, l})
+	return nil
+}
+func (r *recordingRemover) RemoveOwnedContainer(_ context.Context, h string, i assignment.InstanceID, l assignment.LeaseID) error {
+	return r.record(store.ResourceContainer, h, i, l)
+}
+func (r *recordingRemover) RemoveOwnedNetwork(_ context.Context, h string, i assignment.InstanceID, l assignment.LeaseID) error {
+	return r.record(store.ResourceNetwork, h, i, l)
+}
+func (r *recordingRemover) RemoveOwnedVolume(_ context.Context, h string, i assignment.InstanceID, l assignment.LeaseID) error {
+	return r.record(store.ResourceVolume, h, i, l)
+}
+
 // wedgedRemover fails every removal until healed — the daemon a
 // quarantined lease is waiting on.
 type wedgedRemover struct{ healed bool }
@@ -269,15 +300,36 @@ func TestFinalizeIsAtomic(t *testing.T) {
 // Release walks a live lease all the way to released, removing every
 // owned object on the way and disposing of the attempt by evidence.
 func TestReleaseRemovesEverythingAndDisposes(t *testing.T) {
-	f := newFixture(t, nopRemover{})
+	remover := &recordingRemover{}
+	f := newFixture(t, remover)
 	f.driveTo(store.LeaseWorkloadRunning)
 	f.recordEvidence(store.EvidenceExitObserved)
+	// The full shape of a sandboxed lease, not one container: the order
+	// is only observable with something to order, and every test that
+	// reached the removal planned exactly one intent — so inverting the
+	// sort, or deleting it, failed nothing, while a release that removes
+	// a network before the containers holding it is refused by the
+	// daemon on every pass and quarantines the lease forever.
 	f.tx(func(tx *store.Tx) error {
-		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, "runner", "runpool-runner-1")
-		if err != nil {
-			return err
+		for _, in := range []struct {
+			kind store.ResourceKind
+			role string
+			name string
+		}{
+			{store.ResourceNetwork, "capsule-net", "runpool-net-1"},
+			{store.ResourceVolume, "dind-data", "runpool-dind-1"},
+			{store.ResourceContainer, "runner", "runpool-runner-1"},
+			{store.ResourceVolume, "workspace", "runpool-ws-1"},
+		} {
+			id, err := tx.PlanResource(f.lease.ID, in.kind, in.role, in.name)
+			if err != nil {
+				return err
+			}
+			if err := tx.MarkResourcePresent(assignment.ResourceIntentID(id), in.name); err != nil {
+				return err
+			}
 		}
-		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "runner-1")
+		return nil
 	})
 
 	if err := f.m.Release(t.Context(), f.lease.ID, store.LeaseWorkloadRunning); err != nil {
@@ -286,6 +338,23 @@ func TestReleaseRemovesEverythingAndDisposes(t *testing.T) {
 	if got := f.reload(); got.State != store.LeaseReleased {
 		t.Errorf("lease = %s; want released", got.State)
 	}
+
+	if len(remover.calls) != 4 {
+		t.Fatalf("removed %d objects; want all 4", len(remover.calls))
+	}
+	if remover.calls[0].kind != store.ResourceContainer {
+		t.Errorf("removed a %s first; containers go first, because the network and the "+
+			"volumes they hold cannot be removed under them", remover.calls[0].kind)
+	}
+	instance := f.m.store.InstanceID()
+	for _, c := range remover.calls {
+		if c.instance != instance || c.lease != f.lease.ID {
+			t.Errorf("removed %s %q as instance %q lease %q; want %q and %q — the scope is "+
+				"what keeps a stale intent from deleting a foreign object that reused its name",
+				c.kind, c.handle, c.instance, c.lease, instance, f.lease.ID)
+		}
+	}
+
 	f.tx(func(tx *store.Tx) error {
 		intents, err := tx.Resources(f.lease.ID)
 		if err != nil {
