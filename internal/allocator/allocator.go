@@ -143,6 +143,16 @@ func (a *Allocator) TryReserve(key assignment.BindingKey) bool {
 	if p == nil {
 		return false
 	}
+	// Held is checked here and not only where capacity is advertised.
+	// Withholding what the broker is offered stops work being assigned;
+	// it does not stop a pass that is already looping over a batch of
+	// ready attempts, which reads the pressure once before the loop. A
+	// hold that lands underneath that loop has to be obeyed by the
+	// admission itself, or the capsules it starts land on the filesystem
+	// the emergency is about.
+	if b := p.state[key]; b == nil || b.held {
+		return false
+	}
 	if a.poolActive(p) >= p.parallelism {
 		return false
 	}
