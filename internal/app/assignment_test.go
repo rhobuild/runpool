@@ -12,6 +12,7 @@ import (
 	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/cache"
+	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/lease"
@@ -503,4 +504,14 @@ func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target s
 	if got := reloadLease(t, h, leaseID); got.State != target {
 		t.Fatalf("wanted a lease in %q but it is %q; the test would assert nothing", target, got.State)
 	}
+}
+
+// resolveWithRuntime is the other half of resolveWithoutRuntime: the
+// crash left a container, so the pass can ask it whether the authorized
+// start took effect. The observation the capsule answers with is the
+// caller's to choose, because it is the fact under test.
+func (h *harness) resolveWithRuntime(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
+	h.srv.caps = &fakeCapsule{obs: obs}
+	h.srv.resolveInterrupted(ctx, h.bind, lease,
+		engine.OwnedContainer{ID: "runner-x", Role: capsule.RoleCapsule, Running: false}, true)
 }
