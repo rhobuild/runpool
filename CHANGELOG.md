@@ -505,6 +505,10 @@ by its public and operational effects.
   is the address a capsule would otherwise route through. The refusal names the
   address it found. This is also the first thing that fails when the option is
   removed from the code: it was possible to delete it and pass every gate.
+  Under `unsafe-open-egress` the probe does not run at all: that profile
+  attaches no capsule to the isolated bridge, so the check reports the
+  unconfined egress rather than refusing the host over a capability nothing
+  would use.
 - **Runpool deploys on any Docker host that runs Compose.** What a platform has
   to provide is five things — a container kept running from a digest, a
   persistent volume, two read-only mounts, the socket, and a redeploy that keeps

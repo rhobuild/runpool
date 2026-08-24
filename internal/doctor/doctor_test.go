@@ -254,7 +254,7 @@ func TestEngineVersionGuardIsAFloorNotAWindow(t *testing.T) {
 // is an admission gate, so an unusable daemon is a failure rather than a
 // silently skipped check.
 func TestIsolatedBridgeProbeFailsClosedWithoutADaemon(t *testing.T) {
-	res := checkIsolatedBridge(t.Context(), nil)
+	res := checkIsolatedBridge(t.Context(), nil, nil)
 	if res.Status != Fail {
 		t.Errorf("probe without a daemon = %s; want fail", res.Status)
 	}
@@ -323,7 +323,7 @@ func TestTheBridgeProbeAsksWhatTheDaemonDidNotWhatItWasAsked(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			probe := &fakeNetworkProbe{gateways: testCase.gateways}
-			got := checkIsolatedBridge(t.Context(), probe)
+			got := checkIsolatedBridge(t.Context(), probe, nil)
 
 			if got.Status != testCase.want {
 				t.Errorf("status = %v; want %v (%s)", got.Status, testCase.want, got.Detail)
@@ -361,7 +361,7 @@ func (f *fakeNetworkProbe) RemoveNetwork(ctx context.Context, id string) error {
 func TestIsolatedBridgeProbeLifecycle(t *testing.T) {
 	t.Run("create failure", func(t *testing.T) {
 		probe := &fakeNetworkProbe{createErr: errors.New("unsupported")}
-		if got := checkIsolatedBridge(t.Context(), probe); got.Status != Fail {
+		if got := checkIsolatedBridge(t.Context(), probe, nil); got.Status != Fail {
 			t.Fatalf("status = %s; want fail", got.Status)
 		}
 		if probe.removeCalls != 1 {
@@ -372,7 +372,7 @@ func TestIsolatedBridgeProbeLifecycle(t *testing.T) {
 	t.Run("cleanup survives caller cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		probe := &fakeNetworkProbe{cancel: cancel}
-		if got := checkIsolatedBridge(ctx, probe); got.Status != Pass {
+		if got := checkIsolatedBridge(ctx, probe, nil); got.Status != Pass {
 			t.Fatalf("result = %+v; want pass", got)
 		}
 		if probe.removeCalls != 1 {
@@ -394,10 +394,31 @@ func TestIsolatedBridgeProbeLifecycle(t *testing.T) {
 
 	t.Run("cleanup failure closes admission", func(t *testing.T) {
 		probe := &fakeNetworkProbe{removeErr: errors.New("busy")}
-		if got := checkIsolatedBridge(t.Context(), probe); got.Status != Fail {
+		if got := checkIsolatedBridge(t.Context(), probe, nil); got.Status != Fail {
 			t.Fatalf("result = %+v; want fail", got)
 		}
 	})
+}
+
+// TestTheBridgeProbeDoesNotCloseAdmissionOnAProfileThatDoesNotUseIt:
+// unsafe-open-egress builds no sandbox, so the isolated bridge is a
+// capability that profile never asks the daemon for. Refusing a host
+// over it would close admission on a configuration that is deliberate,
+// documented and supported — and the probe is daemon work repeated on
+// every readiness run for a network nothing would attach to.
+func TestTheBridgeProbeDoesNotCloseAdmissionOnAProfileThatDoesNotUseIt(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Network.Profile = config.NetworkProfileUnsafeOpen
+	probe := &fakeNetworkProbe{createErr: errors.New("unsupported")}
+
+	got := checkIsolatedBridge(t.Context(), probe, cfg)
+
+	if got.Status != Warn {
+		t.Errorf("status = %s; want warn — this profile never attaches a capsule to the isolated bridge", got.Status)
+	}
+	if probe.created.Name != "" {
+		t.Errorf("the probe created network %q; a profile that does not use the isolated bridge needs no probe", probe.created.Name)
+	}
 }
 
 // fakeProbe answers as the provider would. It records the group it was
