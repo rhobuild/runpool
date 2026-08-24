@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -129,35 +130,38 @@ func TestEveryRoleIsPinnedToItsWireValue(t *testing.T) {
 func roleConstants(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]string{}
-	for name, pkg := range pkgs {
-		if strings.HasSuffix(name, "_test") {
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				gen, ok := decl.(*ast.GenDecl)
-				if !ok || gen.Tok != token.CONST {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				v, ok := spec.(*ast.ValueSpec)
+				if !ok || len(v.Names) != len(v.Values) || !declaresRole(v) {
 					continue
 				}
-				for _, spec := range gen.Specs {
-					v, ok := spec.(*ast.ValueSpec)
-					if !ok || len(v.Names) != len(v.Values) || !declaresRole(v) {
+				for i, n := range v.Names {
+					lit, ok := literalOf(v.Values[i])
+					if !ok {
+						t.Errorf("%s is a Role constant this parse cannot read a value from; "+
+							"spell it as a plain string literal so the pin can see it", n.Name)
 						continue
 					}
-					for i, n := range v.Names {
-						lit, ok := literalOf(v.Values[i])
-						if !ok {
-							t.Errorf("%s is a Role constant this parse cannot read a value from; "+
-								"spell it as a plain string literal so the pin can see it", n.Name)
-							continue
-						}
-						out[n.Name] = lit
-					}
+					out[n.Name] = lit
 				}
 			}
 		}
