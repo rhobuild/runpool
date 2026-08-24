@@ -185,10 +185,17 @@ func Validate(c *Config) error {
 		if err != nil {
 			v.errf(path+".url", "%v", err)
 		} else {
-			if targetURLs[ref.CanonicalURL] {
+			// Keyed case-insensitively: GitHub logins and repository
+			// names are, so two targets differing only in case name one
+			// scope. Accepted as distinct they each take a binding key of
+			// their own, and the scale-set name check below is written on
+			// the premise that target URLs are unique — so both would
+			// carry the same default name and collide on one remote set.
+			scope := strings.ToLower(ref.CanonicalURL)
+			if targetURLs[scope] {
 				v.errf(path+".url", "duplicate target %s: bind additional tiers on the existing target instead", ref.CanonicalURL)
 			}
-			targetURLs[ref.CanonicalURL] = true
+			targetURLs[scope] = true
 			// A JIT runner is not bound to the job whose demand message
 			// triggered it — measured live, not assumed — so only a
 			// repository-scoped scale set may mount a repository cache.
