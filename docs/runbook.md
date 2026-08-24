@@ -234,7 +234,14 @@ runpool attempts inspect <id>
 ```
 
 Then decide it. Exactly one of the two decisions, and `--apply` to make
-it:
+it.
+
+The applying form takes the singleton lock, so **the controller has to be
+stopped** — and on a shared host that is every tenant's CI, not just the
+job in question. Read the attempt first, decide, and stop the controller
+for the resolution rather than the other way round. A dry run needs no
+lock, so everything except the last step can be done while serving
+continues.
 
 ```bash
 runpool attempts resolve <id> --retry --reason "..." --actor "<name>" --apply
@@ -254,7 +261,7 @@ is exactly the case where this instance could not tell.
 **`--apply` needs the controller stopped.** It takes the same singleton
 lock `serve` holds, and reports that it could not. A dry run does not.
 
-An attempt is held for one of two reasons:
+An attempt is held for one of three reasons:
 
 | Reason | What it means |
 | --- | --- |

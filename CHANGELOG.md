@@ -548,6 +548,16 @@ by its public and operational effects.
   held on carries the reason it could not be read, where a transport
   failure previously left the operator an exit code and an empty string.
 
+- **The threat model names the exit code as the same surface the control
+  file is.** Only the status the supervisor reserves for stopping before
+  the hand-over proves the runner never owned the job; every other status
+  reads as execution. That is the right direction for at-most-once — and
+  it means a supervisor the kernel kills, an out-of-memory PID 1 on a
+  tight tier, settles an attempt as completed where the runner never
+  picked the job up. Nothing runs twice; the work comes back only because
+  the provider re-offers it, and that dependency is now written down
+  rather than assumed.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
