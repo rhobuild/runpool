@@ -1,8 +1,7 @@
-package app
+package imagelock
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -21,15 +20,15 @@ func TestEmbeddedImageLockMatchesTheReviewedCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the reviewed lock: %v", err)
 	}
-	if !bytes.Equal(reviewed, imageLockJSON) {
-		t.Error("internal/app/images.lock.json differs from build/images.lock.json; " +
+	if !bytes.Equal(reviewed, reviewedJSON) {
+		t.Error("internal/imagelock/images.lock.json differs from build/images.lock.json; " +
 			"the embedded copy is what runs, so the reviewed copy must be identical")
 	}
 }
 
 // The lock records the privileged payload a capsule runs, but the capsule is
 // built from the FROM lines in its Dockerfile. Nothing else compares the two:
-// the verify script re-resolves the lock against its registry and never opens
+// the release gate re-resolves the lock against its registry and never opens
 // a Dockerfile, so a dependency update that moves one and not the other keeps
 // every check green while the reviewed document stops describing what runs.
 func TestLockedImagesAreWhatTheCapsuleIsBuiltFrom(t *testing.T) {
@@ -37,8 +36,8 @@ func TestLockedImagesAreWhatTheCapsuleIsBuiltFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the capsule Dockerfile: %v", err)
 	}
-	var lock imageLock
-	if err := json.Unmarshal(imageLockJSON, &lock); err != nil {
+	lock, err := Reviewed()
+	if err != nil {
 		t.Fatalf("parse the image lock: %v", err)
 	}
 	if len(lock.Images) == 0 {
@@ -54,45 +53,7 @@ func TestLockedImagesAreWhatTheCapsuleIsBuiltFrom(t *testing.T) {
 	}
 }
 
-// Development may select a local capsule image. A release carries the
-// qualified digest and refuses a runtime replacement.
-func TestCapsuleImageResolution(t *testing.T) {
-	fromEnv := func(k string) string {
-		if k == "RUNPOOL_CAPSULE_IMAGE" {
-			return "runpool-capsule:local-test"
-		}
-		return ""
-	}
-	img, err := CapsuleImage(fromEnv, "runpool-capsule:dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if img != "runpool-capsule:local-test" {
-		t.Errorf("with the override set, image = %q; want the override", img)
-	}
-	img, err = CapsuleImage(func(string) string { return "" }, "runpool-capsule:dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if img != "runpool-capsule:dev" {
-		t.Errorf("without override or lock entry, image = %q; want the dev tag", img)
-	}
-
-	release := "ghcr.io/rhobuild/runpool/capsule@sha256:" +
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	img, err = CapsuleImage(func(string) string { return release }, release)
-	if err != nil || img != release {
-		t.Fatalf("release image = %q, %v; want stamped digest", img, err)
-	}
-	if _, err := CapsuleImage(fromEnv, release); err == nil {
-		t.Fatal("a runtime override replaced the release capsule image")
-	}
-	if _, err := CapsuleImage(func(string) string { return "" }, "ghcr.io/rhobuild/runpool/capsule:v1"); err == nil {
-		t.Fatal("a mutable release capsule reference was accepted")
-	}
-}
-
-// TestTheLockBuildsForEveryPlatformARelease Can: what a release builds
+// TestTheLockBuildsForEveryPlatformAReleaseCan: what a release builds
 // for is bounded by what the pinned images publish.
 //
 // The two locks answer different questions — this one what is built,
@@ -101,8 +62,8 @@ func TestCapsuleImageResolution(t *testing.T) {
 // upstream does not publish for a platform cannot be built for it, so a
 // release declaring one would fail at the registry rather than here.
 func TestTheLockBuildsForEveryPlatformAReleaseCan(t *testing.T) {
-	var lock imageLock
-	if err := json.Unmarshal(imageLockJSON, &lock); err != nil {
+	lock, err := Reviewed()
+	if err != nil {
 		t.Fatalf("parse the image lock: %v", err)
 	}
 	if len(lock.Platforms) == 0 {
@@ -122,4 +83,48 @@ func TestTheLockBuildsForEveryPlatformAReleaseCan(t *testing.T) {
 	// here. A capsule runs a Linux daemon and a Linux runner, so there is
 	// no non-Linux variant to build against — and if one were ever
 	// published, that list is where it would show.
+}
+
+// TestPinnedStripsTagKeepsRegistryPort holds the rule the whole package
+// exists to have stated once: a reference is cut at the tag, and the
+// colon in a registry's port is not one. Cutting at the leftmost colon
+// turns "registry.example:5000/team/img:1.2.3" into "registry.example",
+// which resolves to nothing or to somebody else's bytes.
+const sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestPinnedStripsTagKeepsRegistryPort(t *testing.T) {
+	lock := Lock{Images: map[string]Image{
+		"a": {Ref: "registry.example:5000/team/img:1.2.3", Digest: sha},
+		"b": {Ref: "img:tag", Digest: sha},
+	}}
+	if got, err := lock.Pinned("a"); err != nil || got != "registry.example:5000/team/img@"+sha {
+		t.Errorf("registry port case = %q, %v", got, err)
+	}
+	if got, err := lock.Pinned("b"); err != nil || got != "img@"+sha {
+		t.Errorf("plain tag case = %q, %v", got, err)
+	}
+	if _, err := lock.Pinned("missing"); err == nil {
+		t.Error("a missing entry must be rejected")
+	}
+}
+
+// TestPinnedRefusesAnEntryARegistryCouldNotResolve: the lock names what
+// runs privileged, so an entry that is merely string-shaped has to be
+// refused here rather than at a pull. A digest of the right shape and
+// the wrong length is the case a concatenation cannot see.
+func TestPinnedRefusesAnEntryARegistryCouldNotResolve(t *testing.T) {
+	for name, entry := range map[string]Image{
+		"digest too short":  {Ref: "img:tag", Digest: "sha256:abc"},
+		"digest missing":    {Ref: "img:tag", Digest: ""},
+		"digest unprefixed": {Ref: "img:tag", Digest: "0123456789abcdef"},
+		"reference missing": {Ref: "", Digest: sha},
+		"reference upper":   {Ref: "IMG:tag", Digest: sha},
+		"reference spaced":  {Ref: "img tag", Digest: sha},
+		"digest algorithm":  {Ref: "img:tag", Digest: "md5:0123456789abcdef0123456789abcdef"},
+	} {
+		lock := Lock{Images: map[string]Image{"x": entry}}
+		if got, err := lock.Pinned("x"); err == nil {
+			t.Errorf("%s: Pinned = %q with no error; the lock would name bytes no registry serves", name, got)
+		}
+	}
 }

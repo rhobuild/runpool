@@ -1,33 +1,11 @@
 package app
 
 import (
-	_ "embed"
-	"encoding/json"
 	"fmt"
 
 	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/imagelock"
 )
-
-// The reviewed image lock travels inside the binary, so a controller
-// cannot be pointed at images it was not tested against by editing a file
-// next to it. A digest-qualified reference is what actually runs: a tag
-// can move, and the dind payload runs privileged.
-//
-//go:embed images.lock.json
-var imageLockJSON []byte
-
-type imageLock struct {
-	// Platforms are what a release builds for. They are not what it
-	// qualifies: build/platform.lock.json records the platforms the
-	// suites were run on, and a release may publish for one nobody has
-	// run. Keeping the two lists apart is what lets either sentence be
-	// said without implying the other.
-	Platforms []string `json:"platforms"`
-	Images    map[string]struct {
-		Ref    string `json:"ref"`
-		Digest string `json:"digest"`
-	} `json:"images"`
-}
 
 // defaultCapsuleImage is what a development build runs when nothing
 // overrides it, and the reason an unstamped build cannot fail to
@@ -71,38 +49,14 @@ func CapsuleImage(environ func(string) string, buildDefault string) (string, err
 // lock is fatal: building from unverified bytes that later run
 // privileged is worse than not building.
 func buildInputImages() (runner, dind string, err error) {
-	var lock imageLock
-	if err := json.Unmarshal(imageLockJSON, &lock); err != nil {
-		return "", "", fmt.Errorf("image lock: %w", err)
-	}
-	runner, err = pinned(lock, "runner")
+	lock, err := imagelock.Reviewed()
 	if err != nil {
 		return "", "", err
 	}
-	dind, err = pinned(lock, "dind")
+	runner, err = lock.Pinned("runner")
+	if err != nil {
+		return "", "", err
+	}
+	dind, err = lock.Pinned("dind")
 	return runner, dind, err
-}
-
-// pinned turns "repo:tag" plus a digest into "repo@digest": the tag is
-// discarded, so nothing resolves through a mutable name.
-func pinned(lock imageLock, name string) (string, error) {
-	entry, ok := lock.Images[name]
-	if !ok {
-		return "", fmt.Errorf("image lock has no %q entry", name)
-	}
-	if entry.Digest == "" || entry.Ref == "" {
-		return "", fmt.Errorf("image lock entry %q is incomplete", name)
-	}
-	repo := entry.Ref
-	// Strip the tag, keeping any registry port (host:5000/image:tag).
-	for i := len(repo) - 1; i >= 0; i-- {
-		if repo[i] == ':' {
-			repo = repo[:i]
-			break
-		}
-		if repo[i] == '/' {
-			break
-		}
-	}
-	return repo + "@" + entry.Digest, nil
 }

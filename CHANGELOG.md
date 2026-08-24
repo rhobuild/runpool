@@ -480,6 +480,10 @@ by its public and operational effects.
   Neither the architecture nor the distribution is fixed by the code that
   reads the record: what it requires is that the selection is stated, and
   that the platform is one a release can build for.
+  The image lock has one reader, which the controller, the release gate and
+  the contract suites all share, and its references and digests are read with
+  the registry's own grammar rather than cut out of a string: an entry no
+  registry could resolve fails before anything is pulled.
 
 - **A release publishes every platform it declares.** Each is built on a runner
   of its own architecture, so nothing is emulated and each standalone binary is
