@@ -2410,3 +2410,36 @@ func checkVocabulary(t *testing.T, s *Store, table, columnAnchor string) []strin
 	}
 	return out
 }
+
+// TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits.
+// start_observation holds what a serving measured about whether the
+// workload began, and it admits four of the vocabulary's seven values.
+// Which four is decided in another package, by
+// ExecutionObservation.Establishes, and the only thing between a value
+// the column refuses and a write that fails is one `if` in the lease
+// manager.
+//
+// A fifth establishing observation added there passes that guard, the
+// write is attempted, and the column refuses it -- inside the cleanup
+// that ends a serving, which then quarantines the lease it could not
+// finish. The subset is a correspondence between two packages and a
+// schema, and nothing held it.
+func TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits(t *testing.T) {
+	admitted := checkVocabulary(t, newStore(t), "capsule_leases", "start_observation")
+	slices.Sort(admitted)
+
+	var establishes []string
+	for _, o := range assignment.AllExecutionObservations {
+		if o.Establishes() {
+			establishes = append(establishes, string(o))
+		}
+	}
+	slices.Sort(establishes)
+
+	if !slices.Equal(admitted, establishes) {
+		t.Errorf("the column admits %v\nand Establishes() answers for %v\n"+
+			"a value that establishes and the column refuses fails the write that ends a "+
+			"serving; a value the column admits and nothing establishes is one no pass writes",
+			admitted, establishes)
+	}
+}
