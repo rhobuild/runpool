@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -410,7 +411,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	// The removal fails: the lease parks in quarantine with backoff
 	// booked on the intent, and the attempt stays leased — unresolved,
 	// visible, waiting.
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, ""); err == nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err == nil {
 		t.Fatal("recoverCapsuleFailure with a wedged daemon succeeded")
 	}
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
@@ -1021,8 +1022,203 @@ func TestEveryObservationHasAStartFailureReport(t *testing.T) {
 				"outcome; it is the clearest answer there is")
 		}
 	}
-	if report, unproven := startFailureReport("something-nobody-declared"); report != "" || !unproven {
-		t.Errorf("an observation this package does not know reported %q, unproven=%v; "+
-			"want no report and no claim", report, unproven)
+	// A value this package does not know makes no claim about what it
+	// means -- and still says so, because the caller logs the report as
+	// the message. An empty one is an operator page with nothing to
+	// filter, alert or search on.
+	report, unproven := startFailureReport("something-nobody-declared")
+	if !unproven {
+		t.Error("an observation this package does not know was reported as an established outcome")
+	}
+	if !strings.Contains(report, "does not declare") {
+		t.Errorf("an undeclared observation reported %q; it has to say that it is undeclared "+
+			"rather than name a meaning, and it has to say something", report)
+	}
+}
+
+// TestAProofSurvivesThePeriodicPass is the reachable sequence, driven
+// through the real recovery and the real periodic pass.
+//
+// A capsule reports that the runner never owned the job, so the attempt
+// must return to the queue even though the capsule had already reported
+// itself up. Removal then fails against a wedged daemon and the lease
+// parks in quarantine. The periodic pass that picks it up carries no
+// observation at all — it holds no daemon inventory — so without the
+// serving's own record it disposes of the attempt on evidence alone and
+// settles a job that never ran. Nothing serves that workload again, and
+// the books say it started.
+func TestAProofSurvivesThePeriodicPass(t *testing.T) {
+	h := newHarness(t, 1)
+	remover := &faultyRemover{}
+	h.useRemover(remover)
+	if err := h.deliver(demand("job-proof", "app", 81)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-proof")
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		// The capsule reported itself up and the attempt is running:
+		// this is what a settled disposition would rule on.
+		if err := tx.RecordEvidence(attempt, store.EvidenceRunningObserved); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptLeased, store.AttemptStarting); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptStarting, store.AttemptRunning); err != nil {
+			return err
+		}
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-proof")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(id, "proof-1")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The pass that measured the proof cannot finish.
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.ObservedCreated); err == nil {
+		t.Fatal("recovery with a wedged daemon succeeded")
+	}
+	if got := reloadLease(t, h, lease.ID); got.StartObservation != assignment.ObservedCreated {
+		t.Fatalf("the serving recorded %q; the proof has to outlive the pass that took it",
+			got.StartObservation)
+	}
+
+	// The daemon heals and the backoff elapses.
+	remover.healed = true
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		intents, err := tx.Resources(lease.ID)
+		if err != nil {
+			return err
+		}
+		return tx.RecordResourceError(intents[0].ID, errors.New("previous failure"), time.Now().Add(-time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+		t.Errorf("lease = %s after the periodic pass; want released", got.State)
+	}
+	if got := attemptState(t, h, attempt); got.State != store.AttemptReady {
+		t.Errorf("attempt = %s; want ready — the capsule proved the runner never owned this job", got.State)
+	}
+}
+
+// TestAbandonmentKeepsWhatThisServingMeasured: past the drain window the
+// lease is left as it is for the successor to recover, and that is
+// right -- but what this pass measured is not left with it unless it is
+// written down. Nothing re-takes it: the successor's pass only inspects
+// a runtime while the evidence is still start_authorized, and an
+// ambiguous start reaches here past that. Discarded, the capsule's proof
+// that the runner never owned the job is gone and the successor settles
+// the attempt as one that ran.
+func TestAbandonmentKeepsWhatThisServingMeasured(t *testing.T) {
+	h := newHarness(t, 1)
+	remover := &countingRemover{}
+	h.useRemover(remover)
+	if err := h.deliver(demand("job-drained", "app", 91)); err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := leaseFor(t, h, "job-drained")
+	before := reloadLease(t, h, lease.ID).State
+
+	h.srv.abandoning.Store(true)
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.ObservedCreated); err != nil {
+		t.Fatalf("abandoned recovery reported an error: %v", err)
+	}
+	if got := reloadLease(t, h, lease.ID).StartObservation; got != assignment.ObservedCreated {
+		t.Errorf("the serving recorded %q past the drain window; nothing else will ever take that measurement", got)
+	}
+	// And the branch still does what it exists for.
+	if got := reloadLease(t, h, lease.ID).State; got != before {
+		t.Errorf("lease moved from %s to %s; abandonment leaves it as it is", before, got)
+	}
+	if n := remover.calls.Load(); n != 0 {
+		t.Errorf("abandonment removed %d objects; it must dismantle nothing", n)
+	}
+}
+
+// TestTheProviderOverrulesTheCapsuleAcrossARetry: the capsule's account
+// of never having handed the job over is produced inside the machine
+// running that job, and the provider's answer replaces it. That exchange
+// happens after the recorded proof is read back, which is the whole
+// reason the read is placed where it is: on a retry the capsule is gone
+// and only the record carries its account, so a readback that ran later
+// -- or a write that ran earlier -- would leave the provider with
+// nothing to overrule and requeue a job it says was handed over.
+func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
+	h := newHarness(t, 1)
+	remover := &faultyRemover{}
+	h.useRemover(remover)
+	reg := &fakeRegistry{removeErr: errors.New("provider unreachable")}
+	h.bind.gh = reg
+	if err := h.deliver(demand("job-overruled", "app", 92)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-overruled")
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if err := tx.RecordGitHubRunnerID(attempt, 4242); err != nil {
+			return err
+		}
+		if err := tx.RecordEvidence(attempt, store.EvidenceRunningObserved); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptLeased, store.AttemptStarting); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptStarting, store.AttemptRunning); err != nil {
+			return err
+		}
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-overruled")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(id, "overruled-1")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The capsule says the runner never owned the job. The provider
+	// cannot be reached this pass, and removal fails, so the lease parks.
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.ObservedCreated); err == nil {
+		t.Fatal("recovery with a wedged daemon succeeded")
+	}
+	if got := reloadLease(t, h, lease.ID).StartObservation; got != assignment.ObservedCreated {
+		t.Fatalf("the serving recorded %q; the capsule's account is what the provider has to overrule", got)
+	}
+
+	// The retry measures nothing of its own -- the capsule is being
+	// removed -- and the provider now says it still holds the runner. This
+	// pass fails too, so what it learned has to be written down here or it
+	// is gone: the overrule reaches the disposition as a parameter only on
+	// a pass that completes.
+	reg.removeErr = githubactions.ErrJobStillRunning
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.NoObservation); err == nil {
+		t.Fatal("the second pass succeeded against a wedged daemon")
+	}
+	if got := reloadLease(t, h, lease.ID).StartObservation; got != assignment.ObservedRunning {
+		t.Fatalf("the serving recorded %q after the provider overruled the capsule; the record has to be "+
+			"written after that exchange, not before it", got)
+	}
+
+	// A third pass, with nothing measured and the provider unreachable
+	// again: the disposition comes from the record alone.
+	remover.healed = true
+	reg.removeErr = errors.New("provider unreachable")
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.NoObservation); err != nil {
+		t.Fatalf("the third pass failed: %v", err)
+	}
+	got := attemptState(t, h, attempt)
+	if got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionStartedObserved {
+		t.Errorf("attempt = %s/%s; the party that assigned the work says it was handed over, "+
+			"so it is not returned to the queue", got.State, got.Resolution)
 	}
 }

@@ -124,7 +124,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	before := reloadLease(t, h, lease.ID).State
 
 	h.srv.abandoning.Store(true)
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, ""); err != nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("abandoned recovery reported an error: %v", err)
 	}
 	if got := reloadLease(t, h, lease.ID).State; got != before {
@@ -137,7 +137,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	// The mutation half: the same call without the abandonment is the
 	// destructive path, so the assertions above are proven able to fail.
 	h.srv.abandoning.Store(false)
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, ""); err != nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("live recovery failed: %v", err)
 	}
 	if got := reloadLease(t, h, lease.ID).State; got == before {
