@@ -595,11 +595,11 @@ func (m *Launcher) awaitReady(ctx context.Context, outerID string) error {
 // where the cost is — a terminal state carries the reason the container
 // failed, that reason dies with the container, and treating it as "not
 // yet" spends the whole deadline and then reports a timeout instead.
-func stateVerdict(want string, code int, out string, execErr error) (done bool, err error) {
+func stateVerdict(want protocol.State, code int, out string, execErr error) (done bool, err error) {
 	if execErr != nil || code != 0 {
 		return false, nil
 	}
-	switch s := strings.TrimSpace(out); {
+	switch s := protocol.State(strings.TrimSpace(out)); {
 	case s == want:
 		return true, nil
 	case protocol.Terminal(s):
@@ -620,7 +620,7 @@ func stateVerdict(want string, code int, out string, execErr error) (done bool, 
 // stateVerdict exists to prevent for a container that stays up. Asking
 // the daemon whether the container is still there is what covers the one
 // that does not.
-func (m *Launcher) awaitState(ctx context.Context, containerID, want string) error {
+func (m *Launcher) awaitState(ctx context.Context, containerID string, want protocol.State) error {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		code, out, err := m.dock.Exec(ctx, containerID, []string{supervisorPath, "state"})

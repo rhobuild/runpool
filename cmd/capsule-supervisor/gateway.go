@@ -32,7 +32,7 @@ func runGateway(log *slog.Logger) int {
 	})
 	if err != nil {
 		log.Error("gateway failed", "error", err)
-		setState(protocol.FailedPrefix + err.Error())
+		setState(protocol.State(protocol.FailedPrefix + err.Error()))
 		return 1
 	}
 	return 0
