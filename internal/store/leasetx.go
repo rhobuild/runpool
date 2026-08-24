@@ -39,7 +39,7 @@ func (t *Tx) LeaseAttempt(attemptID assignment.AttemptID, bindingID assignment.B
 		id, bindingID, attemptID, tierID, LeaseReserved); err != nil {
 		return Lease{}, err
 	}
-	if err := t.RecordEvent(attemptID, "lease_attached:"+id, "lease_attached"); err != nil {
+	if err := t.RecordEvent(attemptID, "lease_attached:"+id, EventLeaseAttached); err != nil {
 		return Lease{}, err
 	}
 	return t.LeaseByID(assignment.LeaseID(id))

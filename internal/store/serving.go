@@ -333,7 +333,7 @@ func (t *Tx) CancelReady(attemptID assignment.AttemptID, resolution assignment.R
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is not ready", ErrConflict, attemptID)
 	}
-	return t.RecordEvent(attemptID, "remote_canceled", "remote_canceled")
+	return t.RecordEvent(attemptID, "remote_canceled", EventRemoteCanceled)
 }
 
 // OpenAttemptByWorkload resolves the unresolved attempt for a workload,
@@ -375,7 +375,7 @@ func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor 
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is not in manual review", ErrConflict, attemptID)
 	}
-	return t.RecordRepeatableEvent(attemptID, "operator_resolved",
+	return t.RecordRepeatableEvent(attemptID, EventOperatorResolved,
 		map[string]string{"decision": "retry", "actor": actor, "reason": reason})
 }
 
@@ -393,7 +393,7 @@ func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution a
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is not in manual review", ErrConflict, attemptID)
 	}
-	return t.RecordRepeatableEvent(attemptID, "operator_resolved",
+	return t.RecordRepeatableEvent(attemptID, EventOperatorResolved,
 		map[string]string{"decision": "settle", "actor": actor, "reason": reason})
 }
 
@@ -408,7 +408,7 @@ func (t *Tx) Settle(attemptID assignment.AttemptID, currentState AttemptState, r
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s is no longer %s", ErrConflict, attemptID, currentState)
 	}
-	return t.RecordEvent(attemptID, "attempt_settled", "attempt_settled")
+	return t.RecordEvent(attemptID, "attempt_settled", EventAttemptSettled)
 }
 
 // RequeueServing returns a serving's attempt to the queue, choosing
@@ -447,7 +447,7 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason ReviewReason) 
 	if affected == 0 {
 		return fmt.Errorf("%w: attempt %s cannot enter review from its state", ErrConflict, attemptID)
 	}
-	return t.RecordRepeatableEvent(attemptID, "manual_review_requested",
+	return t.RecordRepeatableEvent(attemptID, EventManualReviewRequested,
 		map[string]string{"reason": string(reason)})
 }
 
@@ -464,21 +464,21 @@ func (t *Tx) HoldForReview(attemptID assignment.AttemptID, reason ReviewReason) 
 // reachable conflict to absorb — the query says why. A duplicate it
 // cannot construct would be an error rather than a silent drop, which is
 // the right answer for an append-only log.
-func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind string, detail map[string]string) error {
+func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind EventKind, detail map[string]string) error {
 	encoded, err := json.Marshal(detail)
 	if err != nil {
 		return err
 	}
 	_, err = t.q.InsertSequencedAttemptEvent(t.ctx, sqlitedb.InsertSequencedAttemptEventParams{
-		AttemptID: string(attemptID), Kind: kind, DetailJson: string(encoded),
+		AttemptID: string(attemptID), Kind: string(kind), DetailJson: string(encoded),
 	})
 	return err
 }
 
 // RecordEvent appends one lifecycle event, idempotently per key.
-func (t *Tx) RecordEvent(attemptID assignment.AttemptID, idempotencyKey, kind string) error {
+func (t *Tx) RecordEvent(attemptID assignment.AttemptID, idempotencyKey string, kind EventKind) error {
 	_, err := t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: kind, DetailJson: "{}",
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: "{}",
 	})
 	return err
 }
@@ -487,13 +487,13 @@ func (t *Tx) RecordEvent(attemptID assignment.AttemptID, idempotencyKey, kind st
 // detail. The detail is marshalled here so nothing unvalidated reaches
 // the column, and it must never contain secrets — it is what an
 // operator reads back.
-func (t *Tx) RecordEventDetail(attemptID assignment.AttemptID, idempotencyKey, kind string, detail map[string]string) error {
+func (t *Tx) RecordEventDetail(attemptID assignment.AttemptID, idempotencyKey string, kind EventKind, detail map[string]string) error {
 	encoded, err := json.Marshal(detail)
 	if err != nil {
 		return err
 	}
 	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: kind, DetailJson: string(encoded),
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: string(encoded),
 	})
 	return err
 }

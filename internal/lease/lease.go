@@ -217,7 +217,7 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	// Keyed by lease: an attempt is served once per lease, and a fixed key
 	// would have the second serving's cleanup swallowed as a replay of the
 	// first.
-	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
+	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), store.EventCleanupCompleted); err != nil {
 		return err
 	}
 	d, effective := dispositionFor(lease, attempt, startObs)
