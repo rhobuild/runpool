@@ -3,6 +3,7 @@ package platform
 import (
 	"bytes"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -304,5 +305,80 @@ func TestAnyBuildablePlatformCanBeRecorded(t *testing.T) {
 	if err := (Qualified{Status: ReferenceStatusPending, Policy: unbuildable}).validate(); err == nil {
 		t.Error("a qualification was accepted for a platform no release builds for, so the " +
 			"record would claim evidence about something nobody can run")
+	}
+}
+
+// TestEveryFactIsCompared walks the Facts struct itself, so the domain
+// is the type and not a list a reader keeps in step by hand. The
+// previous shape drifted exactly that way: three properties were driven
+// and fifteen were not, so deleting any of the fifteen checks — kernel,
+// backing filesystem, nftables among them — failed nothing, and Compare
+// is what stands between the host that ran the suites and the host
+// somebody froze. Walking the struct also makes a field added to Facts
+// without a check a failure here rather than a silent hole.
+func TestEveryFactIsCompared(t *testing.T) {
+	ref := frozenQualified()
+	facts := reflect.TypeOf(Facts{})
+
+	for i := 0; i < facts.NumField(); i++ {
+		field := facts.Field(i)
+		property := strings.TrimSuffix(field.Tag.Get("json"), ",omitempty")
+		t.Run(property, func(t *testing.T) {
+			drifted := ref.Platform
+			v := reflect.ValueOf(&drifted).Elem().Field(i)
+			switch field.Type.Kind() {
+			case reflect.String:
+				v.SetString(v.String() + "-drifted")
+			case reflect.Pointer:
+				flipped := !v.Elem().Bool()
+				v.Set(reflect.ValueOf(&flipped))
+			default:
+				t.Fatalf("Facts grew a %s field; teach this walk to drift it", field.Type.Kind())
+			}
+
+			got := ref.Compare(drifted)
+			if len(got) != 1 {
+				t.Fatalf("drifting %s alone produced %d mismatches: %v — the fact is not compared",
+					property, len(got), got)
+			}
+			if got[0].Property != property {
+				t.Errorf("the mismatch names %q; want %q, which is what an operator greps the lock for",
+					got[0].Property, property)
+			}
+		})
+	}
+}
+
+// TestEveryDockerFactIsCompared is the runtime half, over the five facts
+// a serving daemon can answer for. Its previous test built the observed
+// facts from the reference's own fields and asserted zero mismatches, so
+// deleting all five checks passed it — and its only other caller is
+// double-gated behind two environment variables.
+func TestEveryDockerFactIsCompared(t *testing.T) {
+	ref := frozenQualified()
+	base := Facts{
+		Engine: ref.Platform.Engine, API: ref.Platform.API, Arch: ref.Platform.Arch,
+		CgroupVersion: ref.Platform.CgroupVersion, CgroupDriver: ref.Platform.CgroupDriver,
+		Rootless: ref.Platform.Rootless,
+	}
+	if got := ref.CompareDockerFacts(base); len(got) != 0 {
+		t.Fatalf("the matching runtime facts mismatched: %v", got)
+	}
+	for property, drift := range map[string]func(*Facts){
+		"engine":         func(f *Facts) { f.Engine += "-drifted" },
+		"api":            func(f *Facts) { f.API += "-drifted" },
+		"arch":           func(f *Facts) { f.Arch += "-drifted" },
+		"cgroup_version": func(f *Facts) { f.CgroupVersion += "-drifted" },
+		"cgroup_driver":  func(f *Facts) { f.CgroupDriver += "-drifted" },
+		"rootless":       func(f *Facts) { flipped := !*f.Rootless; f.Rootless = &flipped },
+	} {
+		t.Run(property, func(t *testing.T) {
+			observed := base
+			drift(&observed)
+			got := ref.CompareDockerFacts(observed)
+			if len(got) != 1 || got[0].Property != property {
+				t.Errorf("drifting %s produced %v; want exactly that one mismatch", property, got)
+			}
+		})
 	}
 }
