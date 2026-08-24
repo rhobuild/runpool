@@ -79,6 +79,22 @@ func (t *Tx) SetLeaseRuntimeName(id assignment.LeaseID, runtimeName assignment.R
 		runtimeName, id))
 }
 
+// RecordLeaseStartObservation keeps what this serving measured about
+// whether the workload began.
+//
+// It is written on the way into the cleanup that ends a serving, after
+// every refinement that can overrule the measurement and before the
+// first destructive step -- so a retry of that cleanup reads back the
+// answer the pass that failed had already reached. The write is
+// unconditional because a later establishing measurement is a better one:
+// the capsule's own account of itself arrives after the daemon's, and the
+// provider's after that.
+func (t *Tx) RecordLeaseStartObservation(id assignment.LeaseID, obs assignment.ExecutionObservation) error {
+	return t.mustAffect(t.tx.Exec(
+		`UPDATE capsule_leases SET start_observation = ?, updated_at = unixepoch() WHERE id = ?`,
+		obs, id))
+}
+
 func (t *Tx) LeaseByID(id assignment.LeaseID) (Lease, error) {
 	l, err := t.scanLease(t.tx.QueryRow(selectLease+`WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -305,15 +321,24 @@ func (t *Tx) PurgeLease(id assignment.LeaseID) error {
 	return nil
 }
 
-const selectLease = `SELECT id, binding_id, attempt_id, tier_id, state, runtime_name, created_at, updated_at FROM capsule_leases `
+const selectLease = `SELECT id, binding_id, attempt_id, tier_id, state, runtime_name, start_observation, created_at, updated_at FROM capsule_leases `
 
 type rowScanner interface{ Scan(...any) error }
 
 func (t *Tx) scanLease(r rowScanner) (Lease, error) {
 	var l Lease
 	var created, updated int64
+	// NULL is an absence: a serving that recorded nothing, a runtime that
+	// never registered. NullString renders both as the empty string, which
+	// is each type's own zero -- NoObservation by name for the measurement,
+	// and for the runtime a name no lookup will answer for. The storage
+	// represents the absence and the domain's zero value means it; this is
+	// the one line where they meet.
+	var observed, runtime sql.NullString
 	err := r.Scan(&l.ID, &l.BindingID, &l.AttemptID, &l.TierID, &l.State,
-		&l.RuntimeName, &created, &updated)
+		&runtime, &observed, &created, &updated)
+	l.RuntimeName = assignment.RuntimeName(runtime.String)
+	l.StartObservation = assignment.ExecutionObservation(observed.String)
 	l.CreatedAt = time.Unix(created, 0).UTC()
 	l.UpdatedAt = time.Unix(updated, 0).UTC()
 	return l, err

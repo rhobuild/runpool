@@ -27,7 +27,7 @@ func TestLateRedeliveryDoesNotRecreateWork(t *testing.T) {
 	lease, attemptID := leaseFor(t, h, "probe-job")
 	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
 	h.recordEvidence(lease.ID, store.EvidenceExitObserved)
-	if err := h.srv.leases.Finalize(t.Context(), lease.ID, ""); err != nil {
+	if err := h.srv.leases.Finalize(t.Context(), lease.ID, assignment.NoObservation); err != nil {
 		t.Fatal(err)
 	}
 

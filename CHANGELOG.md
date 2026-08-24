@@ -54,6 +54,15 @@ by its public and operational effects.
   answer is available — and an authorization that could not be written at
   all says so, so an assignment nothing ever started is still simply
   served again.
+  That proof outlives the pass that took it. Cleanup can fail against a
+  wedged daemon, and the retry is a different pass with nothing measured:
+  it either measured nothing or found the capsule a measurement would
+  have come from already gone, which is the one this cleanup is removing.
+  What a serving establishes is kept with its lease, so the retry reads it
+  back rather than settling a job that never ran as one that did. A later
+  measurement that does establish something still wins, because the
+  accounts arrive in order — the daemon's, then the capsule's own, then
+  the provider's.
 - Under the restricted network profile a capsule has **no route out**.
   Its only egress is a per-capsule gateway that resolves and connects
   on its behalf under a default-deny policy, which is also the DNS

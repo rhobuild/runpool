@@ -97,8 +97,15 @@ type Lease struct {
 	TierID      assignment.TierID
 	State       LeaseState
 	RuntimeName assignment.RuntimeName
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// StartObservation is what this serving measured about whether the
+	// workload began, kept because the measurement outlives the goroutine
+	// that took it. A cleanup that has to be retried re-enters the
+	// finalizing transaction with nothing in hand, and an attempt whose
+	// capsule proved the runner never owned the job would otherwise settle
+	// there as one that ran. Empty means this serving established nothing.
+	StartObservation assignment.ExecutionObservation
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // ResourceKind is the Docker object type of an owned capsule resource;

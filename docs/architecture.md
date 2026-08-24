@@ -122,6 +122,14 @@ carries no provider identifier at all. Keeping the two apart is what
 stops a cleanup state being read as an execution outcome, which is how
 a job that never ran gets settled as if it had.
 
+It does carry one measurement: what its own serving established about
+whether the workload began. That is not lease state and is never read as
+any — the disposition still rules on the attempt, from evidence and
+from a proof. It is kept because cleanup can fail and be retried, and
+the pass that measured the proof is then not the pass that disposes of
+the attempt; a retry arrives having measured nothing, and would settle a
+job that never ran.
+
 An attempt whose work provably never began returns to the servable queue
 and is served again, so it holds one lease per serving: at most one live
 at a time, and the released ones are the record of what it cost. The
