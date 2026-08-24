@@ -20,7 +20,7 @@ type AssignmentAttempt struct {
 	Resolution        string
 	ReviewReason      string
 	ReviewedAt        sql.NullInt64
-	ReviewedBy        string
+	ReviewedBy        sql.NullString
 	ReceivedAt        int64
 	SettledAt         sql.NullInt64
 }

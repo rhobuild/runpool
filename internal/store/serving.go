@@ -86,7 +86,7 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		Evidence:          Evidence(r.ExecutionEvidence),
 		ReviewReason:      r.ReviewReason,
 		Resolution:        r.Resolution,
-		ReviewedBy:        r.ReviewedBy,
+		ReviewedBy:        r.ReviewedBy.String,
 		ReceivedAt:        r.ReceivedAt,
 		ReviewedAt:        r.ReviewedAt.Int64,
 		SettledAt:         r.SettledAt.Int64,
@@ -367,7 +367,7 @@ func (t *Tx) CountReadyAttempts(bindingID assignment.BindingID) (int64, error) {
 // in the event.
 func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor string) error {
 	affected, err := t.q.ResolveManualReviewToReady(t.ctx, sqlitedb.ResolveManualReviewToReadyParams{
-		Resolution: "", ReviewedBy: actor, AttemptID: string(attemptID),
+		Resolution: "", ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err
@@ -385,7 +385,7 @@ func (t *Tx) ResolveReviewToReady(attemptID assignment.AttemptID, reason, actor 
 // in the event.
 func (t *Tx) ResolveReviewToSettled(attemptID assignment.AttemptID, resolution, reason, actor string) error {
 	affected, err := t.q.ResolveManualReviewToSettled(t.ctx, sqlitedb.ResolveManualReviewToSettledParams{
-		Resolution: resolution, ReviewedBy: actor, AttemptID: string(attemptID),
+		Resolution: resolution, ReviewedBy: sql.NullString{String: actor, Valid: true}, AttemptID: string(attemptID),
 	})
 	if err != nil {
 		return err

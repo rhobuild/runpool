@@ -96,7 +96,13 @@ CREATE TABLE assignment_attempts (
 	resolution           TEXT NOT NULL DEFAULT '',
 	review_reason        TEXT NOT NULL DEFAULT '',
 	reviewed_at          INTEGER,
-	reviewed_by          TEXT NOT NULL DEFAULT '',
+	-- NULL until a person resolves the attempt, beside reviewed_at which
+	-- already is: the pair records one event, and recording its absence
+	-- two different ways made a reader learn both spellings. The empty
+	-- string is refused outright -- an actor is required where a
+	-- resolution is recorded, so a row never holds a reviewer with no
+	-- name.
+	reviewed_by          TEXT CHECK (reviewed_by IS NULL OR length(reviewed_by) > 0),
 	received_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	settled_at           INTEGER,
 	FOREIGN KEY (delivery_id, binding_id)

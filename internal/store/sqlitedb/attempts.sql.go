@@ -7,6 +7,7 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
 
 const authorizeAttemptStart = `-- name: AuthorizeAttemptStart :execrows
@@ -506,7 +507,7 @@ WHERE id = ?3 AND state = 'manual_review'
 
 type ResolveManualReviewToReadyParams struct {
 	Resolution string
-	ReviewedBy string
+	ReviewedBy sql.NullString
 	AttemptID  string
 }
 
@@ -533,7 +534,7 @@ WHERE id = ?3 AND state = 'manual_review'
 
 type ResolveManualReviewToSettledParams struct {
 	Resolution string
-	ReviewedBy string
+	ReviewedBy sql.NullString
 	AttemptID  string
 }
 

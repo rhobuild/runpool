@@ -2189,3 +2189,39 @@ func TestTheConnectionStringStillAsksForFullSynchronous(t *testing.T) {
 			"driver keeps defaulting to it, and no suite would notice the change.", got)
 	}
 }
+
+// TestTheColumnRefusesAReviewerWithNoName: reviewed_by is NULL until a
+// person resolves the attempt, beside reviewed_at which already was —
+// one event, recorded absent one way. The empty string is refused by the
+// column itself, which closes a door the command layer was guarding
+// alone: a caller reaching the resolving transaction directly could
+// record a resolution with no actor, and the audit trail held a reviewer
+// with no name.
+func TestTheColumnRefusesAReviewerWithNoName(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-anon", "job-anon")
+	inTx(t, s, func(tx *Tx) error {
+		return tx.HoldForReview(id, ReviewReasonStartOutcomeUnknown)
+	})
+
+	err := s.Tx(t.Context(), func(tx *Tx) error {
+		return tx.ResolveReviewToReady(id, "a reason", "")
+	})
+	if err == nil {
+		t.Fatal("a resolution with no actor was recorded; the audit trail holds a reviewer with no name")
+	}
+
+	inTx(t, s, func(tx *Tx) error {
+		return tx.ResolveReviewToReady(id, "a reason", "alice")
+	})
+	var got Attempt
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		got, err = tx.Get(id)
+		return err
+	})
+	if got.ReviewedBy != "alice" {
+		t.Errorf("reviewed_by = %q; want the actor who resolved it", got.ReviewedBy)
+	}
+}
