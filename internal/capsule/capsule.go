@@ -606,12 +606,29 @@ func stateVerdict(want string, code int, out string, execErr error) (done bool, 
 
 // awaitState polls a supervisor-family container until it reports the
 // wanted state or one it can no longer leave.
+//
+// An exec into a container that is no longer running always fails, and a
+// supervisor writes its terminal state and then exits — so that state is
+// readable for an instant and a poll can miss it. Treated as "not yet",
+// every such failure spends the whole deadline and reports a timeout
+// naming nothing an operator can act on, which is the outcome
+// stateVerdict exists to prevent for a container that stays up. Asking
+// the daemon whether the container is still there is what covers the one
+// that does not.
 func (m *Launcher) awaitState(ctx context.Context, containerID, want string) error {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		code, out, err := m.dock.Exec(ctx, containerID, []string{supervisorPath, "state"})
 		if done, verdict := stateVerdict(want, code, out, err); done {
 			return verdict
+		}
+		if err != nil {
+			// Best effort: a daemon that cannot answer this leaves the
+			// poll exactly where it was, which is the deadline below.
+			if state, serr := m.dock.ContainerStatus(ctx, containerID); serr == nil && state.Status != engine.StatusRunning {
+				return fmt.Errorf("container %s exited %d before reaching %q",
+					engine.ShortID(containerID), state.ExitCode, want)
+			}
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("container %s did not reach %q within %s", engine.ShortID(containerID), want, readyTimeout)

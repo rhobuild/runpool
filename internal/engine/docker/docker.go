@@ -362,7 +362,7 @@ func (c *Client) ContainerStatus(ctx context.Context, id string) (engine.Contain
 		return engine.ContainerState{}, fmt.Errorf("container %s reports no state", id)
 	}
 	return engine.ContainerState{
-		Status:   string(inspected.Container.State.Status),
+		Status:   engine.ContainerStatus(inspected.Container.State.Status),
 		ExitCode: inspected.Container.State.ExitCode,
 	}, nil
 }

@@ -142,7 +142,10 @@ Every external object is created under a durable **resource intent**:
 planned, then creating, then confirmed with its id. A crash anywhere
 leaves an intent whose deterministic name either finds the object or
 proves its absence. Ownership is proven by labels, never by name — a
-name collision is refused rather than adopted. Destructive recovery repeats
+name collision is refused rather than adopted. One create needs the adapter
+to make that true: the daemon answers a taken volume name with the volume
+that is already there and no error, so the adapter inspects first and
+reports the collision the rest of the port is built on. Destructive recovery repeats
 that proof immediately before removal, using the expected instance and lease;
 a stale intent cannot delete a foreign object that later reused its name.
 

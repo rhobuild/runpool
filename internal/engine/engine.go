@@ -129,13 +129,38 @@ type ContainerSpec struct {
 	CgroupParent string
 }
 
+// ContainerStatus is the daemon's own word for where a container is in
+// its lifecycle.
+//
+// It is a named type because three other vocabularies in this tree spell
+// some of the same words and mean different things by them: a supervisor
+// protocol state, an execution observation and an attempt state each have
+// a "running". The one that arrives from outside this process is the one
+// that must not be mistaken for the others, and it is the one that used
+// to be a bare string.
+//
+// The set below is not closed. A daemon may answer with something this
+// build has no name for, and the reader that decides whether a job may
+// have run treats an unknown status as proving nothing rather than as
+// impossible.
+type ContainerStatus string
+
+const (
+	StatusCreated    ContainerStatus = "created"
+	StatusRunning    ContainerStatus = "running"
+	StatusPaused     ContainerStatus = "paused"
+	StatusRestarting ContainerStatus = "restarting"
+	StatusExited     ContainerStatus = "exited"
+	StatusDead       ContainerStatus = "dead"
+)
+
 // ContainerState is what the daemon can still say about a container after
 // it has stopped. ExitCode is carried alongside Status because a stopped
 // container's own filesystem is no longer reachable — no exec, and its
 // tmpfs control surface is gone — so the exit code is the only account of
 // itself a capsule can leave behind.
 type ContainerState struct {
-	Status   string
+	Status   ContainerStatus
 	ExitCode int
 }
 
