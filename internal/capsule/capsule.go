@@ -444,6 +444,20 @@ func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
 		if err == nil && code == 0 {
 			return protocolVerdict(code, out)
 		}
+		if err != nil {
+			// A capsule that is no longer running will never write the
+			// file, so waiting out the deadline for it spends thirty
+			// seconds per attempt and then reports a read failure --
+			// which is not the incompatibility the caller holds on, so
+			// the tier retries the same broken image until its budget
+			// runs out, under a reason that names none of this. The
+			// fallback awaitState carries for the same shape.
+			if state, serr := m.dock.ContainerStatus(ctx, outerID); serr == nil &&
+				state.Status != engine.StatusRunning {
+				return fmt.Errorf("%w: the capsule exited %d before declaring a control protocol",
+					ErrIncompatibleImage, state.ExitCode)
+			}
+		}
 		if time.Now().After(deadline) {
 			if err != nil {
 				return fmt.Errorf("read the capsule control protocol: %w", err)

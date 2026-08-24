@@ -29,8 +29,17 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	}
 
 	code, out, err := m.dock.Exec(ctx, string(prepared.RuntimeID), []string{supervisorPath, "state"})
-	if err != nil || code != 0 {
-		return assignment.ObservedUnavailable, fmt.Errorf("capsule state unreadable (exit %d): %s", code, out)
+	if err != nil {
+		// The cause travels. This is the inspection an ambiguous start is
+		// held on, and a transport failure leaves out empty -- so
+		// reporting the exit code alone handed the operator deciding
+		// about that attempt a page with no reason on it.
+		return assignment.ObservedUnavailable,
+			fmt.Errorf("capsule state unreadable: %w", err)
+	}
+	if code != 0 {
+		return assignment.ObservedUnavailable,
+			fmt.Errorf("capsule state unreadable (exit %d): %s", code, out)
 	}
 	return classifySupervisorState(protocol.State(strings.TrimSpace(out)))
 }

@@ -537,6 +537,17 @@ by its public and operational effects.
   deciding about, durable nowhere but a log that rotates. Every advance is
   in `runpool attempts inspect` now, with a time and with who observed it.
 
+- **A capsule image that cannot run is refused by name, in about a second.**
+  A tier may name its own capsule image, and one whose entrypoint crashes
+  writes no control protocol — ever. Waiting out the declaration deadline
+  for it spent thirty seconds per attempt and then reported a read
+  failure, which is not the incompatibility the controller holds on: the
+  tier retried the same broken image until its retry budget ran out,
+  under a reason that named none of it. It is now held on the first
+  attempt, naming the exit code. And the inspection an ambiguous start is
+  held on carries the reason it could not be read, where a transport
+  failure previously left the operator an exit code and an empty string.
+
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
