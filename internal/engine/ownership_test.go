@@ -5,8 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"maps"
-	"slices"
+	"strings"
 	"testing"
 )
 
@@ -81,100 +80,118 @@ func marshal(t *testing.T, labels map[string]string) string {
 // carries a lease, and therefore whether an object wearing it is
 // infrastructure or an orphan.
 func TestEveryRoleIsPinnedToItsWireValue(t *testing.T) {
-	pinned := map[Role]string{
-		RoleCapsule:        "capsule",
-		RoleGateway:        "gateway",
-		RoleCapsuleNetwork: "capsule-net",
-		RoleDindData:       "dind-data",
-		RoleUplink:         "uplink",
-		RoleCacheLane:      "cache-lane",
-		RoleProbe:          "probe",
-		RolePreflightProbe: "preflight-probe",
+	pinned := map[string]string{
+		"RoleCapsule":        "capsule",
+		"RoleGateway":        "gateway",
+		"RoleCapsuleNetwork": "capsule-net",
+		"RoleDindData":       "dind-data",
+		"RoleUplink":         "uplink",
+		"RoleCacheLane":      "cache-lane",
+		"RoleProbe":          "probe",
+		"RolePreflightProbe": "preflight-probe",
 	}
-	for role, want := range pinned {
-		if string(role) != want {
-			t.Errorf("role renders %q; the label says %q, and an instance upgraded "+
-				"mid-flight would stop recognising what the previous build owns", role, want)
-		}
-	}
-
-	// Totality: a role added to the vocabulary and not here is one whose
-	// sweep class nobody decided.
-	seen := map[string]bool{}
-	for _, want := range pinned {
-		if seen[want] {
-			t.Errorf("two roles share the wire value %q", want)
-		}
-		seen[want] = true
-	}
-	// Against the source, not against itself: a count written here would
-	// be a number this test also chose, and a ninth constant would pass.
 	declared := roleConstants(t)
-	if len(declared) != len(pinned) {
-		t.Errorf("engine.go declares %d roles and this pin holds %d: %v\n"+
-			"decide the new role's sweep class -- does it carry a lease? -- and add it here",
-			len(declared), len(pinned), declared)
-	}
-	for _, name := range declared {
-		if !slices.ContainsFunc(slices.Collect(maps.Keys(pinned)), func(r Role) bool {
-			return roleName(r) == name
-		}) {
-			t.Errorf("the constant %s is not pinned to a wire value", name)
+
+	for name, value := range declared {
+		want, ok := pinned[name]
+		if !ok {
+			t.Errorf("%s is declared and not pinned. Decide its sweep class -- does it "+
+				"carry a lease? -- and add it here with its wire value", name)
+			continue
 		}
+		if value != want {
+			t.Errorf("%s renders %q; the label says %q, and an instance upgraded mid-flight "+
+				"would stop recognising what the previous build owns", name, value, want)
+		}
+	}
+	for name := range pinned {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("%s is pinned here and no longer declared", name)
+		}
+	}
+	seen := map[string]string{}
+	for name, value := range declared {
+		if other, dup := seen[value]; dup {
+			t.Errorf("%s and %s share the wire value %q", other, name, value)
+		}
+		seen[value] = name
 	}
 }
 
 // roleConstants reads this package's own source for every constant
-// declared with type Role.
-func roleConstants(t *testing.T) []string {
+// declared with type Role, and returns each one's literal value. Taking
+// the value from the source rather than mapping it back by hand is what
+// keeps this to two lists -- the declaration and the pin above -- rather
+// than three, where the third would be the one nobody remembers.
+//
+// It walks every file in the package, not one: a constant added in a new
+// file would otherwise escape the count in silence.
+func roleConstants(t *testing.T) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "engine.go", nil, 0)
+	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []string
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.CONST {
+	out := map[string]string{}
+	for name, pkg := range pkgs {
+		if strings.HasSuffix(name, "_test") {
 			continue
 		}
-		for _, spec := range gen.Specs {
-			v, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			if id, ok := v.Type.(*ast.Ident); !ok || id.Name != "Role" {
-				continue
-			}
-			for _, n := range v.Names {
-				out = append(out, n.Name)
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					v, ok := spec.(*ast.ValueSpec)
+					if !ok || len(v.Names) != len(v.Values) || !declaresRole(v) {
+						continue
+					}
+					for i, n := range v.Names {
+						lit, ok := literalOf(v.Values[i])
+						if !ok {
+							t.Errorf("%s is a Role constant this parse cannot read a value from; "+
+								"spell it as a plain string literal so the pin can see it", n.Name)
+							continue
+						}
+						out[n.Name] = lit
+					}
+				}
 			}
 		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no Role constants found, so this proves nothing")
 	}
 	return out
 }
 
-// roleName maps a value back to the constant that names it, which is the
-// half a source parse cannot do.
-func roleName(r Role) string {
-	switch r {
-	case RoleCapsule:
-		return "RoleCapsule"
-	case RoleGateway:
-		return "RoleGateway"
-	case RoleCapsuleNetwork:
-		return "RoleCapsuleNetwork"
-	case RoleDindData:
-		return "RoleDindData"
-	case RoleUplink:
-		return "RoleUplink"
-	case RoleCacheLane:
-		return "RoleCacheLane"
-	case RoleProbe:
-		return "RoleProbe"
-	case RolePreflightProbe:
-		return "RolePreflightProbe"
+// declaresRole covers both spellings a Role constant can take: the typed
+// form `RoleX Role = "x"` and the conversion form `RoleX = Role("x")`.
+// Counting only the first would let the second escape.
+func declaresRole(v *ast.ValueSpec) bool {
+	if id, ok := v.Type.(*ast.Ident); ok && id.Name == "Role" {
+		return true
 	}
-	return ""
+	for _, val := range v.Values {
+		if call, ok := val.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "Role" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func literalOf(expr ast.Expr) (string, bool) {
+	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 1 {
+		expr = call.Args[0]
+	}
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	return strings.Trim(lit.Value, `"`), true
 }
