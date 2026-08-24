@@ -145,17 +145,51 @@ func deps(t *testing.T, pkg string) map[string]bool {
 	return set
 }
 
+// TestCoreDoesNotDependOnTheProviderAdapter walks the whole module, the
+// way the engine-SDK rule does, because the rule it enforces is about
+// every package that is not the wiring: iterated over corePackages
+// alone, a new package escaped it by not being listed — the list said
+// which packages were checked, not which were allowed, and nothing
+// failed when those diverged. The wiring layers are the exemption, named
+// here with the reason the corePackages comment already gives: injecting
+// the adapter is their job. corePackages stays as the roster the
+// narrow-dependency rules run over.
 func TestCoreDoesNotDependOnTheProviderAdapter(t *testing.T) {
+	wiring := map[string]bool{
+		module + "/internal/app":     true,
+		module + "/internal/command": true,
+		module + "/cmd/runpool":      true,
+		adapter:                      true,
+		adapter + "/jit":             true,
+	}
+	graph := importGraph(t)
+	for importer, imports := range graph {
+		if wiring[importer] || strings.HasPrefix(importer, adapter+"/") ||
+			strings.HasPrefix(importer, module+"/test/") {
+			continue
+		}
+		for _, imported := range imports {
+			if imported == adapter {
+				t.Errorf("%s imports %s; the domain must stay provider-neutral — "+
+					"translate at the adapter and hand the domain opaque keys", importer, adapter)
+			}
+			if imported == upstream || strings.HasPrefix(imported, upstream+"/") {
+				t.Errorf("%s imports %s; only the adapter, the wiring and their "+
+					"contract suites may see the provider SDK", importer, imported)
+			}
+		}
+	}
+	// Direct imports catch the edge someone adds; the closure is what
+	// catches it arriving through a third package. The roster's packages
+	// keep the transitive check they always had.
 	for _, pkg := range corePackages {
 		t.Run(strings.TrimPrefix(pkg, module+"/"), func(t *testing.T) {
 			d := deps(t, pkg)
 			if d[adapter] {
-				t.Errorf("%s depends on %s; the domain must stay provider-neutral — "+
-					"translate at the adapter and hand the domain opaque keys", pkg, adapter)
+				t.Errorf("%s depends on %s transitively", pkg, adapter)
 			}
 			if d[upstream] {
-				t.Errorf("%s depends on %s; only the adapter and its contract suite "+
-					"may import the provider SDK", pkg, upstream)
+				t.Errorf("%s depends on %s transitively", pkg, upstream)
 			}
 		})
 	}

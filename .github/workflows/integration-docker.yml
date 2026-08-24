@@ -33,6 +33,13 @@ on:
       - "scripts/drills/**"
       - "test/drills/**"
       - "test/contract/**"
+      # The dependency manifests: the Moby client is a v0.x dependency and
+      # the adapter behind it is proved live rather than hermetically, so a
+      # go.mod-only bump is precisely the change class these contracts
+      # exist for -- and it touched none of the paths above.
+      - "go.mod"
+      - "go.sum"
+      - "build/images.lock.json"
       - ".github/workflows/integration-docker.yml"
   push:
     branches: [main]

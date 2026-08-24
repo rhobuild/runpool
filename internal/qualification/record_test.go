@@ -393,3 +393,38 @@ func TestTheEmbeddedReferenceIsTheOneARecordIsBuiltFrom(t *testing.T) {
 			"platform it is about", err)
 	}
 }
+
+// TestASuiteWithoutEvidenceIsNotNamed: the record is a release asset,
+// and its suite list was a constant stamped unconditionally -- assembly
+// opened three evidence paths and never the live logs, so a suite step
+// deleted from the workflow left the published record still naming it,
+// with nothing anywhere able to tell. Each named suite now requires the
+// artifact that proves it ran, and an empty artifact is a run that
+// produced nothing.
+func TestASuiteWithoutEvidenceIsNotNamed(t *testing.T) {
+	for name, breakIt := range map[string]func(dir string) error{
+		"the drill log is missing": func(dir string) error {
+			return os.Remove(filepath.Join(dir, "live", "lifecycle-drills.log"))
+		},
+		"the upstream log is empty": func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "upstream", "contract.log"), nil, 0o600)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.CopyFS(dir, os.DirFS("testdata/evidence")); err != nil {
+				t.Fatal(err)
+			}
+			if err := breakIt(dir); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Assemble(frozenReference(), dir, testBuild(), qualifiedAt())
+			if err == nil {
+				t.Fatal("a record was assembled naming a suite it holds no evidence for")
+			}
+			if !strings.Contains(err.Error(), "suite ") {
+				t.Errorf("error = %q; it has to name the suite, which is what the operator re-runs", err)
+			}
+		})
+	}
+}

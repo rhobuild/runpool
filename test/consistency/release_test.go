@@ -38,16 +38,53 @@ func TestTheReleaseBuildsEveryPlatformTheLockDeclares(t *testing.T) {
 	if err := yaml.Unmarshal(body, &workflow); err != nil {
 		t.Fatal(err)
 	}
-	built := valuesOf(&workflow, "platform")
-	slices.Sort(built)
-	built = slices.Compact(built)
 	declared := slices.Clone(lock.Platforms)
 	slices.Sort(declared)
 
-	if !slices.Equal(built, declared) {
-		t.Errorf("the release builds for %s; the lock declares %s. A platform in one list "+
-			"and not the other is one a release claims and does not produce, or one it "+
-			"produces and does not offer.",
-			strings.Join(built, ", "), strings.Join(declared, ", "))
+	// Per matrix, not a union across the workflow: a union stays whole
+	// while one job loses a leg — the capsule matrix down to one
+	// architecture still contributed both values through the controller's
+	// matrix, and the index published without the missing child. Each
+	// matrix that names platforms must name every declared one itself.
+	matrices := platformMatrices(&workflow)
+	if len(matrices) < 2 {
+		t.Fatalf("found %d platform matrices in release.yml; the capsule and controller "+
+			"builds each carry one, so this proves nothing", len(matrices))
 	}
+	for i, built := range matrices {
+		slices.Sort(built)
+		built = slices.Compact(built)
+		if !slices.Equal(built, declared) {
+			t.Errorf("platform matrix %d builds for %s; the lock declares %s. A platform in one "+
+				"list and not the other is one a release claims and does not produce, or one it "+
+				"produces and does not offer.",
+				i+1, strings.Join(built, ", "), strings.Join(declared, ", "))
+		}
+	}
+}
+
+// platformMatrices returns, for each strategy matrix in the document,
+// the platform values its include entries carry — one slice per matrix,
+// so a leg missing from one cannot be papered over by its sibling.
+func platformMatrices(n *yaml.Node) [][]string {
+	var out [][]string
+	var walk func(*yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if n.Content[i].Value == "matrix" {
+					if built := valuesOf(n.Content[i+1], "platform"); len(built) > 0 {
+						out = append(out, built)
+					}
+				}
+				walk(n.Content[i+1])
+			}
+			return
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(n)
+	return out
 }
