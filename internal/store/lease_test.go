@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -502,8 +503,39 @@ func TestPendingMigrationBacksUpFirst(t *testing.T) {
 		t.Fatalf("schema version = %d; want %d", v, len(synthetic))
 	}
 	backup := filepath.Join(dir, fmt.Sprintf("pre-migration-v%d.db", len(migrations)))
-	if _, err := os.Stat(backup); err != nil {
-		t.Fatalf("pre-migration backup missing: %v", err)
+
+	// Opened raw, not through Open: Open migrates, and a backup this build
+	// re-migrated on inspection could not show what the copy held. What
+	// makes the file a rollback path is its contents -- the version the
+	// schema had before the upgrade, the rows that were live, and nothing
+	// the upgrade added. A file that merely exists proves none of that: an
+	// empty file exists, and a copy taken after the loop exists too.
+	db, err := sql.Open("sqlite", DSN(backup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != len(migrations) {
+		t.Errorf("the backup holds schema version %d; want the pre-migration %d -- a copy taken "+
+			"after the upgrade is not a rollback path", version, len(migrations))
+	}
+	var leases int
+	if err := db.QueryRow(`SELECT count(*) FROM capsule_leases`).Scan(&leases); err != nil {
+		t.Fatalf("the backup could not answer for its rows: %v", err)
+	}
+	if leases != 1 {
+		t.Errorf("the backup holds %d leases; want the 1 that was live -- restoring it would lose data", leases)
+	}
+	var added int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE name = 'synthetic_two'`).Scan(&added); err != nil {
+		t.Fatal(err)
+	}
+	if added != 0 {
+		t.Error("the backup holds the table the pending migration created; the copy was taken after the upgrade")
 	}
 }
 
