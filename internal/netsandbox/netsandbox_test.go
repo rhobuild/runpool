@@ -362,10 +362,10 @@ func TestBuildDeniesEverythingItDiscovered(t *testing.T) {
 // policy it started with, so its work continues.
 func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	gateways := []engine.OwnedContainer{
-		{ID: "gw-ok", Name: "gw-ok", Role: capsule.RoleGateway, Running: true},
-		{ID: "gw-bad", Name: "gw-bad", Role: capsule.RoleGateway, Running: true},
-		{ID: "gw-stopped", Name: "gw-stopped", Role: capsule.RoleGateway},
-		{ID: "runner", Name: "runner", Role: capsule.RoleCapsule, Running: true},
+		{ID: "gw-ok", Name: "gw-ok", Role: engine.RoleGateway, Running: true},
+		{ID: "gw-bad", Name: "gw-bad", Role: engine.RoleGateway, Running: true},
+		{ID: "gw-stopped", Name: "gw-stopped", Role: engine.RoleGateway},
+		{ID: "runner", Name: "runner", Role: engine.RoleCapsule, Running: true},
 	}
 	inForce := &capsule.Sandbox{UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8"}}
 
@@ -424,9 +424,9 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 	d := &fakeDaemon{
 		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
-			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
-			{ID: "runner", Role: capsule.RoleCapsule, Running: true},
+			{ID: "gw-1", Role: engine.RoleGateway, Running: true},
+			{ID: "gw-2", Role: engine.RoleGateway, Running: true},
+			{ID: "runner", Role: engine.RoleCapsule, Running: true},
 		},
 		refuse: map[string]bool{"gw-2": true},
 	}
@@ -535,7 +535,7 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 		refuse:  map[string]bool{},
 		listErr: errors.New("daemon unreachable"),
 		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
+			{ID: "gw-1", Role: engine.RoleGateway, Running: true},
 		},
 	}
 	n := newTestSandbox(t, daemon, inForce)
@@ -605,7 +605,7 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 	for i := range count {
 		id := fmt.Sprintf("gw-%02d", i)
 		containers = append(containers, engine.OwnedContainer{
-			ID: id, Name: id, Role: capsule.RoleGateway, Running: true,
+			ID: id, Name: id, Role: engine.RoleGateway, Running: true,
 		})
 	}
 	d := &fakeDaemon{containers: containers, delay: perCall}
@@ -652,7 +652,7 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 // function as the bound.
 func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
 	d := &fakeDaemon{containers: []engine.OwnedContainer{
-		{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
+		{ID: "gw-1", Name: "gw-1", Role: engine.RoleGateway, Running: true},
 	}}
 	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
 
@@ -747,7 +747,7 @@ func TestEnumeratingGatewaysIsBounded(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &fakeDaemon{containers: []engine.OwnedContainer{
-				{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
+				{ID: "gw-1", Name: "gw-1", Role: engine.RoleGateway, Running: true},
 			}}
 			n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
 
@@ -833,7 +833,7 @@ func TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency(t *testing.T) {
 	// A gateway to close, so "nothing was closed" is an observation
 	// rather than an empty daemon answering emptily.
 	daemon := &fakeDaemon{
-		containers: []engine.OwnedContainer{{ID: "gw-1", Role: capsule.RoleGateway, LeaseID: "lse-1", Running: true}},
+		containers: []engine.OwnedContainer{{ID: "gw-1", Role: engine.RoleGateway, LeaseID: "lse-1", Running: true}},
 	}
 	n := newTestSandbox(t, daemon, &capsule.Sandbox{})
 
@@ -878,14 +878,14 @@ func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T)
 	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
+			{ID: "gw-1", Role: engine.RoleGateway, Running: true, LeaseID: "lse-1"},
 		},
 	}
 	// The launch's gateway appears just after the pass has listed, which
 	// is the whole of the window this closes.
 	daemon.onList = func(f *fakeDaemon) {
 		f.containers = append(f.containers, engine.OwnedContainer{
-			ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"})
+			ID: "gw-late", Role: engine.RoleGateway, Running: true, LeaseID: "lse-late"})
 		f.onList = nil
 	}
 	n := newTestSandbox(t, daemon, sandboxFixture())
@@ -915,7 +915,7 @@ func TestAConfirmedLaunchUnderAnUnchangedPolicyTouchesNoDaemon(t *testing.T) {
 	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
+			{ID: "gw-1", Role: engine.RoleGateway, Running: true, LeaseID: "lse-1"},
 		},
 	}
 	n := newTestSandbox(t, daemon, sandboxFixture())
@@ -945,13 +945,13 @@ func TestAConfirmationThatCannotReachTheGatewayFailsTheLaunch(t *testing.T) {
 	}{
 		"the gateway refuses the policy in force": {
 			containers: []engine.OwnedContainer{
-				{ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"},
+				{ID: "gw-late", Role: engine.RoleGateway, Running: true, LeaseID: "lse-late"},
 			},
 			refuse: map[string]bool{"gw-late": true},
 		},
 		"the lease owns no running gateway": {
 			containers: []engine.OwnedContainer{
-				{ID: "gw-other", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-other"},
+				{ID: "gw-other", Role: engine.RoleGateway, Running: true, LeaseID: "lse-other"},
 			},
 			refuse: map[string]bool{},
 		},
@@ -979,7 +979,7 @@ func TestAConfirmationThatWasOvertakenFailsTheLaunch(t *testing.T) {
 	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
-			{ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"},
+			{ID: "gw-late", Role: engine.RoleGateway, Running: true, LeaseID: "lse-late"},
 		},
 	}
 	n := newTestSandbox(t, daemon, tighter(launched))
@@ -1006,7 +1006,7 @@ func TestARestrictionThatCouldNotBeClosedIsRetried(t *testing.T) {
 		refuse:    map[string]bool{"gw-bad": true},
 		removeErr: map[string]error{"gw-bad": errors.New("container is wedged")},
 		containers: []engine.OwnedContainer{
-			{ID: "gw-bad", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-bad"},
+			{ID: "gw-bad", Role: engine.RoleGateway, Running: true, LeaseID: "lse-bad"},
 		},
 	}
 	n := newTestSandbox(t, daemon, sandboxFixture())
@@ -1042,8 +1042,8 @@ func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
 		uplinkSubnet: "172.30.0.0/24",
 		probeOut:     "", // saw nothing: the deny set cannot be trusted
 		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
-			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
+			{ID: "gw-1", Role: engine.RoleGateway, Running: true},
+			{ID: "gw-2", Role: engine.RoleGateway, Running: true},
 		},
 	}
 	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
 	"github.com/rhobuild/runpool/internal/engine"
@@ -21,10 +20,10 @@ func TestMeasureWeighsOnlyThisInstancesLanes(t *testing.T) {
 	h := newHarness(t, 1)
 	h.probe.free = engine.FilesystemFree{FreeBytes: 500, FreeInodes: 90}
 	h.probe.usage = []engine.VolumeUsage{
-		{Name: "lane-a", Size: 100, Role: cache.RoleCacheLane},
-		{Name: "lane-b", Size: 40, Role: cache.RoleCacheLane},
+		{Name: "lane-a", Size: 100, Role: engine.RoleCacheLane},
+		{Name: "lane-b", Size: 40, Role: engine.RoleCacheLane},
 		{Name: "workspace", Size: 9000, Role: "workspace"},
-		{Name: "unmeasured", Size: -1, Role: cache.RoleCacheLane},
+		{Name: "unmeasured", Size: -1, Role: engine.RoleCacheLane},
 	}
 
 	facts, err := h.srv.disk.measure(t.Context())

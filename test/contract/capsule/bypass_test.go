@@ -43,7 +43,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	// The uplink stands in for the instance's shared egress network.
 	uplinkID, err := dock.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:   string(string(leaseID) + "-uplink"),
-		Labels: engine.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: "contract", Role: engine.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatalf("uplink: %v", err)
@@ -170,7 +170,7 @@ func TestNetworkSandboxBypass(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+string(engine.RoleGateway)+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}
@@ -203,7 +203,7 @@ func dumpSandboxDiag(ctx context.Context, t *testing.T, dock *docker.Client,
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+string(short), "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+string(engine.RoleGateway)+"-"+string(short), "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Logf("could not resolve gateway for diagnostics: %v", err)
 		return

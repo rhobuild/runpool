@@ -12,7 +12,6 @@ import (
 	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/cache"
-	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/lease"
@@ -513,5 +512,5 @@ func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target s
 func (h *harness) resolveWithRuntime(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
 	h.srv.caps = &fakeCapsule{obs: obs}
 	h.srv.resolveInterrupted(ctx, h.bind, lease,
-		engine.OwnedContainer{ID: "runner-x", Role: capsule.RoleCapsule, Running: false}, true)
+		engine.OwnedContainer{ID: "runner-x", Role: engine.RoleCapsule, Running: false}, true)
 }

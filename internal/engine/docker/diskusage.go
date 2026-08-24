@@ -63,7 +63,7 @@ func (c *Client) ProbeFilesystemFree(ctx context.Context, image string, instance
 		Labels: engine.Ownership{
 			Instance: instanceID,
 			Kind:     engine.KindContainer,
-			Role:     "probe",
+			Role:     engine.RoleProbe,
 		}.Labels(),
 	})
 	if err != nil {

@@ -54,6 +54,47 @@ const (
 	KindVolume    ObjectKind = "volume"
 )
 
+// Role is what an object Runpool owns is for. It is the port's because
+// the port is where it travels -- four structs carry it across, and the
+// only package the Moby adapter may import beside assignment is this
+// one, so a constant anywhere else leaves the adapter spelling its own
+// probe role by hand, as it did.
+//
+// The values are a compatibility surface: they are stamped into labels
+// that outlive the process that wrote them, so an instance upgraded
+// mid-flight must still recognise what the previous build owns. The pin
+// is in this package's own test, which spelled these strings raw while
+// the constants lived where this package could not see them.
+type Role string
+
+const (
+	// RoleCapsule is the outer container itself -- the adoptable object
+	// whose exit is the job's exit.
+	RoleCapsule Role = "capsule"
+	// RoleGateway is the capsule's egress gateway: the only container on
+	// both the internal isolated bridge and the Runpool uplink.
+	RoleGateway Role = "gateway"
+	// RoleCapsuleNetwork is the isolated bridge the capsule sits on. Not
+	// RoleNetwork: beside KindNetwork that would read as a kind, which is
+	// the cross-vocabulary confusion this type exists to end.
+	RoleCapsuleNetwork Role = "capsule-net"
+	// RoleDindData is the volume holding a capsule's inner daemon state.
+	RoleDindData Role = "dind-data"
+	// RoleUplink is the instance's one egress network: gateways' second
+	// leg. Like a cache lane it carries no lease, and sweeps must read
+	// that as "infrastructure", never as "orphan".
+	RoleUplink Role = "uplink"
+	// RoleCacheLane is one project's warm workspace, held across leases.
+	RoleCacheLane Role = "cache-lane"
+	// RoleProbe is a short-lived helper this build runs to ask the host
+	// something -- a filesystem reading, an interface list.
+	RoleProbe Role = "probe"
+	// RolePreflightProbe is the same idea before anything serves: the
+	// host preflight's own container, distinct so a sweep can tell a
+	// preflight still running from a probe a serving instance started.
+	RolePreflightProbe Role = "preflight-probe"
+)
+
 // Ownership is what a Runpool instance stamps on everything it creates,
 // and the only thing that proves an object is its to remove. A name is
 // not proof: a foreign object can carry the name a plan expects, and
@@ -69,7 +110,7 @@ type Ownership struct {
 	Instance assignment.InstanceID
 	Lease    assignment.LeaseID
 	Kind     ObjectKind
-	Role     string
+	Role     Role
 	Attempt  assignment.AttemptID
 	Target   assignment.TargetID
 	Tier     assignment.TierID
@@ -88,7 +129,7 @@ func (o Ownership) Labels() map[string]string {
 	for key, value := range map[string]string{
 		labelKind:    string(o.Kind),
 		labelLease:   string(o.Lease),
-		labelRole:    o.Role,
+		labelRole:    string(o.Role),
 		labelAttempt: string(o.Attempt),
 		labelTarget:  string(o.Target),
 		labelTier:    string(o.Tier),
@@ -188,7 +229,7 @@ type OwnedContainer struct {
 	ID      string
 	Name    string
 	Kind    ObjectKind
-	Role    string
+	Role    Role
 	LeaseID assignment.LeaseID
 	Running bool
 }
@@ -213,7 +254,7 @@ type NetworkSpec struct {
 type OwnedResource struct {
 	ID      string
 	LeaseID assignment.LeaseID
-	Role    string
+	Role    Role
 }
 
 // ShortID trims an object id to the width daemon tooling displays,
@@ -238,7 +279,7 @@ type VolumeUsage struct {
 	// labels so a caller can ask what a volume is for without knowing
 	// how ownership is written down. Labels stays for the vocabulary
 	// that is the caller's own, such as which lane a cache volume is.
-	Role   string
+	Role   Role
 	Labels map[string]string
 	// Size in bytes; -1 when the daemon could not compute it.
 	Size int64
@@ -348,7 +389,7 @@ func OwnershipFrom(labels map[string]string) (Ownership, bool) {
 		Instance: assignment.InstanceID(labels[labelInstance]),
 		Lease:    assignment.LeaseID(labels[labelLease]),
 		Kind:     ObjectKind(labels[labelKind]),
-		Role:     labels[labelRole],
+		Role:     Role(labels[labelRole]),
 		Attempt:  assignment.AttemptID(labels[labelAttempt]),
 		Target:   assignment.TargetID(labels[labelTarget]),
 		Tier:     assignment.TierID(labels[labelTier]),
