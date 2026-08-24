@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -151,7 +152,7 @@ func TestLoadFileUnknownField(t *testing.T) {
 // sets RUNPOOL_LOG_LEVEL=debug beside a configuration file gets no debug
 // logging and no explanation, and looks for the reason somewhere else.
 func TestFileModeRefusesEveryQuickStartVariable(t *testing.T) {
-	for _, name := range []string{EnvLogLevel, EnvNetworkProfile} {
+	for _, name := range quickStartTargetVars {
 		environ := func(k string) string {
 			switch k {
 			case EnvConfigFile:
@@ -169,5 +170,27 @@ func TestFileModeRefusesEveryQuickStartVariable(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error for %s = %q; want it to name the variable", name, err)
 		}
+	}
+}
+
+// TestTheConflictListIsTheTwelveVariables. The refusal and its test both
+// iterate quickStartTargetVars, so a variable dropped from the list
+// leaves both self-consistent: production stops refusing it beside a
+// configuration file and the test stops checking it, in one edit. The
+// literals here are the independent statement — a deletion is a diff in
+// this constant, reviewed as one.
+func TestTheConflictListIsTheTwelveVariables(t *testing.T) {
+	want := []string{
+		"RUNPOOL_GITHUB_URL", "RUNPOOL_GITHUB_RUNNER_GROUP", "RUNPOOL_GITHUB_TOKEN_FILE",
+		"RUNPOOL_HOST_TOPOLOGY", "RUNPOOL_HOST_RESERVE_CPU", "RUNPOOL_HOST_RESERVE_MEMORY",
+		"RUNPOOL_HOST_RESERVE_SWAP", "RUNPOOL_HOST_RESERVE_FREE_DISK", "RUNPOOL_TIER",
+		"RUNPOOL_PARALLELISM", "RUNPOOL_LOG_LEVEL", "RUNPOOL_NETWORK_PROFILE",
+	}
+	got := slices.Clone(quickStartTargetVars)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("quickStartTargetVars = %v\nwant %v — RUNPOOL_GITHUB_TOKEN alone is exempt, "+
+			"because a file's tokenEnv may name it", quickStartTargetVars, want)
 	}
 }

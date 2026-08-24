@@ -116,15 +116,15 @@ func Validate(c *Config) error {
 					"must be at least %s: the egress gateway reserves %s of the lease envelope and the capsule needs the rest",
 					ByteSize(GatewayReserveMemory+MinCapsuleMemory), ByteSize(GatewayReserveMemory))
 			}
-			if int64(t.Resources.CPU) <= GatewayReserveCPUs {
+			if int64(t.Resources.CPU) < GatewayReserveCPUs+MinCapsuleCPUs {
 				v.errf(path+".resources.cpu",
-					"must exceed %.1f: the egress gateway reserves that much of the lease envelope",
-					float64(GatewayReserveCPUs)/1e9)
+					"must be at least %.1f: the egress gateway reserves %.1f of the lease envelope and the capsule needs the rest",
+					float64(GatewayReserveCPUs+MinCapsuleCPUs)/1e9, float64(GatewayReserveCPUs)/1e9)
 			}
-			if t.Resources.PIDs <= GatewayReservePIDs {
+			if t.Resources.PIDs < GatewayReservePIDs+MinCapsulePIDs {
 				v.errf(path+".resources.pids",
-					"must exceed %d: the egress gateway reserves that many of the lease envelope",
-					GatewayReservePIDs)
+					"must be at least %d: the egress gateway reserves %d of the lease envelope and the capsule needs the rest",
+					GatewayReservePIDs+MinCapsulePIDs, GatewayReservePIDs)
 			}
 		}
 	}

@@ -319,3 +319,25 @@ func TestParseTargetURLRefusesReservedRoutes(t *testing.T) {
 		}
 	}
 }
+
+// TestDigestQualifiedMeansARegistryCouldResolveIt: the check gates which
+// image a tier's privileged payload runs, and as a pattern it accepted
+// anything before the digest — a reference no registry could resolve
+// validated and failed at the pull.
+func TestDigestQualifiedMeansARegistryCouldResolveIt(t *testing.T) {
+	const sha = "@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	for ref, want := range map[string]bool{
+		"ghcr.io/acme/capsule" + sha:      true,
+		"registry.example:5000/img" + sha: true,
+		"img:tag" + sha:                   true,
+		"IMG Q:tag" + sha:                 false,
+		"upper/CASE" + sha:                false,
+		"ghcr.io/acme/capsule:v1":         false,
+		"ghcr.io/acme/capsule@sha256:abc": false,
+		"":                                false,
+	} {
+		if got := IsDigestQualifiedImage(ref); got != want {
+			t.Errorf("IsDigestQualifiedImage(%q) = %v; want %v", ref, got, want)
+		}
+	}
+}

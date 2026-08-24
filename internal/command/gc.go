@@ -51,7 +51,14 @@ func runGC(streams IO, apply, aggressive bool) error {
 		}
 		defer unlock()
 	} else {
-		st, err = store.OpenReadOnly(stateDir())
+		// The shared preview open, not a bare read-only one: gc alone went
+		// around it, so a gc preview against a schema the controller had
+		// not migrated failed with the raw store error and without the
+		// sentence explaining that the safe path is closed while the
+		// irreversible one is open -- and a daemon that could not be
+		// reached leaked the store handle it had already opened.
+		var release func()
+		st, dock, release, err = previewStore(ctx)
 		if errors.Is(err, store.ErrNoState) {
 			fmt.Fprintf(streams.Out, "no state in %s: this instance has not run yet\n", stateDir())
 			return nil
@@ -59,10 +66,7 @@ func runGC(streams IO, apply, aggressive bool) error {
 		if err != nil {
 			return err
 		}
-		dock, err = docker.New(ctx)
-		if err != nil {
-			return fmt.Errorf("docker: %w", err)
-		}
+		defer release()
 	}
 	defer st.Close()
 	defer dock.Close()
@@ -123,6 +127,13 @@ func runGC(streams IO, apply, aggressive bool) error {
 	}
 	if len(res.Failed) > 0 {
 		return fmt.Errorf("%d eviction(s) failed; the next pass retries them", len(res.Failed))
+	}
+	if len(res.AuditFailed) > 0 {
+		// A failed eviction exits non-zero and is retried; a hole in the
+		// audit trail is not retried by anything, which makes it the more
+		// serious of the two and it exited zero -- a script reading $?
+		// saw success for a run that left the trail incomplete.
+		return fmt.Errorf("%d eviction(s) evicted but not recorded in the audit log; the trail is incomplete and no pass rewrites it", len(res.AuditFailed))
 	}
 	return nil
 }
