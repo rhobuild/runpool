@@ -143,7 +143,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 
 	recorder := s.leases.Recorder(ctx, lease.ID)
 	s.advanceAttempt(ctx, attemptID, store.AttemptLeased, store.AttemptPreparing)
-	sandbox, err := s.netSandbox.forLaunch(prepCtx)
+	sandbox, err := s.netSandbox.ForLaunch(prepCtx)
 	if err != nil {
 		log.Error("network sandbox refresh failed", "error", err)
 		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
@@ -180,7 +180,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// the policy it carries can be checked against the one in force --
 	// and the last moment before the capsule is authorized to start, so
 	// it is the only one at which a stale gateway is still free.
-	if err := s.netSandbox.confirmLaunch(prepCtx, lease.ID, sandbox); err != nil {
+	if err := s.netSandbox.ConfirmLaunch(prepCtx, lease.ID, sandbox); err != nil {
 		log.Error("the capsule's gateway does not carry the egress policy in force", "error", err)
 		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return

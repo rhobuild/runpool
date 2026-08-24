@@ -5,10 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"slices"
-
 	"github.com/rhobuild/runpool/internal/cache"
-	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
 	"github.com/rhobuild/runpool/internal/engine"
@@ -205,30 +202,4 @@ func TestCollectGarbageRunsWhatTheLevelObliges(t *testing.T) {
 		t.Fatalf("a soft emergency left %d free lane(s); AllFree did not reach the planner", lanes())
 	}
 	_ = loc
-}
-
-// TestRediscoverClosesEveryGatewayWhenDiscoveryFails. The policy in force
-// is not a safe fallback, only an older one: a network that appeared
-// since it was computed is reachable and there is no way to tell. So a
-// discovery that cannot be trusted closes every gateway rather than
-// relaying under a set that cannot be shown to be current.
-func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
-	d := &fakeSandboxDaemon{
-		uplinkID:     "up-1",
-		uplinkSubnet: "172.30.0.0/24",
-		probeOut:     "", // saw nothing: the deny set cannot be trusted
-		containers: []engine.OwnedContainer{
-			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
-			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
-		},
-	}
-	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
-
-	n.rediscover(t.Context())
-
-	// Sorted: closing fans out, so the order is the order the daemon
-	// answered in and nothing should depend on it.
-	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
-		t.Errorf("removed %v; a failed rediscovery has to close every gateway", d.removes())
-	}
 }

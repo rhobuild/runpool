@@ -1,4 +1,4 @@
-package app
+package netsandbox
 
 import (
 	"context"
@@ -86,10 +86,10 @@ func TestPolicyChangeNamesItself(t *testing.T) {
 	}
 }
 
-// fakeSandboxDaemon answers for both halves of the daemon the sandbox
+// fakeDaemon answers for both halves of the daemon the sandbox
 // uses. Its point is the states that decide the design: a probe that sees
 // nothing, and a gateway that refuses the policy it is handed.
-type fakeSandboxDaemon struct {
+type fakeDaemon struct {
 	uplinkID     string
 	uplinkSubnet string
 	subnets      []string
@@ -110,7 +110,7 @@ type fakeSandboxDaemon struct {
 	// has been taken. Appending there is how a gateway appears between a
 	// pass listing them and that pass finishing, which is the moment a
 	// launch creates one.
-	onList func(*fakeSandboxDaemon)
+	onList func(*fakeDaemon)
 	// delay is how long each gateway control command takes, which is
 	// what makes a serial pass distinguishable from a concurrent one.
 	delay time.Duration
@@ -151,7 +151,7 @@ type fakeSandboxDaemon struct {
 
 // serve models one gateway control command occupying the daemon for as
 // long as it takes, which is what the concurrency counters below see.
-func (f *fakeSandboxDaemon) serve() {
+func (f *fakeDaemon) serve() {
 	f.enter()
 	defer f.leave()
 	if f.delay > 0 {
@@ -159,7 +159,7 @@ func (f *fakeSandboxDaemon) serve() {
 	}
 }
 
-func (f *fakeSandboxDaemon) note(into *[]string, id string) {
+func (f *fakeDaemon) note(into *[]string, id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	*into = append(*into, id)
@@ -168,7 +168,7 @@ func (f *fakeSandboxDaemon) note(into *[]string, id string) {
 // enter and leave track how many control commands the daemon is serving
 // at once. That is what a refresh's cost turns on, and unlike wall-clock
 // time it does not change with how loaded the machine is.
-func (f *fakeSandboxDaemon) enter() {
+func (f *fakeDaemon) enter() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inFlight++
@@ -177,19 +177,19 @@ func (f *fakeSandboxDaemon) enter() {
 	}
 }
 
-func (f *fakeSandboxDaemon) leave() {
+func (f *fakeDaemon) leave() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inFlight--
 }
 
-func (f *fakeSandboxDaemon) peakInFlight() int {
+func (f *fakeDaemon) peakInFlight() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.peak
 }
 
-func (f *fakeSandboxDaemon) sorted(from *[]string) []string {
+func (f *fakeDaemon) sorted(from *[]string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := slices.Clone(*from)
@@ -197,10 +197,10 @@ func (f *fakeSandboxDaemon) sorted(from *[]string) []string {
 	return out
 }
 
-func (f *fakeSandboxDaemon) reloads() []string { return f.sorted(&f.reloaded) }
+func (f *fakeDaemon) reloads() []string { return f.sorted(&f.reloaded) }
 
 // eventsFor is the ordered record for one container.
-func (f *fakeSandboxDaemon) eventsFor(id string) []string {
+func (f *fakeDaemon) eventsFor(id string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
@@ -211,24 +211,24 @@ func (f *fakeSandboxDaemon) eventsFor(id string) []string {
 	}
 	return out
 }
-func (f *fakeSandboxDaemon) removes() []string { return f.sorted(&f.removed) }
+func (f *fakeDaemon) removes() []string { return f.sorted(&f.removed) }
 
-func (f *fakeSandboxDaemon) EnsureOwnedNetwork(context.Context, engine.NetworkSpec) (string, error) {
+func (f *fakeDaemon) EnsureOwnedNetwork(context.Context, engine.NetworkSpec) (string, error) {
 	return f.uplinkID, nil
 }
-func (f *fakeSandboxDaemon) NetworkSubnet(context.Context, string) (string, error) {
+func (f *fakeDaemon) NetworkSubnet(context.Context, string) (string, error) {
 	return f.uplinkSubnet, nil
 }
-func (f *fakeSandboxDaemon) AllNetworkSubnets(context.Context) ([]string, error) {
+func (f *fakeDaemon) AllNetworkSubnets(context.Context) ([]string, error) {
 	return f.subnets, nil
 }
-func (f *fakeSandboxDaemon) RunTask(ctx context.Context, _ engine.ContainerSpec) (int64, string, error) {
+func (f *fakeDaemon) RunTask(ctx context.Context, _ engine.ContainerSpec) (int64, string, error) {
 	f.mu.Lock()
 	f.buildDeadline, f.buildBounded = ctx.Deadline()
 	f.mu.Unlock()
 	return 0, f.probeOut, f.probeErr
 }
-func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]engine.OwnedContainer, error) {
+func (f *fakeDaemon) ListOwnedContainers(ctx context.Context, _ assignment.InstanceID) ([]engine.OwnedContainer, error) {
 	f.mu.Lock()
 	f.listDeadline, f.listBounded = ctx.Deadline()
 	f.lists++
@@ -242,7 +242,7 @@ func (f *fakeSandboxDaemon) ListOwnedContainers(ctx context.Context, _ assignmen
 	}
 	return answer, nil
 }
-func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, cmd []string) (int, string, error) {
+func (f *fakeDaemon) Exec(_ context.Context, id string, cmd []string) (int, string, error) {
 	f.serve()
 	// The command, not merely that some exec happened: closing a gateway
 	// and reloading one are both execs, and only one of them revokes.
@@ -252,7 +252,7 @@ func (f *fakeSandboxDaemon) Exec(_ context.Context, id string, cmd []string) (in
 	}
 	return 0, "", nil
 }
-func (f *fakeSandboxDaemon) ExecWithInput(_ context.Context, id string, _ []string, _ []byte) (int, string, error) {
+func (f *fakeDaemon) ExecWithInput(_ context.Context, id string, _ []string, _ []byte) (int, string, error) {
 	f.serve()
 	if f.refuse[id] {
 		return 1, "refused", nil
@@ -260,7 +260,7 @@ func (f *fakeSandboxDaemon) ExecWithInput(_ context.Context, id string, _ []stri
 	f.note(&f.reloaded, id)
 	return 0, "", nil
 }
-func (f *fakeSandboxDaemon) RemoveContainer(ctx context.Context, id string) error {
+func (f *fakeDaemon) RemoveContainer(ctx context.Context, id string) error {
 	f.mu.Lock()
 	f.removeDeadline, f.removeBounded = ctx.Deadline()
 	f.mu.Unlock()
@@ -273,9 +273,9 @@ func (f *fakeSandboxDaemon) RemoveContainer(ctx context.Context, id string) erro
 	return nil
 }
 
-func newTestSandbox(t *testing.T, daemon sandboxDaemon, inForce *capsule.Sandbox) *networkSandbox {
+func newTestSandbox(t *testing.T, daemon Daemon, inForce *capsule.Sandbox) *Manager {
 	t.Helper()
-	return &networkSandbox{
+	return &Manager{
 		log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		daemon:     daemon,
 		instanceID: "instance-0001",
@@ -316,7 +316,7 @@ func TestParseHostCIDRs(t *testing.T) {
 func TestBuildRefusesABlindDenySet(t *testing.T) {
 	// `ip ... scope global` filters, so a probe that saw nothing prints
 	// nothing. Scope is not re-checked here — the command is the filter.
-	n := newTestSandbox(t, &fakeSandboxDaemon{
+	n := newTestSandbox(t, &fakeDaemon{
 		uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24", probeOut: "",
 	}, nil)
 	if _, err := n.build(t.Context(), sandboxRefreshBudget); err == nil {
@@ -329,7 +329,7 @@ func TestBuildRefusesABlindDenySet(t *testing.T) {
 // reach the deny set. Any one of them missing is a hole in every
 // capsule's egress, which is why this fails serve rather than warning.
 func TestBuildDeniesEverythingItDiscovered(t *testing.T) {
-	n := newTestSandbox(t, &fakeSandboxDaemon{
+	n := newTestSandbox(t, &fakeDaemon{
 		uplinkID:     "up-1",
 		uplinkSubnet: "172.30.0.0/24",
 		subnets:      []string{"172.18.0.0/16"},
@@ -370,7 +370,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	inForce := &capsule.Sandbox{UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8"}}
 
 	t.Run("a restriction that did not land closes the gateway", func(t *testing.T) {
-		d := &fakeSandboxDaemon{containers: gateways, refuse: map[string]bool{"gw-bad": true}}
+		d := &fakeDaemon{containers: gateways, refuse: map[string]bool{"gw-bad": true}}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{
 			UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8", "192.168.0.0/16"},
@@ -384,7 +384,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	})
 
 	t.Run("a relaxation that did not land leaves the work running", func(t *testing.T) {
-		d := &fakeSandboxDaemon{containers: gateways, refuse: map[string]bool{"gw-bad": true}}
+		d := &fakeDaemon{containers: gateways, refuse: map[string]bool{"gw-bad": true}}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-1"})
 		if len(d.removes()) != 0 {
@@ -393,7 +393,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	})
 
 	t.Run("nothing changed installs nothing", func(t *testing.T) {
-		d := &fakeSandboxDaemon{containers: gateways}
+		d := &fakeDaemon{containers: gateways}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-1", Deny: []string{"10.0.0.0/8"}})
 		if len(d.reloads())+len(d.removes()) != 0 {
@@ -402,7 +402,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 	})
 
 	t.Run("a recreated uplink is a change even with the same deny set", func(t *testing.T) {
-		d := &fakeSandboxDaemon{containers: gateways}
+		d := &fakeDaemon{containers: gateways}
 		n := newTestSandbox(t, d, inForce)
 		n.applyPolicy(t.Context(), &capsule.Sandbox{UplinkNetworkID: "up-2", Deny: []string{"10.0.0.0/8"}})
 		if !slices.Equal(d.reloads(), []string{"gw-bad", "gw-ok"}) {
@@ -422,7 +422,7 @@ func TestApplyPolicyCostsWhatTheChangeWas(t *testing.T) {
 // daemon takes to answer, which is exactly the window the deny-all is
 // there to close.
 func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
-	d := &fakeSandboxDaemon{
+	d := &fakeDaemon{
 		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
 			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
@@ -453,12 +453,12 @@ func TestCloseGatewaysRemovesEvenWhatWillNotDeny(t *testing.T) {
 // A nil sandbox is the unsafe-open-egress profile, and every serving path
 // asks it the same questions.
 func TestANilSandboxIsTheOpenProfile(t *testing.T) {
-	var n *networkSandbox
-	sb, err := n.forLaunch(t.Context())
+	var n *Manager
+	sb, err := n.ForLaunch(t.Context())
 	if sb != nil || err != nil {
 		t.Errorf("forLaunch on the open profile = (%v, %v); want no policy and no error", sb, err)
 	}
-	n.watch(t.Context()) // returns rather than ticking forever
+	n.Watch(t.Context()) // returns rather than ticking forever
 }
 
 // TestNewNetworkSandboxFailsServeClosed. The constructor is where the
@@ -471,12 +471,12 @@ func TestNewNetworkSandboxFailsServeClosed(t *testing.T) {
 	cfg := &config.Config{}
 	config.ApplyDefaults(cfg)
 
-	blind := &fakeSandboxDaemon{uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24", probeOut: ""}
-	if _, err := newNetworkSandbox(t.Context(), blind, "instance-0001", "probe", cfg, log); err == nil {
+	blind := &fakeDaemon{uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24", probeOut: ""}
+	if _, err := New(t.Context(), blind, "instance-0001", "probe", cfg, log); err == nil {
 		t.Error("serve would have started on a deny set built from a probe that saw nothing")
 	}
 
-	seeing := &fakeSandboxDaemon{
+	seeing := &fakeDaemon{
 		uplinkID: "up-1", uplinkSubnet: "172.30.0.0/24",
 		probeOut: "2: eth0    inet 192.0.2.10/24 scope global eth0",
 	}
@@ -495,12 +495,12 @@ func TestNewNetworkSandboxFailsServeClosed(t *testing.T) {
 	}
 	cfg.Network.DenyCIDRs = []config.CIDR{deny}
 	cfg.Network.AllowPrivateCIDRs = []config.CIDR{allow}
-	n, err := newNetworkSandbox(t.Context(), seeing, "instance-0001", "probe", cfg, log)
+	n, err := New(t.Context(), seeing, "instance-0001", "probe", cfg, log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The snapshot a launch is cut from is in force from the start.
-	sb, err := n.forLaunch(t.Context())
+	sb, err := n.ForLaunch(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestARestrictionThatCouldNotBeEnumeratedIsRetried(t *testing.T) {
 		UplinkSubnet:    "172.30.0.0/24",
 		Deny:            []string{"10.0.0.0/8"},
 	}
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		refuse:  map[string]bool{},
 		listErr: errors.New("daemon unreachable"),
 		containers: []engine.OwnedContainer{
@@ -608,7 +608,7 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 			ID: id, Name: id, Role: capsule.RoleGateway, Running: true,
 		})
 	}
-	d := &fakeSandboxDaemon{containers: containers, delay: perCall}
+	d := &fakeDaemon{containers: containers, delay: perCall}
 	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
 
 	failed, err := n.reloadGateways(t.Context(), nil, []string{"10.0.0.0/8"})
@@ -651,7 +651,7 @@ func TestARefreshPaysItsExecBoundsInParallel(t *testing.T) {
 // behind it. Bounding the exec and not the removal left that in the same
 // function as the bound.
 func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
-	d := &fakeSandboxDaemon{containers: []engine.OwnedContainer{
+	d := &fakeDaemon{containers: []engine.OwnedContainer{
 		{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
 	}}
 	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
@@ -692,7 +692,7 @@ func TestClosingAGatewayIsBoundedInBothSteps(t *testing.T) {
 // The bound is asserted rather than waited out: a test that waits two
 // minutes to prove a two-minute budget is a test nobody runs.
 func TestDiscoveringTheEnvironmentIsBounded(t *testing.T) {
-	d := &fakeSandboxDaemon{
+	d := &fakeDaemon{
 		uplinkID:     "up-1",
 		uplinkSubnet: "172.30.0.0/24",
 		subnets:      []string{"172.18.0.0/16"},
@@ -735,18 +735,18 @@ func TestDiscoveringTheEnvironmentIsBounded(t *testing.T) {
 func TestEnumeratingGatewaysIsBounded(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		run  func(*networkSandbox) error
+		run  func(*Manager) error
 	}{
-		{"reloading", func(n *networkSandbox) error {
+		{"reloading", func(n *Manager) error {
 			_, err := n.reloadGateways(context.Background(), nil, []string{"10.0.0.0/8"})
 			return err
 		}},
-		{"closing", func(n *networkSandbox) error {
+		{"closing", func(n *Manager) error {
 			return n.closeGateways(context.Background())
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := &fakeSandboxDaemon{containers: []engine.OwnedContainer{
+			d := &fakeDaemon{containers: []engine.OwnedContainer{
 				{ID: "gw-1", Name: "gw-1", Role: capsule.RoleGateway, Running: true},
 			}}
 			n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
@@ -784,7 +784,7 @@ func TestEnumeratingGatewaysIsBounded(t *testing.T) {
 // deployment's grace period the difference is a SIGKILL, which leaves
 // every message session open for the next start to wait out.
 func TestARefreshGivesUpWhenItsCallerIsDone(t *testing.T) {
-	n := newTestSandbox(t, &fakeSandboxDaemon{}, &capsule.Sandbox{})
+	n := newTestSandbox(t, &fakeDaemon{}, &capsule.Sandbox{})
 
 	// Stand in for the launch that is holding it.
 	n.state.refreshing <- struct{}{}
@@ -832,7 +832,7 @@ func TestARefreshGivesUpWhenItsCallerIsDone(t *testing.T) {
 func TestARediscoveryThatIsStoppedDoesNotAnnounceAnEmergency(t *testing.T) {
 	// A gateway to close, so "nothing was closed" is an observation
 	// rather than an empty daemon answering emptily.
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		containers: []engine.OwnedContainer{{ID: "gw-1", Role: capsule.RoleGateway, LeaseID: "lse-1", Running: true}},
 	}
 	n := newTestSandbox(t, daemon, &capsule.Sandbox{})
@@ -875,7 +875,7 @@ func sandboxFixture() *capsule.Sandbox {
 // compares that set against itself. The launch that created the gateway
 // is what closes the gap, before its capsule is authorized to start.
 func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T) {
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
@@ -883,7 +883,7 @@ func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T)
 	}
 	// The launch's gateway appears just after the pass has listed, which
 	// is the whole of the window this closes.
-	daemon.onList = func(f *fakeSandboxDaemon) {
+	daemon.onList = func(f *fakeDaemon) {
 		f.containers = append(f.containers, engine.OwnedContainer{
 			ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"})
 		f.onList = nil
@@ -898,7 +898,7 @@ func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T)
 		t.Fatalf("the pass reloaded %v; a gateway it never named cannot be among them", got)
 	}
 
-	if err := n.confirmLaunch(t.Context(), "lse-late", launched); err != nil {
+	if err := n.ConfirmLaunch(t.Context(), "lse-late", launched); err != nil {
 		t.Fatalf("confirmLaunch: %v", err)
 	}
 	if got := daemon.reloads(); !slices.Contains(got, "gw-late") {
@@ -912,7 +912,7 @@ func TestAGatewayCreatedDuringATighteningDoesNotKeepTheOlderPolicy(t *testing.T)
 // cost one exec per gateway per launch, which is the cost the fan-out is
 // bounded to avoid.
 func TestAConfirmedLaunchUnderAnUnchangedPolicyTouchesNoDaemon(t *testing.T) {
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
 			{ID: "gw-1", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-1"},
@@ -920,7 +920,7 @@ func TestAConfirmedLaunchUnderAnUnchangedPolicyTouchesNoDaemon(t *testing.T) {
 	}
 	n := newTestSandbox(t, daemon, sandboxFixture())
 
-	if err := n.confirmLaunch(t.Context(), "lse-1", n.state.snapshot()); err != nil {
+	if err := n.ConfirmLaunch(t.Context(), "lse-1", n.state.snapshot()); err != nil {
 		t.Fatalf("confirmLaunch: %v", err)
 	}
 	if got := daemon.reloads(); len(got) != 0 {
@@ -957,10 +957,10 @@ func TestAConfirmationThatCannotReachTheGatewayFailsTheLaunch(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			daemon := &fakeSandboxDaemon{refuse: tc.refuse, containers: tc.containers}
+			daemon := &fakeDaemon{refuse: tc.refuse, containers: tc.containers}
 			n := newTestSandbox(t, daemon, tighter(launched))
 
-			if err := n.confirmLaunch(t.Context(), "lse-late", launched); err == nil {
+			if err := n.ConfirmLaunch(t.Context(), "lse-late", launched); err == nil {
 				t.Fatal("the launch was confirmed against a policy no gateway of its own carries")
 			}
 			if got := daemon.removes(); len(got) != 0 {
@@ -976,21 +976,21 @@ func TestAConfirmationThatCannotReachTheGatewayFailsTheLaunch(t *testing.T) {
 // set that was current a moment ago.
 func TestAConfirmationThatWasOvertakenFailsTheLaunch(t *testing.T) {
 	launched := sandboxFixture()
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		refuse: map[string]bool{},
 		containers: []engine.OwnedContainer{
 			{ID: "gw-late", Role: capsule.RoleGateway, Running: true, LeaseID: "lse-late"},
 		},
 	}
 	n := newTestSandbox(t, daemon, tighter(launched))
-	daemon.onList = func(f *fakeSandboxDaemon) {
+	daemon.onList = func(f *fakeDaemon) {
 		f.onList = nil
 		moved := *launched
 		moved.Deny = []string{"10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"}
 		n.state.replace(&moved)
 	}
 
-	if err := n.confirmLaunch(t.Context(), "lse-late", launched); err == nil {
+	if err := n.ConfirmLaunch(t.Context(), "lse-late", launched); err == nil {
 		t.Fatal("the launch was confirmed against a set that had already been superseded")
 	}
 }
@@ -1002,7 +1002,7 @@ func TestAConfirmationThatWasOvertakenFailsTheLaunch(t *testing.T) {
 // itself and never attempts it again, while a gateway keeps relaying past
 // a deny the operator was promised.
 func TestARestrictionThatCouldNotBeClosedIsRetried(t *testing.T) {
-	daemon := &fakeSandboxDaemon{
+	daemon := &fakeDaemon{
 		refuse:    map[string]bool{"gw-bad": true},
 		removeErr: map[string]error{"gw-bad": errors.New("container is wedged")},
 		containers: []engine.OwnedContainer{
@@ -1028,5 +1028,31 @@ func TestARestrictionThatCouldNotBeClosedIsRetried(t *testing.T) {
 	}
 	if got := n.state.snapshot().Deny; len(got) != 2 {
 		t.Errorf("the books record %v after a retry that reached the gateway", got)
+	}
+}
+
+// TestRediscoverClosesEveryGatewayWhenDiscoveryFails. The policy in force
+// is not a safe fallback, only an older one: a network that appeared
+// since it was computed is reachable and there is no way to tell. So a
+// discovery that cannot be trusted closes every gateway rather than
+// relaying under a set that cannot be shown to be current.
+func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
+	d := &fakeDaemon{
+		uplinkID:     "up-1",
+		uplinkSubnet: "172.30.0.0/24",
+		probeOut:     "", // saw nothing: the deny set cannot be trusted
+		containers: []engine.OwnedContainer{
+			{ID: "gw-1", Role: capsule.RoleGateway, Running: true},
+			{ID: "gw-2", Role: capsule.RoleGateway, Running: true},
+		},
+	}
+	n := newTestSandbox(t, d, &capsule.Sandbox{UplinkNetworkID: "up-1"})
+
+	n.rediscover(t.Context())
+
+	// Sorted: closing fans out, so the order is the order the daemon
+	// answered in and nothing should depend on it.
+	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
+		t.Errorf("removed %v; a failed rediscovery has to close every gateway", d.removes())
 	}
 }

@@ -51,6 +51,7 @@ var corePackages = []string{
 	module + "/internal/credential",
 	module + "/internal/platform",
 	module + "/internal/engine",
+	module + "/internal/netsandbox",
 	module + "/internal/engine/docker",
 	module + "/internal/config",
 	module + "/internal/doctor",
@@ -65,6 +66,38 @@ var corePackages = []string{
 // Direct imports, not the closure: the closure is checked separately
 // where transitive weight is the point.
 var narrowDeps = map[string][]string{
+	// The four packages every other one stands on, pinned at what they
+	// hold today. They are not narrow because an edge was removed: they
+	// are narrow because nothing has been added, and nothing states that.
+	// An edge from any of them compiles, creates no cycle, and trips no
+	// other rule here -- so the vocabulary every layer shares would learn
+	// configuration, or the clientless port would learn persistence, and
+	// the suite would say the architecture still holds.
+	module + "/internal/assignment":          {},
+	module + "/internal/capsule/protocol":    {},
+	module + "/internal/platform/atomicfile": {},
+	// The port names what a container engine does and holds no client.
+	module + "/internal/engine": {module + "/internal/assignment"},
+	// And its adapter translates; an adapter that learned the store would
+	// put persistence behind the port every consumer thinks is a daemon.
+	module + "/internal/engine/docker": {
+		module + "/internal/assignment",
+		module + "/internal/engine",
+	},
+	// The egress policy engine: discovery, the snapshot a launch is cut
+	// from, and the fail-closed rule that a restriction must reach every
+	// gateway before it is recorded as in force. It lived in the
+	// composition root, which is exempt from every rule in this file --
+	// so the one package that decides what a capsule can reach was the
+	// one package free to import anything.
+	module + "/internal/netsandbox": {
+		module + "/internal/assignment",
+		module + "/internal/capsule",
+		module + "/internal/capsule/protocol",
+		module + "/internal/config",
+		module + "/internal/egress",
+		module + "/internal/engine",
+	},
 	// config validates egress prefixes against the baseline deny set.
 	// Restating those prefixes here instead would let the validator and
 	// the enforcer disagree about what "private" means, which is a
@@ -160,7 +193,6 @@ func TestCoreDoesNotDependOnTheProviderAdapter(t *testing.T) {
 		module + "/internal/command": true,
 		module + "/cmd/runpool":      true,
 		adapter:                      true,
-		adapter + "/jit":             true,
 	}
 	graph := importGraph(t)
 	for importer, imports := range graph {
@@ -219,7 +251,8 @@ func TestAdapterDependsOnTheDomainNotTheReverse(t *testing.T) {
 func importGraph(t *testing.T) map[string][]string {
 	t.Helper()
 	cmd := exec.Command("go", "list", "-f",
-		`{{.ImportPath}} {{join .Imports " "}}`, module+"/...")
+		`{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`,
+		module+"/...")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
