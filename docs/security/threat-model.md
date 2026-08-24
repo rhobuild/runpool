@@ -118,6 +118,19 @@ when the deregistration cannot be attempted — a deconfigured target, no
 recorded runner id, or any other failure answering. In those cases the
 capsule's account is still what settles the attempt.
 
+The exit code is the same surface, and worth naming separately because
+no adversary is required to reach it. Only one status proves the runner
+never owned the job: the one the supervisor reserves for stopping before
+the hand-over. Every other status is read as execution — which is the
+right direction for at-most-once, and it means a supervisor the kernel
+kills, an out-of-memory PID 1 on a tight tier, settles an attempt as
+completed even where the runner never picked the job up. Nothing runs
+twice, which is the guarantee; what is lost is the work, and it comes
+back only because the provider re-offers a job whose runner never took
+it. That composition is correct and it is a dependency: Runpool's
+promise that accepted work is not lost rests, in this one case, on the
+provider's own at-least-once delivery rather than on anything here.
+
 Closing it properly means the controller not depending on the capsule's
 account at all, which is not where the machine is today.
 
