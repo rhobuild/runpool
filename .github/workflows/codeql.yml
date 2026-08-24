@@ -19,7 +19,7 @@ env:
   # suite: autobuild compiles the tree, and the
   # analysis describes whatever compiler it found. No `defaults.run` here
   # because every step is an action; there is no shell to configure.
-  GOTOOLCHAIN: go1.26.6
+  GOTOOLCHAIN: go1.26.7
 
 jobs:
   analyze:

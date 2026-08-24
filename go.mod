@@ -1,6 +1,6 @@
 module github.com/rhobuild/runpool
 
-go 1.26.6
+go 1.26.7
 
 require (
 	github.com/actions/scaleset v0.4.0

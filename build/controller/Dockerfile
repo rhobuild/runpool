@@ -3,7 +3,7 @@
 # the runtime layer is distroless: no shell, no package manager, nothing
 # for a compromised process to reach for beyond the base image's CA
 # certificates, timezone data and passwd.
-FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
+FROM golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
 WORKDIR /src
 
 # Dependencies resolve in their own layer so source edits do not refetch.
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION} -X main.capsuleImage=${CAPSULE_IMAGE}" \
       -o /out/runpool ./cmd/runpool
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS runtime
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime
 COPY --from=build /out/runpool /usr/local/bin/runpool
 
 # The controller runs as root because the Docker socket's group is not
