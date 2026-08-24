@@ -131,7 +131,7 @@ func Run(ctx context.Context, opts Options) Report {
 		di, np = opts.Docker, opts.Docker
 	}
 	add(checkDaemon(ctx, di))
-	add(checkIsolatedBridge(ctx, np))
+	add(checkIsolatedBridge(ctx, np, opts.Config))
 	for _, res := range checkCgroups(ctx, di, opts.Config) {
 		add(res)
 	}
@@ -221,9 +221,10 @@ type networkProbeClient interface {
 // The probe creates one disposable internal+isolated bridge, labeled as
 // managed so any sweep can recognise it, asks the daemon what it did
 // with it, and removes it. It carries no containers and reserves nothing
-// beyond a subnet for the moment it exists. Failing here is the point: a
-// host that cannot build this network must be refused before it accepts
-// work, not after a job has already been assigned to it.
+// beyond a subnet for the moment it exists. Under the restricted profile
+// failing here is the point: a host that cannot build this network must
+// be refused before it accepts work, not after a job has already been
+// assigned to it.
 //
 // What it asks is whether the bridge got a host address. A create that
 // succeeds proves only that the daemon accepted the request: an option
@@ -239,8 +240,19 @@ type networkProbeClient interface {
 // It does not prove the kernel drops anything. The live bypass suite
 // does that, on a kernel; this proves the mode took effect, on this
 // host, before any work arrives.
-func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
+func checkIsolatedBridge(ctx context.Context, d networkProbeClient, cfg *config.Config) Result {
 	const name = "isolated bridge"
+	// A profile that builds no sandbox never attaches a capsule to this
+	// network, so what the daemon can do with it decides nothing. Probing
+	// anyway would close admission on a supported configuration, and
+	// would repeat a network create on every readiness run for a network
+	// nothing would use.
+	if cfg != nil && cfg.Network.Profile == config.NetworkProfileUnsafeOpen {
+		return Result{name, Warn,
+			"not probed: network.profile is unsafe-open-egress, which builds no sandbox — " +
+				"capsules reach whatever this host reaches, including the LAN and host services",
+			"set network.profile: public-internet-only to confine capsules to the policy relay"}
+	}
 	if d == nil {
 		return Result{name, Fail, "daemon not connected", ""}
 	}
