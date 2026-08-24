@@ -2,8 +2,10 @@ package capsule
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
@@ -219,5 +221,38 @@ func TestTheDaemonsAccountIsNotTheCapsulesOwn(t *testing.T) {
 		t.Errorf("the daemon's account and the capsule's are both %q; nothing downstream can "+
 			"weigh one against the other, and the one the workload can write is the one that "+
 			"would win", daemon)
+	}
+}
+
+// TestAwaitStateStopsWhenTheContainerHasExited: the terminal states above
+// are only readable while the container is up, and a supervisor writes
+// one and then exits. That leaves the state file readable for an instant,
+// which a half-second poll can miss.
+//
+// An exec into a container that is gone always fails, and a failed exec
+// is "keep asking" — so a supervisor that aborted was polled for the
+// whole readiness deadline and then reported as a timeout. On a
+// misconfigured host that is ninety seconds per launch, and the operator
+// is told the container did not reach a state rather than that it exited
+// and with what code.
+func TestAwaitStateStopsWhenTheContainerHasExited(t *testing.T) {
+	d := &fakeDaemon{
+		exec: func(string, []string) (int, string, error) {
+			return 0, "", errors.New("container is not running")
+		},
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: "exited", ExitCode: SupervisorAbortedExitCode}, nil
+		},
+	}
+	start := time.Now()
+	err := (&Launcher{dock: d}).awaitState(t.Context(), "capsule-1", protocol.StateWaiting)
+	if err == nil {
+		t.Fatal("a container that had already exited was reported as still becoming ready")
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(SupervisorAbortedExitCode)) {
+		t.Errorf("error = %q; it has to name the exit code, which is the whole of what the container left behind", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the wait took %s; a container the daemon says is gone is not polled to the deadline", elapsed)
 	}
 }
