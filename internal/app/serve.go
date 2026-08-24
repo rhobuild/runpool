@@ -22,6 +22,7 @@ import (
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/lease"
+	"github.com/rhobuild/runpool/internal/netsandbox"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -302,9 +303,9 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	// The restricted profile's sandbox: uplink and deny-set snapshot,
 	// assembled before any binding exists. A discovery failure fails
 	// serve closed — a capsule must never launch with a partial policy.
-	var netSandbox *networkSandbox
+	var netSandbox *netsandbox.Manager
 	if cfg.Network.Profile == config.NetworkProfilePublicInternetOnly {
-		netSandbox, err = newNetworkSandbox(ctx, dock, st.InstanceID(), capsuleImg, cfg, log)
+		netSandbox, err = netsandbox.New(ctx, dock, st.InstanceID(), capsuleImg, cfg, log)
 		if err != nil {
 			return fmt.Errorf("network sandbox: %w", err)
 		}
@@ -383,7 +384,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	loops.Add(1)
 	go func() {
 		defer loops.Done()
-		s.netSandbox.watch(ctx)
+		s.netSandbox.Watch(ctx)
 	}()
 	for _, b := range s.bindings {
 		loops.Add(1)
@@ -536,7 +537,7 @@ type Controller struct {
 	// set, the snapshot each launch is cut from, and the installs into
 	// running gateways. Nil is the explicit unsafe-open-egress profile,
 	// which its own methods answer for.
-	netSandbox *networkSandbox
+	netSandbox *netsandbox.Manager
 
 	// cgroupDriver is the daemon's driver, read once at startup. It
 	// decides the form of a lease's parent cgroup, and the daemon

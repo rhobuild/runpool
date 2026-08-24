@@ -15,6 +15,7 @@ cmd/runpool
         -> internal/capsule      prepare, start, inspect one execution capsule
         -> internal/lease        the lease machine, the cleanup saga, disposition
         -> internal/egress       pure egress policy: deny sets and decisions
+        -> internal/netsandbox   the egress policy lifecycle: discovery, snapshot, fan-out
         -> internal/cache        cache lanes and their garbage collection
         -> internal/disk         the disk-pressure state machine
         -> internal/doctor       host preflight
@@ -48,7 +49,9 @@ The arrow never points from lifecycle or state domains to a provider. An
 architecture test enforces it: core packages may not depend on
 `internal/platform/githubactions` or on the provider SDK, directly or
 transitively. `internal/app` is deliberately exempt because injecting the
-adapter is its job. The configuration schema names GitHub scale-set settings
+adapter is its job -- which is why the egress policy lifecycle lives in
+`internal/netsandbox` rather than beside it: a security decision belongs
+under the rules, not in the one package that is outside them. The configuration schema names GitHub scale-set settings
 because GitHub Actions is the only supported provider; it does not claim a
 generic provider API that does not exist.
 

@@ -1,4 +1,14 @@
-package app
+// Package netsandbox owns the restricted profile's egress policy: the
+// deny set discovered from the host and the daemon, the snapshot each
+// launch is cut from, and the rule that a restriction is recorded as in
+// force only once it has reached every gateway that could be named.
+//
+// It is its own package because that rule is a security decision, and
+// the composition root it used to live in is exempt from every
+// dependency rule the architecture suite enforces -- so the one package
+// deciding what a capsule can reach was the one package free to import
+// anything.
+package netsandbox
 
 import (
 	"context"
@@ -21,34 +31,34 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
-// sandboxNetworks is what computing an egress policy needs from the
+// networks is what computing an egress policy needs from the
 // daemon: the instance uplink, its subnet, every subnet the daemon knows
 // and a probe container to look at the host with.
-type sandboxNetworks interface {
+type networks interface {
 	EnsureOwnedNetwork(ctx context.Context, spec engine.NetworkSpec) (string, error)
 	NetworkSubnet(ctx context.Context, id string) (string, error)
 	AllNetworkSubnets(ctx context.Context) ([]string, error)
 	RunTask(ctx context.Context, spec engine.ContainerSpec) (int64, string, error)
 }
 
-// sandboxGateways is what installing one needs: find the gateways, hand
+// gateways is what installing one needs: find the gateways, hand
 // each the new sets, and remove the ones that will not take them.
-type sandboxGateways interface {
+type gateways interface {
 	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error)
 	Exec(ctx context.Context, id string, cmd []string) (int, string, error)
 	ExecWithInput(ctx context.Context, id string, cmd []string, input []byte) (int, string, error)
 	RemoveContainer(ctx context.Context, id string) error
 }
 
-// sandboxDaemon is both halves, which one *docker.Client satisfies. They
+// Daemon is both halves, which one *docker.Client satisfies. They
 // are named apart because they are two jobs, and because a fake for one
 // can embed the other and leave it unimplemented.
-type sandboxDaemon interface {
-	sandboxNetworks
-	sandboxGateways
+type Daemon interface {
+	networks
+	gateways
 }
 
-// sandboxState owns the current restricted-network snapshot. Capsule
+// state owns the current restricted-network snapshot. Capsule
 // launches receive deep copies, so a rediscovery cannot mutate policy while
 // a concurrent launch is serializing it. refreshing also serializes the
 // external discovery/reload operation: policy changes must be applied in the
@@ -65,23 +75,23 @@ type sandboxDaemon interface {
 // loops is unbounded by design. Past the grace period that is a SIGKILL,
 // which leaves every message session open for the next start to wait out
 // as a conflict.
-type sandboxState struct {
+type state struct {
 	mu         sync.RWMutex
 	refreshing chan struct{}
 	current    *capsule.Sandbox
 }
 
-func newSandboxState(initial *capsule.Sandbox) *sandboxState {
-	return &sandboxState{current: cloneSandbox(initial), refreshing: make(chan struct{}, 1)}
+func newSandboxState(initial *capsule.Sandbox) *state {
+	return &state{current: cloneSandbox(initial), refreshing: make(chan struct{}, 1)}
 }
 
-func (s *sandboxState) snapshot() *capsule.Sandbox {
+func (s *state) snapshot() *capsule.Sandbox {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return cloneSandbox(s.current)
 }
 
-func (s *sandboxState) replace(next *capsule.Sandbox) {
+func (s *state) replace(next *capsule.Sandbox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.current = cloneSandbox(next)
@@ -97,17 +107,17 @@ func cloneSandbox(in *capsule.Sandbox) *capsule.Sandbox {
 	return &out
 }
 
-// networkSandbox owns the restricted profile's egress policy: it
+// Manager owns the restricted profile's egress policy: it
 // computes the deny set from the host, keeps the snapshot capsule
 // launches are cut from, and installs changes into the running gateways.
 //
-// A nil *networkSandbox is the unsafe-open-egress profile — there is no
+// A nil *Manager is the unsafe-open-egress profile — there is no
 // policy to maintain — and every method here answers for that, so the
 // serving paths ask without first asking whether there is anything to
 // ask.
-type networkSandbox struct {
+type Manager struct {
 	log        *slog.Logger
-	daemon     sandboxDaemon
+	daemon     Daemon
 	instanceID assignment.InstanceID
 	probeImage string
 	// allow and denies are the operator's own two lists, read once. They
@@ -117,16 +127,16 @@ type networkSandbox struct {
 	allow  []string
 	denies []string
 
-	state *sandboxState
+	state *state
 }
 
-// newNetworkSandbox assembles the initial policy and fails closed. Any
+// New assembles the initial policy and fails closed. Any
 // gap in the deny set is a hole in every capsule's egress, so serve does
 // not start without a complete one.
-func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
+func New(ctx context.Context, daemon Daemon,
 	instanceID assignment.InstanceID, probeImage string,
-	cfg *config.Config, log *slog.Logger) (*networkSandbox, error) {
-	n := &networkSandbox{
+	cfg *config.Config, log *slog.Logger) (*Manager, error) {
+	n := &Manager{
 		log: log, daemon: daemon, instanceID: assignment.InstanceID(instanceID), probeImage: probeImage,
 	}
 	for _, c := range cfg.Network.AllowPrivateCIDRs {
@@ -150,7 +160,7 @@ func newNetworkSandbox(ctx context.Context, daemon sandboxDaemon,
 // interface networks discovered through a short-lived host-namespace
 // probe, every Docker subnet the daemon knows, the baseline ranges, and
 // the uplink itself.
-func (n *networkSandbox) build(ctx context.Context, budget time.Duration) (*capsule.Sandbox, error) {
+func (n *Manager) build(ctx context.Context, budget time.Duration) (*capsule.Sandbox, error) {
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
@@ -193,7 +203,7 @@ const rediscoverInterval = 5 * time.Minute
 // which step hung does not change that.
 //
 // They differ because their callers do. The first build runs from
-// newNetworkSandbox, before the state exists and before any binding does:
+// New, before the state exists and before any binding does:
 // nothing holds the refresh slot, nothing waits for it, and the probe
 // image may still have to be pulled — it is the capsule image, which is
 // hundreds of megabytes. Failing that for being slow is a controller
@@ -296,7 +306,7 @@ func ClassifyPolicy(inForce, next []string) PolicyChange {
 	}
 }
 
-// watch repeats discovery and installs what it finds.
+// Watch repeats discovery and installs what it finds.
 //
 // The old policy is not a safe fallback. It is merely older: if a host
 // interface or a Docker network appeared since it was computed, the
@@ -306,7 +316,7 @@ func ClassifyPolicy(inForce, next []string) PolicyChange {
 // everything, and discovery that cannot be trusted at all does the same
 // for every gateway, because an undiscovered subnet is indistinguishable
 // from one that was never there.
-func (n *networkSandbox) watch(ctx context.Context) {
+func (n *Manager) Watch(ctx context.Context) {
 	if n == nil {
 		return // unsafe-open-egress: there is no policy to maintain
 	}
@@ -322,11 +332,11 @@ func (n *networkSandbox) watch(ctx context.Context) {
 	}
 }
 
-// forLaunch re-proves the instance uplink and the complete deny set
+// ForLaunch re-proves the instance uplink and the complete deny set
 // immediately before a capsule is admitted. This makes an idle uplink removed
 // by a platform cleanup recoverable, and it prevents a shared daemon's newly
 // created networks from remaining reachable until the periodic refresh.
-func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error) {
+func (n *Manager) ForLaunch(ctx context.Context) (*capsule.Sandbox, error) {
 	if n == nil {
 		return nil, nil
 	}
@@ -336,7 +346,7 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 	return n.state.snapshot(), nil
 }
 
-// confirmLaunch proves the gateway this launch created carries the set in
+// ConfirmLaunch proves the gateway this launch created carries the set in
 // force, before the capsule it fronts is authorized to start.
 //
 // A policy pass fans a change out to the gateways it can enumerate. One
@@ -351,7 +361,7 @@ func (n *networkSandbox) forLaunch(ctx context.Context) (*capsule.Sandbox, error
 // both enumerable and not yet serving work. It costs two comparisons in
 // the ordinary case, where the policy did not move while the capsule was
 // being built, and reaches the daemon only when it did.
-func (n *networkSandbox) confirmLaunch(ctx context.Context, leaseID assignment.LeaseID, launched *capsule.Sandbox) error {
+func (n *Manager) ConfirmLaunch(ctx context.Context, leaseID assignment.LeaseID, launched *capsule.Sandbox) error {
 	if n == nil || launched == nil {
 		return nil
 	}
@@ -399,7 +409,7 @@ func sameSandbox(a, b *capsule.Sandbox) bool {
 	return ClassifyPolicy(a.Deny, b.Deny) == PolicyUnchanged && a.UplinkNetworkID == b.UplinkNetworkID
 }
 
-func (n *networkSandbox) refresh(ctx context.Context) error {
+func (n *Manager) refresh(ctx context.Context) error {
 	select {
 	case n.state.refreshing <- struct{}{}:
 	case <-ctx.Done():
@@ -418,7 +428,7 @@ func (n *networkSandbox) refresh(ctx context.Context) error {
 }
 
 // rediscover is one pass, separated so a test can drive it directly.
-func (n *networkSandbox) rediscover(ctx context.Context) {
+func (n *Manager) rediscover(ctx context.Context) {
 	err := n.refresh(ctx)
 	if err == nil {
 		return
@@ -451,7 +461,7 @@ func (n *networkSandbox) rediscover(ctx context.Context) {
 // caller's fail-closed paths turn on exactly that: a discovery pass that
 // cannot say what is installed anywhere closes every gateway, and a
 // launch under an unprovable policy is refused.
-func (n *networkSandbox) applyPolicy(ctx context.Context, next *capsule.Sandbox) error {
+func (n *Manager) applyPolicy(ctx context.Context, next *capsule.Sandbox) error {
 	previous := n.state.snapshot()
 	change := ClassifyPolicy(previous.Deny, next.Deny)
 	uplinkChanged := previous.UplinkNetworkID != next.UplinkNetworkID
@@ -568,7 +578,7 @@ func eachGateway[T any](items []T, fn func(T)) {
 // here would be a second mechanism for a property nothing reads — the
 // one caller takes a length and iterates order-blind, and a test that
 // compares the set sorts what it compares.
-func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []string) (failed []string, err error) {
+func (n *Manager) reloadGateways(ctx context.Context, allow, deny []string) (failed []string, err error) {
 	containers, err := n.ownedContainers(ctx)
 	if err != nil {
 		return nil, err
@@ -600,7 +610,7 @@ func (n *networkSandbox) reloadGateways(ctx context.Context, allow, deny []strin
 // gateway it just created carries the set in force -- and a reload that
 // judged its exit code differently on those two paths would be two
 // answers to the same question.
-func (n *networkSandbox) reloadGateway(ctx context.Context, c engine.OwnedContainer, payload []byte) error {
+func (n *Manager) reloadGateway(ctx context.Context, c engine.OwnedContainer, payload []byte) error {
 	code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
 		return n.daemon.ExecWithInput(ctx, c.ID,
 			[]string{capsule.SupervisorPath, "gateway-reload"}, payload)
@@ -631,14 +641,14 @@ const gatewayControlTimeout = 30 * time.Second
 // on the context to end the wait. It is the same reason the exec and the
 // removal below are bounded, and leaving it out left the pass unbounded
 // at its very first step.
-func (n *networkSandbox) ownedContainers(ctx context.Context) ([]engine.OwnedContainer, error) {
+func (n *Manager) ownedContainers(ctx context.Context) ([]engine.OwnedContainer, error) {
 	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
 	defer cancel()
 	return n.daemon.ListOwnedContainers(ctx, n.instanceID)
 }
 
 // execGateway runs one gateway control command under its own bound.
-func (n *networkSandbox) execGateway(ctx context.Context,
+func (n *Manager) execGateway(ctx context.Context,
 	call func(context.Context) (int, string, error)) (int, string, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, gatewayControlTimeout)
@@ -653,7 +663,7 @@ func (n *networkSandbox) execGateway(ctx context.Context,
 // is already through the check — so the gateway is stopped afterwards,
 // which takes its connections with it. A capsule whose gateway is gone
 // has no egress at all, which is the state this is trying to reach.
-func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) error {
+func (n *Manager) closeGateway(ctx context.Context, containerID string) error {
 	code, out, err := n.execGateway(ctx, func(ctx context.Context) (int, string, error) {
 		return n.daemon.Exec(ctx, containerID,
 			[]string{capsule.SupervisorPath, protocol.GatewayDenyAllCommand})
@@ -679,7 +689,7 @@ func (n *networkSandbox) closeGateway(ctx context.Context, containerID string) e
 }
 
 // closeGateways closes every live gateway this instance owns.
-func (n *networkSandbox) closeGateways(ctx context.Context) error {
+func (n *Manager) closeGateways(ctx context.Context) error {
 	containers, err := n.ownedContainers(ctx)
 	if err != nil {
 		return err
@@ -710,7 +720,7 @@ func (n *networkSandbox) closeGateways(ctx context.Context) error {
 // capabilities, no socket, no volumes — it looks and reports. An empty
 // answer is a failure, not a finding: a host has interfaces, and a
 // deny set built from a blind probe would allow what it cannot see.
-func (n *networkSandbox) discoverHostCIDRs(ctx context.Context) ([]string, error) {
+func (n *Manager) discoverHostCIDRs(ctx context.Context) ([]string, error) {
 	nonce := make([]byte, 4)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
