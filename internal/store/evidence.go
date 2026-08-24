@@ -54,6 +54,18 @@ var ErrInvalidExecutionObservation = errors.New("execution observation is not a 
 // overwriting an observation.
 var ErrObservationConflict = errors.New("execution observation conflicts with what is recorded")
 
+// AllEvidence is every state the monotonic machine can reach, for the
+// test that holds this vocabulary against the column that closes it.
+// It is derived from the rank rather than written beside it: two lists
+// of the same words is one list and one place to forget.
+var AllEvidence = func() []Evidence {
+	out := make([]Evidence, len(evidenceRank))
+	for e, rank := range evidenceRank {
+		out[rank] = e
+	}
+	return out
+}()
+
 // evidenceRank orders the vocabulary for the monotonic rule.
 var evidenceRank = map[Evidence]int{
 	EvidenceNotStarted: 0, EvidenceRuntimePrepared: 1,
