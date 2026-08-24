@@ -1925,7 +1925,7 @@ func seedEverything(t *testing.T, s *Store) {
 		if err := tx.RecordGitHubAttemptMetadata(attempt, "job-seed", 7, 9); err != nil {
 			return err
 		}
-		if err := tx.RecordRepeatableEvent(attempt, "runtime_observation_failed", map[string]string{"why": "seeding"}); err != nil {
+		if err := tx.RecordRepeatableEvent(attempt, EventManualReviewRequested, map[string]string{"why": "seeding"}); err != nil {
 			return err
 		}
 		lease, err := tx.LeaseAttempt(attempt, binding, "standard")
@@ -2343,6 +2343,22 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 				}
 				return o
 			}()},
+		"resolutions": {"assignment_attempts", "resolution",
+			func() []string {
+				var o []string
+				for _, v := range assignment.AllResolutions {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"review reasons": {"assignment_attempts", "review_reason",
+			func() []string {
+				var o []string
+				for _, v := range AllReviewReasons {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
 		"execution evidence": {"assignment_attempts", "execution_evidence",
 			func() []string {
 				var o []string
@@ -2409,4 +2425,101 @@ func checkVocabulary(t *testing.T, s *Store, table, columnAnchor string) []strin
 		out = append(out, m[1])
 	}
 	return out
+}
+
+// TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits.
+// start_observation holds what a serving measured about whether the
+// workload began, and it admits four of the vocabulary's seven values.
+// Which four is decided in another package, by
+// ExecutionObservation.Establishes, and the only thing between a value
+// the column refuses and a write that fails is one `if` in the lease
+// manager.
+//
+// A fifth establishing observation added there passes that guard, the
+// write is attempted, and the column refuses it -- inside the cleanup
+// that ends a serving, which then quarantines the lease it could not
+// finish. The subset is a correspondence between two packages and a
+// schema, and nothing held it.
+func TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits(t *testing.T) {
+	admitted := checkVocabulary(t, newStore(t), "capsule_leases", "start_observation")
+	slices.Sort(admitted)
+
+	var establishes []string
+	for _, o := range assignment.AllExecutionObservations {
+		if o.Establishes() {
+			establishes = append(establishes, string(o))
+		}
+	}
+	slices.Sort(establishes)
+
+	if !slices.Equal(admitted, establishes) {
+		t.Errorf("the column admits %v\nand Establishes() answers for %v\n"+
+			"a value that establishes and the column refuses fails the write that ends a "+
+			"serving; a value the column admits and nothing establishes is one no pass writes",
+			admitted, establishes)
+	}
+}
+
+// TestEveryEvidenceAdvanceReachesTheTrail: evidence is a high-water mark
+// and says only where an attempt got, never when. An attempt held
+// because a start was authorized and its runtime could not be observed
+// therefore showed an operator a trail that jumped from lease_attached
+// to the hold, with the authorization that caused it durable nowhere but
+// a log that rotates — and that authorization is the at-most-once line,
+// the one fact a person resolving the hold is deciding about.
+func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-trail", "job-trail")
+
+	for _, e := range AllEvidence[1:] {
+		if err := s.Tx(t.Context(), func(tx *Tx) error {
+			return tx.RecordEvidence(id, e)
+		}); err != nil {
+			t.Fatalf("recording %s: %v", e, err)
+		}
+	}
+
+	var kinds []EventKind
+	inTx(t, s, func(tx *Tx) error {
+		events, err := tx.Events(id)
+		if err != nil {
+			return err
+		}
+		for _, ev := range events {
+			kinds = append(kinds, EventKind(ev.Kind))
+		}
+		return nil
+	})
+	for _, e := range AllEvidence[1:] {
+		want := eventKindOf(e)
+		if want == "" {
+			t.Errorf("the advance to %s names no trail entry", e)
+			continue
+		}
+		if !slices.Contains(kinds, want) {
+			t.Errorf("advancing to %s wrote no %s into the trail: %v", e, want, kinds)
+		}
+		if !slices.Contains(AllEventKinds, want) {
+			t.Errorf("%s is not a kind the column admits", want)
+		}
+	}
+
+	// Re-observing a fact is idempotent, and so is its trail entry.
+	before := len(kinds)
+	if err := s.Tx(t.Context(), func(tx *Tx) error {
+		return tx.RecordEvidence(id, EvidenceExitObserved)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var after int
+	inTx(t, s, func(tx *Tx) error {
+		events, err := tx.Events(id)
+		after = len(events)
+		return err
+	})
+	if after != before {
+		t.Errorf("re-observing the same evidence wrote %d more entries; a repeated "+
+			"observation is one fact, not two", after-before)
+	}
 }

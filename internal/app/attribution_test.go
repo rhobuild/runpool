@@ -91,8 +91,8 @@ func TestExecutionIsRecordedAgainstTheWorkloadThatRan(t *testing.T) {
 	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 901,
 		Started: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleStarted, SourceWorkloadKey: "job-requeued",
-			RuntimeName: "runpool-ghost",
+			SourceWorkloadKey: "job-requeued",
+			RuntimeName:       "runpool-ghost",
 		}},
 	})
 
@@ -120,8 +120,8 @@ func TestAnObservationWithNoAttemptFallsBackToTheRunner(t *testing.T) {
 	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 902,
 		Started: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleStarted, SourceWorkloadKey: "job-never-seen",
-			RuntimeName: "runpool-known",
+			SourceWorkloadKey: "job-never-seen",
+			RuntimeName:       "runpool-known",
 		}},
 	})
 
@@ -175,8 +175,8 @@ func TestALateObservationStaysWithTheAttemptThatRanIt(t *testing.T) {
 	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 902,
 		Completed: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-requeued",
-			RuntimeName: "runpool-first", Result: "succeeded",
+			SourceWorkloadKey: "job-requeued",
+			RuntimeName:       "runpool-first", Result: "succeeded",
 		}},
 	})
 
@@ -224,8 +224,8 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 903,
 		Completed: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-requeued",
-			RuntimeName: "runpool-first", Result: "canceled", Canceled: true,
+			SourceWorkloadKey: "job-requeued",
+			RuntimeName:       "runpool-first", Result: "canceled", Canceled: true,
 		}},
 	})
 
@@ -263,8 +263,8 @@ func TestASecondServingsHintsAreNotSwallowed(t *testing.T) {
 		h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 			ID: 910,
 			Started: []assignment.WorkloadLifecycleEvent{{
-				Kind: assignment.LifecycleStarted, SourceWorkloadKey: "job-retried",
-				RuntimeName: runtime,
+				SourceWorkloadKey: "job-retried",
+				RuntimeName:       runtime,
 			}},
 		})
 	}

@@ -63,11 +63,7 @@ const (
 
 // Resource kinds and roles stamped on every capsule object, mirrored
 // into the resource intents so reconciliation can find and order them.
-const (
-	KindContainer = engine.KindContainer
-	KindNetwork   = engine.KindNetwork
-	KindVolume    = engine.KindVolume
-)
+const ()
 
 const (
 	// GatewayProxyPort is where a sandboxed capsule's egress relay
@@ -313,15 +309,15 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	// there is one — its gateway, and placed under one parent cgroup.
 	cgroupParent := LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID))
 	capsuleShare := SplitEnvelope(spec.Resources, sandboxed)
-	netID, err := m.create(ctx, rec, KindNetwork, engine.RoleCapsuleNetwork, name(engine.RoleCapsuleNetwork),
+	netID, err := m.create(ctx, rec, engine.KindNetwork, engine.RoleCapsuleNetwork, name(engine.RoleCapsuleNetwork),
 		func() (string, error) {
 			return m.dock.CreateNetwork(ctx, engine.NetworkSpec{
 				Name:     name(engine.RoleCapsuleNetwork),
 				Internal: sandboxed,
 				Isolated: sandboxed,
-				Labels:   labels(KindNetwork, engine.RoleCapsuleNetwork),
+				Labels:   labels(engine.KindNetwork, engine.RoleCapsuleNetwork),
 			})
-		}, resolve(KindNetwork, name(engine.RoleCapsuleNetwork)))
+		}, resolve(engine.KindNetwork, name(engine.RoleCapsuleNetwork)))
 	if err != nil {
 		return "", err
 	}
@@ -334,10 +330,10 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 		}
 	}
 
-	dindData, err := m.create(ctx, rec, KindVolume, engine.RoleDindData, name(engine.RoleDindData),
+	dindData, err := m.create(ctx, rec, engine.KindVolume, engine.RoleDindData, name(engine.RoleDindData),
 		func() (string, error) {
-			return m.dock.CreateVolume(ctx, name(engine.RoleDindData), labels(KindVolume, engine.RoleDindData))
-		}, resolve(KindVolume, name(engine.RoleDindData)))
+			return m.dock.CreateVolume(ctx, name(engine.RoleDindData), labels(engine.KindVolume, engine.RoleDindData))
+		}, resolve(engine.KindVolume, name(engine.RoleDindData)))
 	if err != nil {
 		return "", err
 	}
@@ -350,7 +346,7 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	capsuleSpec := engine.ContainerSpec{
 		Name:       name(engine.RoleCapsule),
 		Image:      spec.CapsuleImage,
-		Labels:     labels(KindContainer, engine.RoleCapsule),
+		Labels:     labels(engine.KindContainer, engine.RoleCapsule),
 		Privileged: true,
 		Network:    netID,
 		Mounts:     mounts,
@@ -386,10 +382,10 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 			"NO_PROXY="+noProxy, "no_proxy="+noProxy,
 		)
 	}
-	outerID, err := m.create(ctx, rec, KindContainer, engine.RoleCapsule, name(engine.RoleCapsule),
+	outerID, err := m.create(ctx, rec, engine.KindContainer, engine.RoleCapsule, name(engine.RoleCapsule),
 		func() (string, error) {
 			return m.dock.CreateContainer(ctx, capsuleSpec)
-		}, resolve(KindContainer, name(engine.RoleCapsule)))
+		}, resolve(engine.KindContainer, name(engine.RoleCapsule)))
 	if err != nil {
 		return "", err
 	}
@@ -518,7 +514,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 		return netip.Addr{}, "", err
 	}
 
-	gwID, err := m.create(ctx, rec, KindContainer, engine.RoleGateway, name(engine.RoleGateway),
+	gwID, err := m.create(ctx, rec, engine.KindContainer, engine.RoleGateway, name(engine.RoleGateway),
 		func() (string, error) {
 			return m.dock.CreateContainer(ctx, engine.ContainerSpec{
 				Name:       name(engine.RoleGateway),
@@ -527,7 +523,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 				// The policy is configuration, not secret; the one
 				// secret in the system never touches the gateway.
 				Env:     []string{"RUNPOOL_GATEWAY_POLICY=" + string(policyJSON)},
-				Labels:  labels(KindContainer, engine.RoleGateway),
+				Labels:  labels(engine.KindContainer, engine.RoleGateway),
 				Network: netID,
 				// NET_ADMIN for the ruleset, and nothing else: not
 				// privileged, no socket, no volumes, no credentials.
@@ -543,7 +539,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 				PIDsLimit:       GatewayEnvelope().PIDsLimit,
 				CgroupParent:    LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID)),
 			})
-		}, resolve(KindContainer, name(engine.RoleGateway)))
+		}, resolve(engine.KindContainer, name(engine.RoleGateway)))
 	if err != nil {
 		return netip.Addr{}, "", err
 	}

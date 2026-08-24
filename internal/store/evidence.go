@@ -184,7 +184,37 @@ func (t *Tx) RecordEvidence(attemptID assignment.AttemptID, e Evidence) error {
 		return fmt.Errorf("%w: attempt %s moved while recording %s",
 			ErrObservationConflict, attemptID, e)
 	}
-	return nil
+	// The advance goes in the trail too, with a time. Evidence is a
+	// high-water mark and says only where an attempt got, never when --
+	// so an attempt held because a start was authorized and its runtime
+	// could not be observed showed an operator a trail that jumped from
+	// lease_attached to the hold, with the authorization that caused it
+	// durable nowhere but a log that rotates.
+	//
+	// Here rather than at the call sites: every caller is already inside
+	// this transaction, so the event and the column can never disagree,
+	// and an advance to a rung happens at most once per attempt -- the
+	// equal case returned above, backwards errored, and a racing loser
+	// rolls this back with it. That is what makes the key unique.
+	return t.RecordEventDetail(attemptID, "evidence:"+string(e), eventKindOf(e),
+		map[string]string{"observer": "controller"})
+}
+
+// eventKindOf names the trail entry for an evidence advance. Only the
+// rungs above the floor appear: nothing advances to not_started, which
+// is where every attempt begins.
+func eventKindOf(e Evidence) EventKind {
+	switch e {
+	case EvidenceRuntimePrepared:
+		return EventRuntimePrepared
+	case EvidenceStartAuthorized:
+		return EventStartAuthorized
+	case EvidenceRunningObserved:
+		return EventRunningObserved
+	case EvidenceExitObserved:
+		return EventExitObserved
+	}
+	return ""
 }
 
 // RecordEvidenceForLease advances the evidence of the attempt a lease is

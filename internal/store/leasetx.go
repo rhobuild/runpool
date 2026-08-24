@@ -85,10 +85,18 @@ func (t *Tx) SetLeaseRuntimeName(id assignment.LeaseID, runtimeName assignment.R
 // It is written on the way into the cleanup that ends a serving, after
 // every refinement that can overrule the measurement and before the
 // first destructive step -- so a retry of that cleanup reads back the
-// answer the pass that failed had already reached. The write is
-// unconditional because a later establishing measurement is a better one:
-// the capsule's own account of itself arrives after the daemon's, and the
-// provider's after that.
+// answer the pass that failed had already reached. A later measurement
+// overwrites an earlier one rather than being refused, because a later
+// establishing measurement is a better one: the capsule's own account of
+// itself arrives after the daemon's, and the provider's after that.
+//
+// Only an observation that establishes something belongs here: the
+// column admits those four and refuses the rest, which is deliberate and
+// stays that way. A guard in this method would swallow the refusal --
+// and TestTheColumnRefusesAnEmptyMeasurement exists to say the table,
+// not a removable Go check, is what keeps the two spellings of "nothing"
+// from both being storable. The lease manager filters before calling so
+// that nothing is asked for; the column is what makes that true.
 func (t *Tx) RecordLeaseStartObservation(id assignment.LeaseID, obs assignment.ExecutionObservation) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE capsule_leases SET start_observation = ?, updated_at = unixepoch() WHERE id = ?`,

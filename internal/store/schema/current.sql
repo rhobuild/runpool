@@ -50,7 +50,7 @@ CREATE TABLE attempt_events (
 	kind             TEXT NOT NULL CHECK (kind IN (
 		'attempt_created', 'lease_attached', 'runtime_prepared',
 		'execution_start_authorized', 'running_observed', 'exit_observed',
-		'runtime_observation_failed', 'cleanup_started', 'cleanup_completed',
+		'cleanup_completed',
 		'manual_review_requested', 'operator_resolved', 'attempt_settled',
 		'attempt_superseded', 'remote_canceled')),
 	detail_json      TEXT NOT NULL DEFAULT '{}',

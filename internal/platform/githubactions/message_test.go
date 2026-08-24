@@ -66,12 +66,11 @@ func TestTranslate(t *testing.T) {
 	// to the attempt it belongs to.
 	if len(out.Started) != 1 || out.Started[0].RuntimeName != "r1" ||
 		out.Started[0].SourceWorkloadKey != "job-0" ||
-		out.Started[0].Kind != assignment.LifecycleStarted || out.Started[0].Result != "" {
+		out.Started[0].Result != "" {
 		t.Errorf("started = %+v", out.Started)
 	}
 	if len(out.Completed) != 1 || out.Completed[0].Result != "succeeded" ||
-		out.Completed[0].SourceWorkloadKey != "job-0" ||
-		out.Completed[0].Kind != assignment.LifecycleCompleted {
+		out.Completed[0].SourceWorkloadKey != "job-0" {
 		t.Errorf("completed = %+v", out.Completed)
 	}
 }
@@ -99,8 +98,7 @@ func TestTheProviderWordForCancellationStopsHere(t *testing.T) {
 		"failed":    false,
 		"":          false,
 	} {
-		got := observation(assignment.LifecycleCompleted,
-			scaleset.JobMessageBase{JobID: "job-1"}, "runner-1", result)
+		got := observation(scaleset.JobMessageBase{JobID: "job-1"}, "runner-1", result)
 		if got.Canceled != want {
 			t.Errorf("result %q translated to Canceled=%v; want %v", result, got.Canceled, want)
 		}

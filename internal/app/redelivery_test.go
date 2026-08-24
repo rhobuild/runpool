@@ -373,8 +373,8 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 	// loop iteration: the session hands over exactly this message, then
 	// blocks.
 	msg.Completed = []assignment.WorkloadLifecycleEvent{{
-		Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-cancelled-upstream",
-		Result: "canceled", Canceled: true,
+		SourceWorkloadKey: "job-cancelled-upstream",
+		Result:            "canceled", Canceled: true,
 	}}
 	redelivery := &replaySession{msg: msg, drained: make(chan struct{})}
 	h.bind.session = redelivery
@@ -503,8 +503,8 @@ func TestACancellationIsDurableBeforeTheMessageIsAcknowledged(t *testing.T) {
 		ID:       901,
 		Assigned: []assignment.WorkloadAssignment{demand("job-closed", "app", 44)},
 		Completed: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-closed",
-			Result: "canceled", Canceled: true,
+			SourceWorkloadKey: "job-closed",
+			Result:            "canceled", Canceled: true,
 		}},
 	}
 	h.bind.session = &cancellingSession{msg: msg, cancel: cancel}
@@ -571,8 +571,8 @@ func TestAnUnrecordedLifecycleEventIsReported(t *testing.T) {
 	msg := &githubactions.Message{
 		ID: 993,
 		Completed: []assignment.WorkloadLifecycleEvent{{
-			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-unrecorded",
-			Result: "canceled", Canceled: true,
+			SourceWorkloadKey: "job-unrecorded",
+			Result:            "canceled", Canceled: true,
 		}},
 	}
 	if err := h.srv.recordLifecycleEvents(ctx, h.bind, msg); err == nil {
