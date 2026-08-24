@@ -25,17 +25,26 @@ import (
 	"github.com/rhobuild/runpool/internal/platform"
 )
 
-// suites are the gates a release-qualification run comprises. The record
-// names them so that a reader of the document knows what "qualified"
-// covered on the day it was written.
-var suites = []string{
-	"hermetic",
-	"docker-contract",
-	"capsule-contract",
-	"sqlite-durability",
-	"lifecycle-drills",
-	"contracts-github-actions",
-	"controller-e2e",
+// suites are the gates a release-qualification run comprises, each with
+// the evidence file that proves it ran. The record names them so that a
+// reader of the document knows what "qualified" covered on the day it
+// was written -- and the assembly refuses to write a name it holds no
+// evidence for, because the workflow step that runs a suite and the
+// constant that lists it are otherwise two places nothing holds
+// together: a step deleted from the workflow left the published record
+// still naming its suite, and nothing in the repository could tell.
+//
+// hermetic is the one gate with no artifact of its own: it is the
+// required check the branch protection holds every commit to, and the
+// qualification workflow cannot run on a commit that failed it.
+var suites = []struct{ name, evidence string }{
+	{"hermetic", ""},
+	{"docker-contract", "live/docker-contract.log"},
+	{"capsule-contract", "live/capsule-contract.log"},
+	{"sqlite-durability", "live/sqlite-contract.log"},
+	{"lifecycle-drills", "live/lifecycle-drills.log"},
+	{"contracts-github-actions", "upstream/contract.log"},
+	{"controller-e2e", "controller-e2e"},
 }
 
 // Build identifies what is being qualified, and later what is being
@@ -98,6 +107,10 @@ func Assemble(ref platform.Reference, evidenceDir string, build Build, at time.T
 	if err != nil {
 		return Record{}, err
 	}
+	names, err := provenSuites(evidenceDir)
+	if err != nil {
+		return Record{}, err
+	}
 	return Record{
 		SchemaVersion:       1,
 		Commit:              build.Commit,
@@ -109,7 +122,7 @@ func Assemble(ref platform.Reference, evidenceDir string, build Build, at time.T
 		PlatformReference:   qualified.Platform,
 		PlatformObserved:    observed,
 		StandaloneArtifacts: checksums,
-		Suites:              suites,
+		Suites:              names,
 	}, nil
 }
 
@@ -196,4 +209,25 @@ func readJSON(path string, into any) error {
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
 	return nil
+}
+
+// provenSuites returns the suite names the evidence directory can stand
+// behind, refusing to assemble when any is missing or empty: a record is
+// the artifact a release keeps, and a suite it names without evidence is
+// a claim about a run that may never have happened.
+func provenSuites(evidenceDir string) ([]string, error) {
+	names := make([]string, 0, len(suites))
+	for _, s := range suites {
+		if s.evidence != "" {
+			info, err := os.Stat(filepath.Join(evidenceDir, s.evidence))
+			if err != nil {
+				return nil, fmt.Errorf("suite %s: no evidence at %s: %w", s.name, s.evidence, err)
+			}
+			if info.Mode().IsRegular() && info.Size() == 0 {
+				return nil, fmt.Errorf("suite %s: evidence %s is empty, which is a run that produced nothing", s.name, s.evidence)
+			}
+		}
+		names = append(names, s.name)
+	}
+	return names, nil
 }
