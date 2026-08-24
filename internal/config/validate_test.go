@@ -64,6 +64,58 @@ func TestValidateRules(t *testing.T) {
 		path   string
 	}{
 		"wrong apiVersion": {func(c *Config) { c.APIVersion = "v2" }, "apiVersion"},
+		// The rejection rules below each survived deletion when this
+		// table lacked their row -- verified by mutation, which is how a
+		// validator's table has to be read: a rule with no row is a rule
+		// review believes in and nothing holds.
+		"wrong kind": {func(c *Config) { c.Kind = "Deployment" }, "kind"},
+		"instance name is not a slug": {func(c *Config) {
+			c.Instance.Name = "Prod Instance"
+		}, "instance.name"},
+		"duplicate tier id": {func(c *Config) {
+			c.Tiers = append(c.Tiers, c.Tiers[0])
+		}, "tiers[1].id"},
+		"no tiers at all":       {func(c *Config) { c.Tiers = nil }, "tiers"},
+		"no targets at all":     {func(c *Config) { c.Targets = nil }, "targets"},
+		"no credentials at all": {func(c *Config) { c.Credentials = nil }, "credentials"},
+		"duplicate credential id": {func(c *Config) {
+			// Resolution by id is last-wins where credentials are read,
+			// so two entries under one id would have a target silently
+			// authenticate with whichever came later.
+			c.Credentials = append(c.Credentials, c.Credentials[0])
+		}, "credentials[1].id"},
+		"duplicate target id": {func(c *Config) {
+			dup := c.Targets[0]
+			dup.URL = "https://github.com/acme/other"
+			c.Targets = append(c.Targets, dup)
+		}, "targets[1].id"},
+		"scale set name is not a slug": {func(c *Config) {
+			c.Targets[0].Tiers[0].ScaleSetName = "Runpool Standard"
+		}, "targets[0].tiers[0].scaleSetName"},
+		"no tier bindings": {func(c *Config) { c.Targets[0].Tiers = nil }, "targets[0].tiers"},
+		"negative host reserve": {func(c *Config) {
+			c.Host.Reserve.CPU = CPUQuantity(-1)
+		}, "host.reserve"},
+		"zero cpu":    {func(c *Config) { c.Tiers[0].Resources.CPU = 0 }, "tiers[0].resources.cpu"},
+		"zero memory": {func(c *Config) { c.Tiers[0].Resources.Memory = 0 }, "tiers[0].resources.memory"},
+		"zero pids":   {func(c *Config) { c.Tiers[0].Resources.PIDs = 0 }, "tiers[0].resources.pids"},
+		"metrics cannot be enabled": {func(c *Config) {
+			c.Observability.Metrics.Enabled = true
+		}, "observability.metrics.enabled"},
+		// The envelope floors. Under the restricted profile a tier holds
+		// the capsule and its gateway together, and memory had a usable-
+		// remainder floor where cpu and pids required only more-than-the-
+		// reserve: a tier of cpu "0.500000001" validated and handed the
+		// capsule one nano-CPU.
+		"memory below the gateway reserve plus the capsule floor": {func(c *Config) {
+			c.Tiers[0].Resources.Memory = ByteSize(GatewayReserveMemory + MinCapsuleMemory - 1)
+		}, "tiers[0].resources.memory"},
+		"cpu leaves the capsule an unusable share": {func(c *Config) {
+			c.Tiers[0].Resources.CPU = CPUQuantity(GatewayReserveCPUs + 1)
+		}, "tiers[0].resources.cpu"},
+		"pids leave the capsule an unusable share": {func(c *Config) {
+			c.Tiers[0].Resources.PIDs = GatewayReservePIDs + 1
+		}, "tiers[0].resources.pids"},
 		"cache on an enterprise target": {func(c *Config) {
 			c.Targets[0].URL = "https://github.com/enterprises/acme"
 			c.Targets[0].RunnerGroup = "runpool"
@@ -432,5 +484,20 @@ func TestJobCeiling(t *testing.T) {
 	own := Duration(90 * time.Minute)
 	if got := (Tier{JobTimeout: &own}).Ceiling(); got != 90*time.Minute {
 		t.Errorf("a tier naming a ceiling waits %s, want its own", got)
+	}
+}
+
+// TestTheEnvelopeFloorsApplyOnlyWhereAGatewayExists: under
+// unsafe-open-egress no gateway is built and the whole tier is the
+// capsule's, so the floors above the plain positivity checks would
+// refuse tiers the profile can serve.
+func TestTheEnvelopeFloorsApplyOnlyWhereAGatewayExists(t *testing.T) {
+	c := validConfig()
+	c.Network.Profile = NetworkProfileUnsafeOpen
+	c.Tiers[0].Resources.Memory = ByteSize(GatewayReserveMemory + MinCapsuleMemory - 1)
+	c.Tiers[0].Resources.CPU = CPUQuantity(GatewayReserveCPUs + 1)
+	c.Tiers[0].Resources.PIDs = GatewayReservePIDs + 1
+	if err := Validate(c); err != nil {
+		t.Errorf("a small tier under unsafe-open-egress was refused: %v", err)
 	}
 }

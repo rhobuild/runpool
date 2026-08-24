@@ -28,14 +28,16 @@ const (
 // set, every setting a Quick Start variable carries comes from the file
 // alone.
 //
-// The list is every one of them, including those the file also has a
-// place for — logging and the network profile. A variable that is
-// neither applied nor refused is the worst of the three outcomes: an
-// operator who set RUNPOOL_LOG_LEVEL=debug beside a configuration file
-// gets no debug logging and no explanation, and looks for the reason
-// somewhere else.
+// The list is every one of them but RUNPOOL_GITHUB_TOKEN, including
+// those the file also has a place for — logging and the network
+// profile. A variable that is neither applied nor refused is the worst
+// of the three outcomes: an operator who set RUNPOOL_LOG_LEVEL=debug
+// beside a configuration file gets no debug logging and no explanation,
+// and looks for the reason somewhere else. The token is the one
+// exemption, because a file's tokenEnv may legitimately name it; the
+// token file path had no such excuse and was silently ignored anyway.
 var quickStartTargetVars = []string{
-	EnvGitHubURL, EnvGitHubRunnerGroup, EnvHostTopology, EnvHostReserveCPU,
+	EnvGitHubURL, EnvGitHubRunnerGroup, EnvGitHubTokenFile, EnvHostTopology, EnvHostReserveCPU,
 	EnvHostReserveMemory, EnvHostReserveSwap, EnvHostReserveFreeDisk, EnvTier, EnvParallelism,
 	EnvLogLevel, EnvNetworkProfile,
 }

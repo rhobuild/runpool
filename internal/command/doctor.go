@@ -58,6 +58,14 @@ func runDoctor(streams IO, asJSON bool) error {
 	switch {
 	case cfgErr != nil:
 		return fmt.Errorf("configuration: %w", cfgErr)
+	case dockErr != nil:
+		// The connection error, not the check's fixed remedy: the check
+		// answers "not connected -- mount the socket" for every failure,
+		// and construction distinguishes an unreachable daemon from one
+		// whose API version is unusable. The one command whose job is
+		// diagnosis must not tell the operator to do what they already
+		// did.
+		return fmt.Errorf("container engine: %w", dockErr)
 	case !report.OK():
 		return errors.New("host does not meet the runtime contract; see the failing checks above")
 	}

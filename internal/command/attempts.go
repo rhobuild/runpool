@@ -211,6 +211,23 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 		decision = "retry"
 	}
 	if !apply {
+		// The preview reads the attempt it promises to act on. Printed
+		// from the argument alone, a typo'd or already-settled id
+		// previewed as a confident action and exited zero, and only
+		// --apply discovered the truth.
+		if err := inReadOnlyStore(func(tx *store.Tx) error {
+			attempt, err := tx.Get(assignment.AttemptID(id))
+			if err != nil {
+				return fmt.Errorf("attempt %s: %w", id, err)
+			}
+			if attempt.State != store.AttemptManualReview {
+				return fmt.Errorf("attempt %s is %s, not %s; the applying form would refuse it",
+					id, attempt.State, store.AttemptManualReview)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 		fmt.Fprintf(streams.Out, "would %s attempt %s\n  actor:  %s\n  reason: %s\nre-run with --apply to perform it\n",
 			decision, id, actor, reason)
 		return nil

@@ -155,10 +155,25 @@ func TestObligations(t *testing.T) {
 }
 
 func TestLevelStringsRoundTrip(t *testing.T) {
-	for _, l := range []Level{Normal, High, SoftEmergency, HardEmergency} {
-		got, err := ParseLevel(l.String())
+	// The literals, not String() fed back to ParseLevel: ParseLevel is
+	// defined as the inverse of String, so a round trip can catch a
+	// collision and never a rename -- and these four strings are a
+	// durable contract, persisted in the pressure row and published in
+	// the runbook. A controller upgraded across a rename fails ParseLevel
+	// in resume, which returns before the admission gate is restored, and
+	// admits into the emergency it was resuming.
+	for want, l := range map[string]Level{
+		"normal":         Normal,
+		"high":           High,
+		"soft_emergency": SoftEmergency,
+		"hard_emergency": HardEmergency,
+	} {
+		if got := l.String(); got != want {
+			t.Errorf("%d renders %q; %q is what a persisted row and the runbook hold", int(l), got, want)
+		}
+		got, err := ParseLevel(want)
 		if err != nil || got != l {
-			t.Errorf("round trip %s: %v, %v", l, got, err)
+			t.Errorf("ParseLevel(%q) = %v, %v; a stored level must parse back", want, got, err)
 		}
 	}
 	if _, err := ParseLevel("frobnicated"); err == nil {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 )
 
@@ -518,16 +519,23 @@ func ParseTargetURL(raw string) (TargetRef, error) {
 		raw)
 }
 
-// digestQualifiedImage matches a reference pinned to a content digest,
-// which is the only form that cannot move underneath the controller.
-var digestQualifiedImage = regexp.MustCompile(`^.+@sha256:[a-f0-9]{64}$`)
-
 // IsDigestQualifiedImage reports whether a reference names an exact
 // image. It lives here because both the validator and the composition
 // root decide the same thing about the same strings, and two copies of
 // the rule is how one of them eventually accepts a tag.
+//
+// The registry's grammar answers it, not a pattern: the pattern accepted
+// anything before the digest, so a reference no registry could resolve
+// validated here and failed at the pull -- of the image that runs
+// privileged. Canonical is the registry's own word for a named reference
+// pinned to a digest.
 func IsDigestQualifiedImage(ref string) bool {
-	return digestQualifiedImage.MatchString(ref)
+	parsed, err := reference.Parse(ref)
+	if err != nil {
+		return false
+	}
+	_, ok := parsed.(reference.Canonical)
+	return ok
 }
 
 func allDigits(s string) bool {
