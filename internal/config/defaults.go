@@ -101,10 +101,10 @@ const (
 	DefaultScaleSetPrefix = "runpool-"
 )
 
-// AllLogLevels is the closed set the validator admits. It is the
+// allLogLevels is the closed set the validator admits. It is the
 // vocabulary's totality list, and the constant below is one of its
 // members by construction.
-var AllLogLevels = []LogLevel{LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError}
+var allLogLevels = []LogLevel{LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError}
 
 const (
 	LogLevelDebug LogLevel = "debug"

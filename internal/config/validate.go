@@ -323,8 +323,8 @@ func Validate(c *Config) error {
 	if f := c.Observability.Log.Format; f != LogFormatJSON && f != LogFormatText {
 		v.errf("observability.log.format", "must be %q or %q", LogFormatJSON, LogFormatText)
 	}
-	if !slices.Contains(AllLogLevels, c.Observability.Log.Level) {
-		v.errf("observability.log.level", "must be one of %s", joinVocabulary(AllLogLevels))
+	if !slices.Contains(allLogLevels, c.Observability.Log.Level) {
+		v.errf("observability.log.level", "must be one of %s", joinVocabulary(allLogLevels))
 	}
 
 	// The restricted profile sandboxes egress: no route out, and a
@@ -452,9 +452,9 @@ func (v *validator) secretPath(path, ref string) {
 }
 
 // joinVocabulary renders a closed vocabulary for an error an operator
-// reads. The values are named types, so they need one conversion each --
-// and doing it here keeps every refusal message spelling the set the
-// same way.
+// reads. The stdlib has no join over a named string type, and the one
+// caller enumerates a list rather than naming two members inline as the
+// refusals around it do.
 func joinVocabulary[T ~string](vs []T) string {
 	out := make([]string, len(vs))
 	for i, v := range vs {
