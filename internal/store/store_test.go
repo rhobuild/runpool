@@ -2343,6 +2343,22 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 				}
 				return o
 			}()},
+		"resolutions": {"assignment_attempts", "resolution",
+			func() []string {
+				var o []string
+				for _, v := range assignment.AllResolutions {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"review reasons": {"assignment_attempts", "review_reason",
+			func() []string {
+				var o []string
+				for _, v := range AllReviewReasons {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
 		"execution evidence": {"assignment_attempts", "execution_evidence",
 			func() []string {
 				var o []string

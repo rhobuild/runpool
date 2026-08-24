@@ -22,6 +22,7 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/engine/docker"
 )
 
@@ -96,7 +97,7 @@ func (r *memRecorder) cleanup(t *testing.T, dock *docker.Client) {
 	defer r.mu.Unlock()
 	// Containers before the network and volumes that hold them.
 	for _, o := range r.objects {
-		if o.kind == string(capsule.KindContainer) {
+		if o.kind == string(engine.KindContainer) {
 			if err := dock.RemoveContainer(ctx, o.id); err != nil {
 				t.Errorf("cleanup container %s: %v", o.id, err)
 			}
@@ -104,11 +105,11 @@ func (r *memRecorder) cleanup(t *testing.T, dock *docker.Client) {
 	}
 	for _, o := range r.objects {
 		switch o.kind {
-		case string(capsule.KindNetwork):
+		case string(engine.KindNetwork):
 			if err := dock.RemoveNetwork(ctx, o.id); err != nil {
 				t.Errorf("cleanup network %s: %v", o.id, err)
 			}
-		case string(capsule.KindVolume):
+		case string(engine.KindVolume):
 			if err := dock.RemoveVolume(ctx, o.id); err != nil {
 				t.Errorf("cleanup volume %s: %v", o.id, err)
 			}

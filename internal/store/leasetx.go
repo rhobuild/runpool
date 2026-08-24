@@ -90,10 +90,13 @@ func (t *Tx) SetLeaseRuntimeName(id assignment.LeaseID, runtimeName assignment.R
 // establishing measurement is a better one: the capsule's own account of
 // itself arrives after the daemon's, and the provider's after that.
 //
-// Only an observation that establishes something may be written: the
-// column admits those four and refuses the rest, so a caller that has
-// measured nothing must not reach here. The lease manager is that filter
-// today, and a test holds the two subsets against each other.
+// Only an observation that establishes something belongs here: the
+// column admits those four and refuses the rest, which is deliberate and
+// stays that way. A guard in this method would swallow the refusal --
+// and TestTheColumnRefusesAnEmptyMeasurement exists to say the table,
+// not a removable Go check, is what keeps the two spellings of "nothing"
+// from both being storable. The lease manager filters before calling so
+// that nothing is asked for; the column is what makes that true.
 func (t *Tx) RecordLeaseStartObservation(id assignment.LeaseID, obs assignment.ExecutionObservation) error {
 	return t.mustAffect(t.tx.Exec(
 		`UPDATE capsule_leases SET start_observation = ?, updated_at = unixepoch() WHERE id = ?`,

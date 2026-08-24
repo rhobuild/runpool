@@ -96,18 +96,6 @@ func Fingerprint(assignments []WorkloadAssignment) [32]byte {
 	return sha256.Sum256([]byte(strings.Join(lines, "\n")))
 }
 
-// LifecycleKind is what a provider observed about a workload.
-type LifecycleKind string
-
-const (
-	// LifecycleStarted: the provider saw the workload begin executing.
-	LifecycleStarted LifecycleKind = "started"
-	// LifecycleCompleted: the provider saw the workload finish. It is a
-	// hint — completion truth is the runtime exiting plus
-	// reconciliation, and this observation can lag it by minutes.
-	LifecycleCompleted LifecycleKind = "completed"
-)
-
 // Resolution says exactly what was observed and what was decided, never
 // more. "Executed" is not in the vocabulary on purpose: the provider
 // keeps the truth about the workload's functional result, and Runpool
@@ -157,7 +145,6 @@ var AllResolutions = []Resolution{
 // runtime cannot be correlated to the attempt it belongs to, which is
 // how a cancellation aimed at an old attempt could hit a new one.
 type WorkloadLifecycleEvent struct {
-	Kind              LifecycleKind
 	SourceWorkloadKey string
 	TenantKey         string
 	ProjectKey        string
