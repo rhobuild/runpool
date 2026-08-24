@@ -98,18 +98,18 @@ func classifySupervisorState(state string) (assignment.ExecutionObservation, err
 // only time an exec can succeed.
 func classifyContainerState(runtimeID string, state engine.ContainerState) (obs assignment.ExecutionObservation, askSupervisor bool, err error) {
 	switch state.Status {
-	case "created":
+	case engine.StatusCreated:
 		// The daemon's own word, not the capsule's: this container has
 		// never been started, so nothing inside it has run to say
 		// otherwise.
 		return assignment.ObservedNeverStarted, false, nil
-	case "exited", "dead":
+	case engine.StatusExited, engine.StatusDead:
 		// A stopped capsule cannot be asked anything: exec needs a running
 		// container and the control surface is tmpfs. The exit code is the
 		// only account it left, which is why the supervisor reserves one
 		// for "the runner never started".
 		return ClassifyExit(state.ExitCode), false, nil
-	case "running", "paused", "restarting":
+	case engine.StatusRunning, engine.StatusPaused, engine.StatusRestarting:
 		return assignment.ObservedUnavailable, true, nil
 	default:
 		return assignment.ObservedUnavailable, false,

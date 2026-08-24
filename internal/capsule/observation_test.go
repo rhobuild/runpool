@@ -79,19 +79,19 @@ func TestClassifySupervisorExitSeparatesAbortFromExit(t *testing.T) {
 // container cannot be asked.
 func TestClassifyContainerStateNeverAsksAStoppedCapsule(t *testing.T) {
 	for _, tc := range []struct {
-		status        string
+		status        engine.ContainerStatus
 		exit          int
 		want          assignment.ExecutionObservation
 		askSupervisor bool
 	}{
-		{"created", 0, assignment.ObservedNeverStarted, false},
-		{"running", 0, assignment.ObservedUnavailable, true},
-		{"paused", 0, assignment.ObservedUnavailable, true},
-		{"restarting", 0, assignment.ObservedUnavailable, true},
-		{"exited", 0, assignment.ObservedExited, false},
-		{"exited", 1, assignment.ObservedExited, false},
-		{"exited", SupervisorAbortedExitCode, assignment.ObservedCreated, false},
-		{"dead", SupervisorAbortedExitCode, assignment.ObservedCreated, false},
+		{engine.StatusCreated, 0, assignment.ObservedNeverStarted, false},
+		{engine.StatusRunning, 0, assignment.ObservedUnavailable, true},
+		{engine.StatusPaused, 0, assignment.ObservedUnavailable, true},
+		{engine.StatusRestarting, 0, assignment.ObservedUnavailable, true},
+		{engine.StatusExited, 0, assignment.ObservedExited, false},
+		{engine.StatusExited, 1, assignment.ObservedExited, false},
+		{engine.StatusExited, SupervisorAbortedExitCode, assignment.ObservedCreated, false},
+		{engine.StatusDead, SupervisorAbortedExitCode, assignment.ObservedCreated, false},
 	} {
 		got, ask, err := classifyContainerState("c1", engine.ContainerState{Status: tc.status, ExitCode: tc.exit})
 		if err != nil {
@@ -203,7 +203,7 @@ func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
 // against another needs to be able to tell them apart, and one value
 // for both makes that impossible.
 func TestTheDaemonsAccountIsNotTheCapsulesOwn(t *testing.T) {
-	daemon, _, err := classifyContainerState("c1", engine.ContainerState{Status: "created"})
+	daemon, _, err := classifyContainerState("c1", engine.ContainerState{Status: engine.StatusCreated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestAwaitStateStopsWhenTheContainerHasExited(t *testing.T) {
 			return 0, "", errors.New("container is not running")
 		},
 		status: func(string) (engine.ContainerState, error) {
-			return engine.ContainerState{Status: "exited", ExitCode: SupervisorAbortedExitCode}, nil
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
 		},
 	}
 	start := time.Now()

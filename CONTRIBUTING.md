@@ -86,6 +86,13 @@ while only the exec around it needs a container.
 
 - Keep provider vocabulary inside its adapter. Core packages use neutral,
   opaque identities; the architecture tests enforce dependency direction.
+- A vocabulary that crosses a package boundary is a named type, not a bare
+  string. Several of them here spell the same words — a supervisor protocol
+  state, an execution observation, an attempt state and a container status all
+  have a "running" — and they decide different things. An untyped one compiles
+  when it is confused with another, and the confusions that matter are in the
+  code that rules on whether a job ran. Review checks this; the compiler is
+  what enforces it once the type exists.
 - Keep responsibilities cohesive. Split a package or component when its
   invariants, dependencies, or lifecycle can be tested independently.
 - Comments explain exported contracts, invariants, or non-obvious reasons.

@@ -625,7 +625,7 @@ func (m *Launcher) awaitState(ctx context.Context, containerID, want string) err
 		if err != nil {
 			// Best effort: a daemon that cannot answer this leaves the
 			// poll exactly where it was, which is the deadline below.
-			if state, serr := m.dock.ContainerStatus(ctx, containerID); serr == nil && state.Status != "running" {
+			if state, serr := m.dock.ContainerStatus(ctx, containerID); serr == nil && state.Status != engine.StatusRunning {
 				return fmt.Errorf("container %s exited %d before reaching %q",
 					engine.ShortID(containerID), state.ExitCode, want)
 			}
