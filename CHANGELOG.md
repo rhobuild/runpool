@@ -183,6 +183,28 @@ by its public and operational effects.
 
 ### State and operations
 
+- **Capacity a lease consumed comes back.** An admission credit is returned
+  by one read that says the lease reached released, and that read used to be
+  abandoned on its first failure — on a store whose single connection is
+  shared with every transition, every intent write, the disk monitor and the
+  reconciler, so losing it is a moment of contention rather than a condition.
+  The binding served one fewer job for the life of the process, with one line
+  in the log and nothing in `runpool status` saying why. It is retried now.
+  The same capacity was held two other ways: a launch whose very first
+  transition failed returned without unwinding, where every other failure in
+  it walks the lease back, so a transient error there cost minutes of a
+  tier's capacity until a periodic pass noticed; and an emergency that closed
+  admission stopped the broker being offered capacity without stopping a pass
+  already looping over ready work from taking it, because the pressure is read
+  once before that loop.
+- **A message is acknowledged on the strength of everything it carried being
+  written down.** A lifecycle event that could not be recorded was logged and
+  stepped over, and the message acknowledged anyway — and an acknowledged
+  message is never sent again, while nothing re-derives a cancellation from
+  the provider. A cancelled workload stayed ready to lease, and the next
+  scheduling pass spent a whole capsule on work the provider had already
+  closed. The message is now left for redelivery, where recording is
+  idempotent and replays it whole.
 - **A deployment authenticates as itself, not as a person.** A credential
   is a personal access token or an installation of a GitHub App;
   `github_app` takes a client id, an installation id and a PEM key, and

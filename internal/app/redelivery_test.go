@@ -542,3 +542,33 @@ func TestACancellationIsDurableBeforeTheMessageIsAcknowledged(t *testing.T) {
 			"with the message that carried it", got.State)
 	}
 }
+
+// TestAnUnrecordedLifecycleEventIsReported: the message is acknowledged
+// on the strength of everything it carried being written down, and an
+// acknowledged message is never sent again -- nothing re-derives a
+// cancellation from the provider. So a record that fails has to be
+// reported rather than logged and stepped over, which is what left a
+// cancelled workload ready to lease and a whole capsule spent on work
+// the provider had already closed.
+func TestAnUnrecordedLifecycleEventIsReported(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-unrecorded", "app", 93)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A context that is already done: the record opens a transaction on
+	// it, which is the failure this reports rather than swallows.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	msg := &githubactions.Message{
+		ID: 993,
+		Completed: []assignment.WorkloadLifecycleEvent{{
+			Kind: assignment.LifecycleCompleted, SourceWorkloadKey: "job-unrecorded",
+			Result: "canceled",
+		}},
+	}
+	if err := h.srv.recordLifecycleEvents(ctx, h.bind, msg); err == nil {
+		t.Fatal("a lifecycle event that could not be recorded reported success; " +
+			"the message that carried it would be acknowledged and never sent again")
+	}
+}
