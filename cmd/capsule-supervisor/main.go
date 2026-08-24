@@ -112,19 +112,7 @@ func main() {
 func runSubcommand(args []string) int {
 	switch args[0] {
 	case "deliver":
-		// The bundle arrives on stdin and lands on tmpfs, 0600 and
-		// runner-owned. This delivery step never places it in Docker
-		// metadata or logs it.
-		payload, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
-		if err != nil || len(payload) == 0 {
-			fmt.Fprintln(os.Stderr, "deliver: no credential on stdin")
-			return 1
-		}
-		if err := atomicfile.Replace(jitFile, payload, 0o600, runnerUID, runnerGID); err != nil {
-			fmt.Fprintln(os.Stderr, "deliver:", err)
-			return 1
-		}
-		return 0
+		return deliver(os.Stdin, os.Stderr, jitFile, runnerUID, runnerGID)
 	case "start":
 		// The state goes first. PID 1 does not learn of an authorization
 		// until it polls for the file below, and it writes nothing of its
@@ -357,7 +345,7 @@ func run(log *slog.Logger) (int, error) {
 	}
 	defer stopDockerd(log, dockerd, dockerdExit)
 
-	if err := awaitDockerdReady(ctx); err != nil {
+	if err := awaitDockerdReady(ctx, reap); err != nil {
 		return -1, err
 	}
 	log.Info("dockerd ready", "socket", dockerSocket)
@@ -412,10 +400,10 @@ func stopDockerd(log *slog.Logger, dockerd *exec.Cmd, exit chan int) {
 	}
 }
 
-func awaitDockerdReady(ctx context.Context) error {
+func awaitDockerdReady(ctx context.Context, reap *reaper) error {
 	deadline := time.Now().Add(dockerdReadyTimeout)
 	for {
-		if probeDockerd(ctx) == nil {
+		if probeDockerd(ctx, reap) == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -433,7 +421,7 @@ func awaitDockerdReady(ctx context.Context) error {
 // daemon that accepts the socket and then never answers would otherwise
 // spend the whole readiness budget inside a single call, and PID 1 has
 // nobody outside it to cut that short.
-func probeDockerd(ctx context.Context) error {
+func probeDockerd(ctx context.Context, reap *reaper) error {
 	ctx, cancel := context.WithTimeout(ctx, dockerdProbeTimeout)
 	defer cancel()
 	probe := exec.CommandContext(ctx, "docker", "--host=unix://"+dockerSocket, "info")
@@ -443,7 +431,25 @@ func probeDockerd(ctx context.Context) error {
 	// keeps open. The probe would return only when the orphan did,
 	// leaving the bound above describing nothing.
 	probe.Stdout, probe.Stderr = nil, nil
-	return probe.Run()
+	// Started under the reaper, like every child here: its own doc says
+	// there is exactly one place that calls wait4, and this probe was a
+	// second waiter. Whichever won reaped the exit -- and when the reaper
+	// won, Run read "no child processes" and a ready daemon was reported
+	// as not ready, one lost probe per race on every launch.
+	ch, err := reap.start(probe)
+	if err != nil {
+		return err
+	}
+	select {
+	case code := <-ch:
+		if code != 0 {
+			return fmt.Errorf("docker info exited %d", code)
+		}
+		return nil
+	case <-ctx.Done():
+		// CommandContext kills the process; the reaper collects it.
+		return ctx.Err()
+	}
 }
 
 // awaitStart blocks until the controller authorizes the start. The
@@ -718,4 +724,32 @@ func currentState() string {
 		return ""
 	}
 	return strings.TrimSpace(string(body))
+}
+
+// maxJITBundle bounds the credential delivery. A real bundle is a few
+// kilobytes; the bound exists so a runaway writer cannot fill the tmpfs
+// the control surface lives on.
+const maxJITBundle = 1 << 20
+
+// deliver lands the credential bundle from stdin on tmpfs, 0600 and
+// runner-owned, and never places it in Docker metadata or logs it. The
+// read goes one byte past the bound so a bundle that exceeds it is
+// refused rather than silently truncated: a truncated credential is not
+// a smaller credential, it is a corrupt one the runner fails on later
+// with nothing naming the cause.
+func deliver(stdin io.Reader, stderr io.Writer, path string, uid, gid int) int {
+	payload, err := io.ReadAll(io.LimitReader(stdin, maxJITBundle+1))
+	if err != nil || len(payload) == 0 {
+		fmt.Fprintln(stderr, "deliver: no credential on stdin")
+		return 1
+	}
+	if len(payload) > maxJITBundle {
+		fmt.Fprintf(stderr, "deliver: credential exceeds %d bytes\n", maxJITBundle)
+		return 1
+	}
+	if err := atomicfile.Replace(path, payload, 0o600, uid, gid); err != nil {
+		fmt.Fprintln(stderr, "deliver:", err)
+		return 1
+	}
+	return 0
 }
