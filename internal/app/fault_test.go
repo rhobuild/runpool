@@ -411,7 +411,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	// The removal fails: the lease parks in quarantine with backoff
 	// booked on the intent, and the attempt stays leased — unresolved,
 	// visible, waiting.
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, ""); err == nil {
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err == nil {
 		t.Fatal("recoverCapsuleFailure with a wedged daemon succeeded")
 	}
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {

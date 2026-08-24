@@ -203,13 +203,13 @@ func TestFinalizeDisposesByEvidence(t *testing.T) {
 		wantState      store.AttemptState
 		wantResolution string
 	}{
-		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, "", false, store.AttemptSettled, assignment.ResolutionCompletedObserved},
-		{"running observed", store.EvidenceRunningObserved, store.LeaseCleaning, "", false, store.AttemptSettled, assignment.ResolutionStartedObserved},
-		{"nothing was prepared", store.EvidenceNotStarted, store.LeaseCleaning, "", false, store.AttemptReady, ""},
-		{"prepared but never authorized", store.EvidenceRuntimePrepared, store.LeaseCleaning, "", false, store.AttemptReady, ""},
+		{"exit observed", store.EvidenceExitObserved, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptSettled, assignment.ResolutionCompletedObserved},
+		{"running observed", store.EvidenceRunningObserved, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptSettled, assignment.ResolutionStartedObserved},
+		{"nothing was prepared", store.EvidenceNotStarted, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptReady, ""},
+		{"prepared but never authorized", store.EvidenceRuntimePrepared, store.LeaseCleaning, assignment.NoObservation, false, store.AttemptReady, ""},
 		{"authorized and unprovable", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedAbsent, false, store.AttemptManualReview, ""},
 		{"authorized and proven inert", store.EvidenceStartAuthorized, store.LeaseCleaning, assignment.ObservedCreated, false, store.AttemptReady, ""},
-		{"lease not yet cleaning", store.EvidenceNotStarted, store.LeaseQuarantined, "", true, store.AttemptLeased, ""},
+		{"lease not yet cleaning", store.EvidenceNotStarted, store.LeaseQuarantined, assignment.NoObservation, true, store.AttemptLeased, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,7 +254,7 @@ func TestFinalizeIsAtomic(t *testing.T) {
 		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "leftover")
 	})
 
-	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err == nil {
+	if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.NoObservation); err == nil {
 		t.Fatal("finalizing with a surviving resource record succeeded")
 	}
 	if got := f.reload(); got.State != store.LeaseCleaning {
@@ -352,7 +352,7 @@ func TestReleaseQuarantinesOnAWedgedDaemon(t *testing.T) {
 	if _, err := f.m.ToCleaning(t.Context(), f.lease.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.m.FinishCleaning(t.Context(), f.reload(), ""); err != nil {
+	if err := f.m.FinishCleaning(t.Context(), f.reload(), assignment.NoObservation); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.reload(); got.State != store.LeaseReleased {
@@ -414,7 +414,7 @@ func TestTheExhaustedBudgetHoldsTheAttemptForReview(t *testing.T) {
 	// retriable evidence, and the attempt returns to ready.
 	for serving := 1; ; serving++ {
 		f.driveTo(store.LeaseCleaning)
-		if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+		if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.NoObservation); err != nil {
 			t.Fatalf("finalize serving %d: %v", serving, err)
 		}
 		var attempt store.Attempt
@@ -492,7 +492,7 @@ func TestAHeldAttemptDoesNotPinItsLease(t *testing.T) {
 		return tx.HoldForReview(id, store.ReviewReasonIncompatibleCapsule)
 	})
 
-	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+	if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 	if got := f.reload().State; got != store.LeaseReleased {
@@ -522,7 +522,7 @@ func TestBothDispositionPathsAgree(t *testing.T) {
 		want   disposition
 	}{
 		"proven inert outranks a running observation": {
-			store.AttemptRunning, store.EvidenceRunningObserved, "", assignment.ObservedCreated, dispositionRequeue},
+			store.AttemptRunning, store.EvidenceRunningObserved, assignment.NoObservation, assignment.ObservedCreated, dispositionRequeue},
 		// The three below are the retry of the row above: its cleanup
 		// failed, so the pass that measured the proof is not the pass that
 		// disposes of the attempt. What the retry carries establishes
@@ -534,7 +534,7 @@ func TestBothDispositionPathsAgree(t *testing.T) {
 			assignment.ObservedCreated, assignment.ObservedAbsent, dispositionRequeue},
 		"a recorded proof outranks a retry that measured nothing": {
 			store.AttemptRunning, store.EvidenceRunningObserved,
-			assignment.ObservedCreated, "", dispositionRequeue},
+			assignment.ObservedCreated, assignment.NoObservation, dispositionRequeue},
 		// And a later measurement that does establish something still
 		// wins: the provider is asked again on the retry, and it is the
 		// one account entitled to overrule the capsule.
@@ -542,26 +542,26 @@ func TestBothDispositionPathsAgree(t *testing.T) {
 			store.AttemptRunning, store.EvidenceRunningObserved,
 			assignment.ObservedCreated, assignment.ObservedRunning, dispositionSettleStarted},
 		"an observed exit settles as completed": {
-			store.AttemptRunning, store.EvidenceExitObserved, "", "", dispositionSettleCompleted},
+			store.AttemptRunning, store.EvidenceExitObserved, assignment.NoObservation, assignment.NoObservation, dispositionSettleCompleted},
 		// Nothing measured and nothing recorded: the tier ceiling, where
 		// the capsule is destroyed while the runner is still working. That
 		// job really did run.
 		"a running observation settles as started": {
-			store.AttemptRunning, store.EvidenceRunningObserved, "", "", dispositionSettleStarted},
+			store.AttemptRunning, store.EvidenceRunningObserved, assignment.NoObservation, assignment.NoObservation, dispositionSettleStarted},
 		"nothing prepared returns to the queue": {
-			store.AttemptLeased, store.EvidenceNotStarted, "", "", dispositionRequeue},
+			store.AttemptLeased, store.EvidenceNotStarted, assignment.NoObservation, assignment.NoObservation, dispositionRequeue},
 		"a running runtime settles as started": {
-			store.AttemptStarting, store.EvidenceStartAuthorized, "", assignment.ObservedRunning, dispositionSettleStarted},
+			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.NoObservation, assignment.ObservedRunning, dispositionSettleStarted},
 		"an unprovable start is held": {
-			store.AttemptStarting, store.EvidenceStartAuthorized, "", assignment.ObservedAbsent, dispositionReview},
+			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.NoObservation, assignment.ObservedAbsent, dispositionReview},
 		"an attempt an operator returned to the queue is left alone": {
-			store.AttemptReady, store.EvidenceNotStarted, "", "", dispositionNone},
+			store.AttemptReady, store.EvidenceNotStarted, assignment.NoObservation, assignment.NoObservation, dispositionNone},
 		"a superseded attempt is left alone": {
-			store.AttemptSuperseded, store.EvidenceNotStarted, "", "", dispositionNone},
+			store.AttemptSuperseded, store.EvidenceNotStarted, assignment.NoObservation, assignment.NoObservation, dispositionNone},
 		"a held attempt is left alone": {
-			store.AttemptManualReview, store.EvidenceNotStarted, "", "", dispositionNone},
+			store.AttemptManualReview, store.EvidenceNotStarted, assignment.NoObservation, assignment.NoObservation, dispositionNone},
 		"a settled attempt is left alone": {
-			store.AttemptSettled, store.EvidenceExitObserved, "", "", dispositionNone},
+			store.AttemptSettled, store.EvidenceExitObserved, assignment.NoObservation, assignment.NoObservation, dispositionNone},
 	} {
 		t.Run(name, func(t *testing.T) {
 			attempt := store.Attempt{State: tc.state, Evidence: tc.evidence}
@@ -637,7 +637,7 @@ func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
 
 			// Retriable evidence is the disposition that reaches the
 			// requeue from every one of these states.
-			if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+			if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.NoObservation); err != nil {
 				t.Fatalf("Finalize from %s: %v", state, err)
 			}
 			if got := f.reload().State; got != store.LeaseReleased {
@@ -664,7 +664,7 @@ func TestAnAttemptReturnedToTheQueueDoesNotPinItsLease(t *testing.T) {
 		return tx.ResolveReviewToReady(id, "resolved", "operator")
 	})
 
-	if err := f.m.Finalize(t.Context(), f.lease.ID, ""); err != nil {
+	if err := f.m.Finalize(t.Context(), f.lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 	if got := f.reload().State; got != store.LeaseReleased {

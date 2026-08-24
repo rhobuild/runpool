@@ -102,7 +102,10 @@ func (m *Manager) Release(ctx context.Context, leaseID assignment.LeaseID, from 
 		m.Quarantine(leaseID)
 		return err
 	}
-	return m.Finalize(ctx, leaseID, "")
+	// The ordinary ending takes no observation: the disposition rules on
+	// evidence, and a serving that ended cleanly recorded nothing to read
+	// back.
+	return m.Finalize(ctx, leaseID, assignment.NoObservation)
 }
 
 // ToCleaning moves a lease into cleaning from wherever a crash or a

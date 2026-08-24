@@ -93,6 +93,14 @@ while only the exec around it needs a container.
   when it is confused with another, and the confusions that matter are in the
   code that rules on whether a job ran. Review checks this; the compiler is
   what enforces it once the type exists.
+- A closed vocabulary starts at a non-empty value, because a state always
+  exists: an attempt has one, a lease has one, a resource kind has one. The
+  exception is a vocabulary that describes a measurement rather than a state,
+  because a measurement can simply not have been taken — and then that member
+  is named, equals the zero value so an unassigned variable is already correct,
+  and joins the totality list so nothing decides for it by omission. Either way
+  the empty literal appears once, in the constant that defines it, and never at
+  a call site. An optional string is not a vocabulary and needs no constant.
 - Keep responsibilities cohesive. Split a package or component when its
   invariants, dependencies, or lifecycle can be tested independently.
 - Comments explain exported contracts, invariants, or non-obvious reasons.
