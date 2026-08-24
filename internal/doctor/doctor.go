@@ -202,10 +202,11 @@ func checkDaemon(ctx context.Context, d daemonInfo) Result {
 	return Result{"container engine", Pass, detail, ""}
 }
 
-// networkProbeClient is the two calls the bridge probe needs, named so
+// networkProbeClient is the three calls the bridge probe needs, named so
 // the probe cannot reach the rest of a daemon client.
 type networkProbeClient interface {
 	CreateNetwork(context.Context, engine.NetworkSpec) (string, error)
+	NetworkGateways(ctx context.Context, id string) ([]string, error)
 	RemoveNetwork(context.Context, string) error
 }
 
@@ -218,11 +219,26 @@ type networkProbeClient interface {
 // refuse the network a capsule needs.
 //
 // The probe creates one disposable internal+isolated bridge, labeled as
-// managed so any sweep can recognise it, and removes it immediately. It
-// carries no containers and reserves nothing beyond a subnet for the
-// moment it exists. Failing here is the point: a host that cannot build
-// this network must be refused before it accepts work, not after a job
-// has already been assigned to it.
+// managed so any sweep can recognise it, asks the daemon what it did
+// with it, and removes it. It carries no containers and reserves nothing
+// beyond a subnet for the moment it exists. Failing here is the point: a
+// host that cannot build this network must be refused before it accepts
+// work, not after a job has already been assigned to it.
+//
+// What it asks is whether the bridge got a host address. A create that
+// succeeds proves only that the daemon accepted the request: an option
+// key it does not recognise is dropped without complaint, so a build
+// that renamed the option, or never had it, answers a create exactly
+// like one that honours it. Under the isolated mode the daemon assigns
+// no gateway, which is the whole point -- the address a capsule would
+// route through is the address that does not exist. That is a decision
+// the daemon took, and it is the half of the deny that the capsule's
+// own bypass suite cannot see: traffic to a host-local address is
+// delivered without ever passing the chain that internal installs.
+//
+// It does not prove the kernel drops anything. The live bypass suite
+// does that, on a kernel; this proves the mode took effect, on this
+// host, before any work arrives.
 func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
 	const name = "isolated bridge"
 	if d == nil {
@@ -257,12 +273,28 @@ func checkIsolatedBridge(ctx context.Context, d networkProbeClient) Result {
 			"the restricted network profile needs the Engine 28 isolated gateway mode; " +
 				"use a daemon that provides it, or accept unsafe-open-egress deliberately"}
 	}
+	// Before the removal, and its failure must not skip it: readiness runs
+	// on an interval, and a host that leaks one network per run runs out
+	// of address pools.
+	gateways, inspectErr := d.NetworkGateways(ctx, id)
 	if err := removeProbeNetwork(ctx, d, id); err != nil {
 		return Result{name, Fail,
 			"created, but the probe network could not be removed: " + err.Error(),
 			"remove " + probe + " manually"}
 	}
-	return Result{name, Pass, "internal isolated bridge created and removed", ""}
+	if inspectErr != nil {
+		return Result{name, Fail, "the probe network could not be inspected: " + inspectErr.Error(),
+			"check the socket mount and daemon health"}
+	}
+	if len(gateways) > 0 {
+		return Result{name, Fail,
+			"the daemon accepted an internal isolated bridge but assigned it a gateway address (" +
+				strings.Join(gateways, ", ") + "); the isolated gateway mode did not take effect",
+			"this daemon ignores com.docker.network.bridge.gateway_mode_ipv4=isolated, so a capsule " +
+				"would have a route to the host; use a stock Engine 28 or newer daemon, or choose " +
+				"network.profile: unsafe-open-egress deliberately"}
+	}
+	return Result{name, Pass, "internal isolated bridge created with no gateway address, and removed", ""}
 }
 
 func removeProbeNetwork(ctx context.Context, d networkProbeClient, id string) error {

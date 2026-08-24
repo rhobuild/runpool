@@ -498,6 +498,13 @@ by its public and operational effects.
 - The standalone binary and completions are built once before qualification,
   retained by checksum, and published without rebuilding. Releases also carry
   separate controller and capsule SBOMs plus signed provenance attestations.
+- **The preflight proves the isolated bridge took effect, not that the daemon
+  accepted the request.** A daemon that does not recognise the option takes the
+  request and drops it in silence, so a network that creates says nothing; what
+  says something is that the daemon assigned the bridge no host address, which
+  is the address a capsule would otherwise route through. The refusal names the
+  address it found. This is also the first thing that fails when the option is
+  removed from the code: it was possible to delete it and pass every gate.
 - **Runpool deploys on any Docker host that runs Compose.** What a platform has
   to provide is five things — a container kept running from a digest, a
   persistent volume, two read-only mounts, the socket, and a redeploy that keeps

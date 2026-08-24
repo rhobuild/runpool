@@ -19,7 +19,10 @@ and what was assumed is already drawn. Live status is in
 
 Runpool requires Docker Engine 28.0 or newer because its restricted network
 profile depends on the `isolated` gateway mode introduced in
-[Engine 28](https://docs.docker.com/engine/release-notes/28/). The
+[Engine 28](https://docs.docker.com/engine/release-notes/28/). The version is
+the floor, not the proof: the preflight builds one such bridge and checks the
+daemon assigned it no host address, because a daemon that does not recognise
+the option accepts the request and drops it in silence. The
 controller negotiates a mutually supported Engine API version; it does not
 require the host daemon to equal the release-qualification patch and it does
 not reject a newer major solely for being newer.

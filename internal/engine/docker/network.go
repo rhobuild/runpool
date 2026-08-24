@@ -90,6 +90,27 @@ func (c *Client) EnsureOwnedNetwork(ctx context.Context, spec engine.NetworkSpec
 	return inspected.Network.ID, nil
 }
 
+// NetworkGateways is every host address the daemon assigned to a
+// network, which for an isolated bridge is none.
+//
+// It reports what the daemon did rather than what it was asked for: the
+// options an inspect echoes back are the ones that were sent, honoured
+// or not, so reading them proves only that the request was made. A
+// gateway address is a decision the daemon took.
+func (c *Client) NetworkGateways(ctx context.Context, id string) ([]string, error) {
+	inspected, err := c.cli.NetworkInspect(ctx, id, client.NetworkInspectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, cfg := range inspected.Network.IPAM.Config {
+		if cfg.Gateway.IsValid() {
+			out = append(out, cfg.Gateway.String())
+		}
+	}
+	return out, nil
+}
+
 // NetworkSubnet returns a network's IPv4 subnet as assigned by IPAM.
 func (c *Client) NetworkSubnet(ctx context.Context, id string) (string, error) {
 	inspected, err := c.cli.NetworkInspect(ctx, id, client.NetworkInspectOptions{})

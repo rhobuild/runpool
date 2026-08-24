@@ -85,6 +85,21 @@ found the same way, by measurement.
 
 ## Consequences
 
+The deny has two halves, and they are dropped by different mechanisms. The
+`internal` flag installs the kernel rules that drop traffic leaving the bridge,
+which covers every destination outside its own subnet. The isolated gateway
+mode leaves the bridge with no host address at all, which covers the
+destinations the first half never sees: traffic to a host-local address is
+delivered without passing the chain that `internal` installs.
+
+Each half is proved by the thing that can see it. The kernel drop is proved by
+the live bypass suite, on a kernel, with a privileged capsule trying to lift
+it. The isolated mode is proved by the preflight, which asks the daemon what it
+assigned the bridge rather than whether it accepted the request — an option key
+a daemon does not recognise is dropped without complaint, so a create tells it
+nothing. The preflight does not prove the kernel drop, and the bypass suite
+does not prove the mode.
+
 - **Kernel-enforced deny.** No route out exists at all; the bypass suite
   asserts unproxied TCP to public addresses fails just as private ones
   do.
