@@ -45,12 +45,25 @@ for round in 1 2 3; do
   # Wait for evidence of committed work before killing, so every round
   # verifies recovery of a database that provably had transactions in
   # flight; a fixed pause could kill a writer that never got started.
-  for _ in $(seq 1 100); do
+  # The log is cleared at the top of each round, so this waits on this
+  # round.s work rather than being satisfied by a predecessor.s leftovers
+  # -- and running out of patience is a failed round, not a quiet kill of
+  # a writer that never started.
+  ready=0
+  for _ in $(seq 1 150); do
     if docker run --rm -v "$vol":/state "$img" sh -c 'test -s /state/kill.log'; then
+      ready=1
       break
     fi
     sleep 0.2
   done
+  if [ "$ready" != 1 ]; then
+    echo "round $round: the writer produced no committed work to kill" >&2
+    docker logs "$writer" >&2 || true
+    docker kill -s KILL "$writer" >/dev/null 2>&1 || true
+    docker rm "$writer" >/dev/null 2>&1 || true
+    exit 1
+  fi
   docker kill -s KILL "$writer" >/dev/null
   docker rm "$writer" >/dev/null
   docker run --rm -v "$vol":/state -v "$dir":/suite:ro \

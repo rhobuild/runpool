@@ -77,14 +77,31 @@ func TestNetworkSandboxBypass(t *testing.T) {
 		t.Fatalf("prepare sandboxed capsule: %v", err)
 	}
 	capsuleID := prepared.RuntimeID
-
 	// direct opens a raw TCP connection from the capsule, with no
-	// proxy: the path the host must refuse in every case.
+	// proxy: the path the host must refuse in every case. An exec that
+	// fails is a broken probe, not a denial — counted as denied, a
+	// missing timeout binary or a bash without /dev/tcp turned all nine
+	// refusal assertions below into a suite that proves nothing.
 	direct := func(host string, port int) bool {
 		code, _, err := dock.Exec(ctx, string(capsuleID), []string{
 			"bash", "-c", fmt.Sprintf("timeout 5 bash -c 'echo > /dev/tcp/%s/%d' 2>/dev/null", host, port),
 		})
-		return err == nil && code == 0
+		if err != nil {
+			t.Fatalf("the direct probe could not run against %s:%d: %v", host, port, err)
+		}
+		return code == 0
+	}
+
+	// The probe proves itself before any refusal rests on it. The
+	// gateway's proxy port accepts connections from the capsule's own
+	// subnet, so the exact mechanism every denial below uses — bash,
+	// /dev/tcp, timeout — must connect somewhere it is allowed to. A
+	// probe that answers "refused" for every address, whatever the
+	// reason, dies here instead of green-lighting an absent sandbox.
+	control := `h=${http_proxy#http://}; h=${h%%:*}; timeout 5 bash -c "echo > /dev/tcp/$h/3128"`
+	if code, out, err := dock.Exec(ctx, string(capsuleID), []string{"bash", "-c", control}); err != nil || code != 0 {
+		t.Fatalf("the positive control failed (exit %d, %v, %s): the probe cannot reach the "+
+			"gateway it is allowed to reach, so its refusals below would prove nothing", code, err, out)
 	}
 	// relayed asks the gateway to reach a URL. Exit 0 means the relay
 	// connected; the body is irrelevant.
