@@ -241,7 +241,7 @@ func configuredStatusConfig(environ func(string) string) *config.Config {
 		tierID = config.DefaultTierID
 	}
 	return &config.Config{
-		Host:  config.Host{Topology: topology},
+		Host:  config.Host{Topology: config.HostTopology(topology)},
 		Tiers: []config.Tier{{ID: tierID, Parallelism: parallelism}},
 	}
 }

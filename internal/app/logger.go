@@ -10,11 +10,11 @@ import (
 func newLogger(cfg config.LogConfig) *slog.Logger {
 	var level slog.Level
 	switch cfg.Level {
-	case "debug":
+	case config.LogLevelDebug:
 		level = slog.LevelDebug
-	case "warn":
+	case config.LogLevelWarn:
 		level = slog.LevelWarn
-	case "error":
+	case config.LogLevelError:
 		level = slog.LevelError
 	default:
 		level = slog.LevelInfo

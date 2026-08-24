@@ -37,7 +37,7 @@ func releaseQualificationReference() map[string]string {
 	}
 	if qualified.Status != platform.ReferenceStatusFrozen {
 		return map[string]string{
-			"status":         qualified.Status,
+			"status":         string(qualified.Status),
 			"os":             qualified.Policy.OS + " " + qualified.Policy.OSVersion,
 			"arch":           qualified.Policy.Arch,
 			"docker_channel": qualified.Policy.DockerChannel,
@@ -48,7 +48,7 @@ func releaseQualificationReference() map[string]string {
 		}
 	}
 	return map[string]string{
-		"status":    qualified.Status,
+		"status":    string(qualified.Status),
 		"os":        qualified.Platform.OS + " " + qualified.Platform.OSVersion,
 		"arch":      qualified.Platform.Arch,
 		"engine":    qualified.Platform.Engine,

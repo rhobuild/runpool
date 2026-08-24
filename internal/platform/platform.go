@@ -19,9 +19,16 @@ import (
 // admission. Exact release evidence is compared separately against Reference.
 const MinimumEngineMajor = 28
 
+// ReferenceStatus is whether a platform entry's facts have been captured
+// and reviewed. It gates the release: a candidate tag cannot be created
+// while any entry is pending, and Compare refuses outright unless the
+// entry is frozen -- so a status compared against the wrong vocabulary's
+// word would report a reference nobody reviewed as reviewed.
+type ReferenceStatus string
+
 const (
-	ReferenceStatusPending = "pending"
-	ReferenceStatusFrozen  = "frozen"
+	ReferenceStatusPending ReferenceStatus = "pending"
+	ReferenceStatusFrozen  ReferenceStatus = "frozen"
 )
 
 //go:embed platform.lock.json
@@ -74,10 +81,10 @@ type Reference struct {
 // it. A pending entry keeps release gates closed for that platform until
 // its facts have been captured and reviewed before a candidate tag.
 type Qualified struct {
-	Status   string `json:"status"`
-	Policy   Policy `json:"policy"`
-	Recorded string `json:"recorded,omitempty"`
-	Platform Facts  `json:"platform,omitempty"`
+	Status   ReferenceStatus `json:"status"`
+	Policy   Policy          `json:"policy"`
+	Recorded string          `json:"recorded,omitempty"`
+	Platform Facts           `json:"platform,omitempty"`
 }
 
 // For returns the entry qualified for an architecture.
@@ -340,7 +347,7 @@ func (m Mismatch) String() string {
 // cannot qualify a release.
 func (q Qualified) Compare(observed Facts) []Mismatch {
 	if q.Status != ReferenceStatusFrozen {
-		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: q.Status}}
+		return []Mismatch{{Property: "reference_status", Want: string(ReferenceStatusFrozen), Got: string(q.Status)}}
 	}
 	var out []Mismatch
 	check := func(property, want, got string) {
@@ -375,7 +382,7 @@ func (q Qualified) Compare(observed Facts) []Mismatch {
 // API. Qualification contracts use it when they need daemon-only evidence.
 func (q Qualified) CompareDockerFacts(observed Facts) []Mismatch {
 	if q.Status != ReferenceStatusFrozen {
-		return []Mismatch{{Property: "reference_status", Want: ReferenceStatusFrozen, Got: q.Status}}
+		return []Mismatch{{Property: "reference_status", Want: string(ReferenceStatusFrozen), Got: string(q.Status)}}
 	}
 	var out []Mismatch
 	check := func(property, want, got string) {
