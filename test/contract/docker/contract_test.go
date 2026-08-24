@@ -468,25 +468,25 @@ func TestOwnedIDByName(t *testing.T) {
 	}
 	t.Cleanup(func() { mustRemoveContainer(t, c, ctx, id) })
 
-	got, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "lease-own")
+	got, err := c.OwnedIDByName(ctx, engine.KindContainer, name, assignment.InstanceID(instance), "lease-own")
 	if err != nil || got != id {
 		t.Errorf("owned resolution = %q, %v; want the created id", got, err)
 	}
 
 	// Same name, different lease: name equality is not ownership.
-	if _, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, engine.ErrForeignResource) {
+	if _, err := c.OwnedIDByName(ctx, engine.KindContainer, name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Errorf("foreign resolution = %v; want ErrForeignResource — adopting by name "+
 			"would run work through someone else's object and later delete it", err)
 	}
 	if err := c.RemoveOwnedContainer(ctx, name, assignment.InstanceID(instance), "someone-else"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "container", name, assignment.InstanceID(instance), "lease-own"); err != nil || got != id {
+	if got, err := c.OwnedIDByName(ctx, engine.KindContainer, name, assignment.InstanceID(instance), "lease-own"); err != nil || got != id {
 		t.Fatalf("foreign removal changed the owned object: id=%q err=%v", got, err)
 	}
 
 	// Absence is an answer: the create never took effect.
-	if got, err := c.OwnedIDByName(ctx, "container", instance+"-never-existed", assignment.InstanceID(instance), "lease-own"); err != nil || got != "" {
+	if got, err := c.OwnedIDByName(ctx, engine.KindContainer, instance+"-never-existed", assignment.InstanceID(instance), "lease-own"); err != nil || got != "" {
 		t.Errorf("absent resolution = %q, %v; want empty and no error", got, err)
 	}
 }
@@ -515,7 +515,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 	if err := c.RemoveOwnedNetwork(ctx, networkID, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign network removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "network", networkName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != networkID {
+	if got, err := c.OwnedIDByName(ctx, engine.KindNetwork, networkName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != networkID {
 		t.Fatalf("network changed after refused removal: id=%q err=%v", got, err)
 	}
 
@@ -531,7 +531,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 	if err := c.RemoveOwnedVolume(ctx, volumeName, assignment.InstanceID(instance), "different-lease"); !errors.Is(err, engine.ErrForeignResource) {
 		t.Fatalf("foreign volume removal = %v; want ErrForeignResource", err)
 	}
-	if got, err := c.OwnedIDByName(ctx, "volume", volumeName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != volumeName {
+	if got, err := c.OwnedIDByName(ctx, engine.KindVolume, volumeName, assignment.InstanceID(instance), "lease-owner"); err != nil || got != volumeName {
 		t.Fatalf("volume changed after refused removal: id=%q err=%v", got, err)
 	}
 }
@@ -777,11 +777,11 @@ func TestCacheLaneVolumes(t *testing.T) {
 	if err := mgr.DeleteLane(ctx, first.LaneID); err != nil {
 		t.Fatal(err)
 	}
-	gone, err := c.OwnedIDByName(ctx, "volume", first.Volume, assignment.InstanceID(instance), "")
+	gone, err := c.OwnedIDByName(ctx, engine.KindVolume, first.Volume, assignment.InstanceID(instance), "")
 	if err != nil || gone != "" {
 		t.Errorf("evicted volume still resolves: %q, %v", gone, err)
 	}
-	left, err := c.OwnedIDByName(ctx, "volume", other.Volume, assignment.InstanceID(instance), "")
+	left, err := c.OwnedIDByName(ctx, engine.KindVolume, other.Volume, assignment.InstanceID(instance), "")
 	if err != nil || left == "" {
 		t.Errorf("the surviving lane's volume is gone: %q, %v", left, err)
 	}

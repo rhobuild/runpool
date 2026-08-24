@@ -35,7 +35,7 @@ func (f *fakeVolumes) EnsureOwnedVolume(_ context.Context, name string, labels m
 	return nil
 }
 
-func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
+func (f *fakeVolumes) OwnedIDByName(_ context.Context, kind engine.ObjectKind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	if f.foreign {
 		return "", engine.ErrForeignResource
 	}

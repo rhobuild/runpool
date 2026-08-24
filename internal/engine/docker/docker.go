@@ -258,18 +258,18 @@ func classify(err error) error {
 // create-side conflict it means the conflict was transient, and for
 // recovery it proves the create never took effect. A name match with
 // foreign labels is engine.ErrForeignResource — name equality is not ownership.
-func (c *Client) OwnedIDByName(ctx context.Context, kind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
+func (c *Client) OwnedIDByName(ctx context.Context, kind engine.ObjectKind, name string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	return c.resolveOwnedID(ctx, kind, name, instanceID, leaseID)
 }
 
 // resolveOwnedID accepts either a deterministic name or an immutable daemon
 // id. Creation recovery calls it by name; destructive cleanup calls it by the
 // confirmed id when one was persisted.
-func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
+func (c *Client) resolveOwnedID(ctx context.Context, kind engine.ObjectKind, reference string, instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error) {
 	var id string
 	var labels map[string]string
 	switch kind {
-	case "container":
+	case engine.KindContainer:
 		inspected, err := c.cli.ContainerInspect(ctx, reference, client.ContainerInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			return "", nil
@@ -278,7 +278,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, ins
 			return "", err
 		}
 		id, labels = inspected.Container.ID, inspected.Container.Config.Labels
-	case "network":
+	case engine.KindNetwork:
 		inspected, err := c.cli.NetworkInspect(ctx, reference, client.NetworkInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			return "", nil
@@ -287,7 +287,7 @@ func (c *Client) resolveOwnedID(ctx context.Context, kind, reference string, ins
 			return "", err
 		}
 		id, labels = inspected.Network.ID, inspected.Network.Labels
-	case "volume":
+	case engine.KindVolume:
 		inspected, err := c.cli.VolumeInspect(ctx, reference, client.VolumeInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			return "", nil

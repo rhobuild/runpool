@@ -78,7 +78,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, "container", "runpool-"+capsule.RoleGateway+"-"+short, "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+short, "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}

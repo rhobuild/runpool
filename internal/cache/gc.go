@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -248,7 +249,7 @@ func (m *LaneManager) RunGC(ctx context.Context, plan GCPlan, actor string) (GCR
 // before them too — but ownership is still proven first, because the
 // volume namespace is shared.
 func (m *LaneManager) removeOrphanVolume(ctx context.Context, name string) error {
-	if _, err := m.volumes.OwnedIDByName(ctx, "volume", name, m.instanceID, ""); err != nil {
+	if _, err := m.volumes.OwnedIDByName(ctx, engine.KindVolume, name, m.instanceID, ""); err != nil {
 		return err
 	}
 	return m.volumes.RemoveVolume(ctx, name)
