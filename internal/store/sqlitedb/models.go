@@ -69,14 +69,15 @@ type CacheProject struct {
 }
 
 type CapsuleLease struct {
-	ID          string
-	BindingID   int64
-	AttemptID   string
-	TierID      string
-	State       string
-	RuntimeName string
-	CreatedAt   int64
-	UpdatedAt   int64
+	ID               string
+	BindingID        int64
+	AttemptID        string
+	TierID           string
+	State            string
+	RuntimeName      string
+	StartObservation string
+	CreatedAt        int64
+	UpdatedAt        int64
 }
 
 type GithubActionsAttemptMetadatum struct {

@@ -94,6 +94,15 @@ CREATE TABLE capsule_leases (
 	-- by workload key; this is the cross-check that says a runner is
 	-- executing the workload it was provisioned for.
 	runtime_name  TEXT NOT NULL DEFAULT '',
+	-- What this serving measured about whether the workload began. The
+	-- proof outranks the evidence -- an attempt whose capsule reports the
+	-- runner never owned the job returns to the queue even though the
+	-- capsule reported itself up -- and a cleanup that has to be retried
+	-- would otherwise carry no proof into the retry and settle the
+	-- attempt as one that ran. Only a value that establishes something is
+	-- recorded; absent and unavailable establish nothing and stay NoObservation ('').
+	start_observation TEXT NOT NULL DEFAULT '' CHECK (start_observation IN (
+		'', 'created', 'never_started', 'running', 'exited')),
 	created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
 	updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
 );

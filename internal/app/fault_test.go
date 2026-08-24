@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1021,8 +1022,88 @@ func TestEveryObservationHasAStartFailureReport(t *testing.T) {
 				"outcome; it is the clearest answer there is")
 		}
 	}
-	if report, unproven := startFailureReport("something-nobody-declared"); report != "" || !unproven {
-		t.Errorf("an observation this package does not know reported %q, unproven=%v; "+
-			"want no report and no claim", report, unproven)
+	// A value this package does not know makes no claim about what it
+	// means -- and still says so, because the caller logs the report as
+	// the message. An empty one is an operator page with nothing to
+	// filter, alert or search on.
+	report, unproven := startFailureReport("something-nobody-declared")
+	if !unproven {
+		t.Error("an observation this package does not know was reported as an established outcome")
+	}
+	if !strings.Contains(report, "does not declare") {
+		t.Errorf("an undeclared observation reported %q; it has to say that it is undeclared "+
+			"rather than name a meaning, and it has to say something", report)
+	}
+}
+
+// TestAProofSurvivesThePeriodicPass is the reachable sequence, driven
+// through the real recovery and the real periodic pass.
+//
+// A capsule reports that the runner never owned the job, so the attempt
+// must return to the queue even though the capsule had already reported
+// itself up. Removal then fails against a wedged daemon and the lease
+// parks in quarantine. The periodic pass that picks it up carries no
+// observation at all — it holds no daemon inventory — so without the
+// serving's own record it disposes of the attempt on evidence alone and
+// settles a job that never ran. Nothing serves that workload again, and
+// the books say it started.
+func TestAProofSurvivesThePeriodicPass(t *testing.T) {
+	h := newHarness(t, 1)
+	remover := &faultyRemover{}
+	h.useRemover(remover)
+	if err := h.deliver(demand("job-proof", "app", 81)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-proof")
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		// The capsule reported itself up and the attempt is running:
+		// this is what a settled disposition would rule on.
+		if err := tx.RecordEvidence(attempt, store.EvidenceRunningObserved); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptLeased, store.AttemptStarting); err != nil {
+			return err
+		}
+		if err := tx.Advance(attempt, store.AttemptStarting, store.AttemptRunning); err != nil {
+			return err
+		}
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-proof")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(id, "proof-1")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The pass that measured the proof cannot finish.
+	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+		assignment.ObservedCreated); err == nil {
+		t.Fatal("recovery with a wedged daemon succeeded")
+	}
+	if got := reloadLease(t, h, lease.ID); got.StartObservation != assignment.ObservedCreated {
+		t.Fatalf("the serving recorded %q; the proof has to outlive the pass that took it",
+			got.StartObservation)
+	}
+
+	// The daemon heals and the backoff elapses.
+	remover.healed = true
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		intents, err := tx.Resources(lease.ID)
+		if err != nil {
+			return err
+		}
+		return tx.RecordResourceError(intents[0].ID, errors.New("previous failure"), time.Now().Add(-time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.retryStranded(t.Context())
+
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+		t.Errorf("lease = %s after the periodic pass; want released", got.State)
+	}
+	if got := attemptState(t, h, attempt); got.State != store.AttemptReady {
+		t.Errorf("attempt = %s; want ready — the capsule proved the runner never owned this job", got.State)
 	}
 }

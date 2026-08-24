@@ -402,6 +402,13 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		log.Error("failure transition failed", "error", err)
 		return err
 	}
+	// A retry of this recovery arrives with nothing measured, because the
+	// pass that measured it is the one that failed. Reading it back here
+	// rather than at the disposition puts it in front of the provider
+	// question below, which is the one thing entitled to overrule it.
+	if !startObs.Establishes() && was.StartObservation.Establishes() {
+		startObs = was.StartObservation
+	}
 
 	// The runner id lives in the adapter's metadata for the attempt this
 	// lease serves; a binding of another provider has none, and zero
@@ -461,6 +468,15 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		}
 	}
 
+	// Before the first destructive step, and after every refinement above
+	// that can overrule it. A recovery that cannot record what it saw must
+	// not destroy the thing it saw: the lease stays cleaning, holding its
+	// credit and its objects, and the periodic pass runs the whole
+	// recovery again with the capsule still there.
+	if err := s.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
+		log.Error("cannot record what this serving measured; nothing is removed", "error", err)
+		return err
+	}
 	if err := s.leases.RemoveResources(ctx, leaseID); err != nil {
 		log.Error("failure cleanup failed; lease quarantined", "error", err)
 		s.leases.Quarantine(leaseID)
@@ -499,8 +515,18 @@ func startFailureReport(obs assignment.ExecutionObservation) (report string, unp
 		// Decided before this is reached, and named here so the totality
 		// check is about every observation rather than the leftovers.
 		return "the runtime outlived the start that reported an error", false
+	case assignment.NoObservation:
+		// Distinct from the pair above it: those were asked and could not
+		// answer, this was never asked. Both need an operator, and only
+		// one of them says the runtime was reached.
+		return "no observation was taken of this start; the assignment needs an operator", true
 	}
-	return "", true
+	// A value this build does not declare. Naming what it means would be
+	// inventing one, and that is the mistake this function exists to stop.
+	// Saying nothing is a different mistake: the caller logs this as the
+	// message, so an empty one pages an operator with a line that has no
+	// message to filter, alert or search on.
+	return "the start failed carrying an observation this build does not declare", true
 }
 
 // remainingCeiling is what is left of a lease's tier ceiling.

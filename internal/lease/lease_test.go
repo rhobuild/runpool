@@ -514,33 +514,59 @@ func TestBothDispositionPathsAgree(t *testing.T) {
 	for name, tc := range map[string]struct {
 		state    store.AttemptState
 		evidence store.Evidence
-		obs      assignment.ExecutionObservation
-		want     disposition
+		// stored is what the serving recorded when it measured, which a
+		// retry of its cleanup has to read back: the pass that measured is
+		// the one that failed, and it arrives here having measured nothing.
+		stored assignment.ExecutionObservation
+		obs    assignment.ExecutionObservation
+		want   disposition
 	}{
 		"proven inert outranks a running observation": {
-			store.AttemptRunning, store.EvidenceRunningObserved, assignment.ObservedCreated, dispositionRequeue},
+			store.AttemptRunning, store.EvidenceRunningObserved, "", assignment.ObservedCreated, dispositionRequeue},
+		// The three below are the retry of the row above: its cleanup
+		// failed, so the pass that measured the proof is not the pass that
+		// disposes of the attempt. What the retry carries establishes
+		// nothing -- it either measured nothing or found the capsule this
+		// cleanup is removing already gone -- and without the recorded
+		// proof each of them settles a job that never ran.
+		"a recorded proof outranks a retry that found nothing": {
+			store.AttemptRunning, store.EvidenceRunningObserved,
+			assignment.ObservedCreated, assignment.ObservedAbsent, dispositionRequeue},
+		"a recorded proof outranks a retry that measured nothing": {
+			store.AttemptRunning, store.EvidenceRunningObserved,
+			assignment.ObservedCreated, "", dispositionRequeue},
+		// And a later measurement that does establish something still
+		// wins: the provider is asked again on the retry, and it is the
+		// one account entitled to overrule the capsule.
+		"a later establishing measurement outranks the recorded proof": {
+			store.AttemptRunning, store.EvidenceRunningObserved,
+			assignment.ObservedCreated, assignment.ObservedRunning, dispositionSettleStarted},
 		"an observed exit settles as completed": {
-			store.AttemptRunning, store.EvidenceExitObserved, "", dispositionSettleCompleted},
+			store.AttemptRunning, store.EvidenceExitObserved, "", "", dispositionSettleCompleted},
+		// Nothing measured and nothing recorded: the tier ceiling, where
+		// the capsule is destroyed while the runner is still working. That
+		// job really did run.
 		"a running observation settles as started": {
-			store.AttemptRunning, store.EvidenceRunningObserved, "", dispositionSettleStarted},
+			store.AttemptRunning, store.EvidenceRunningObserved, "", "", dispositionSettleStarted},
 		"nothing prepared returns to the queue": {
-			store.AttemptLeased, store.EvidenceNotStarted, "", dispositionRequeue},
+			store.AttemptLeased, store.EvidenceNotStarted, "", "", dispositionRequeue},
 		"a running runtime settles as started": {
-			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.ObservedRunning, dispositionSettleStarted},
+			store.AttemptStarting, store.EvidenceStartAuthorized, "", assignment.ObservedRunning, dispositionSettleStarted},
 		"an unprovable start is held": {
-			store.AttemptStarting, store.EvidenceStartAuthorized, assignment.ObservedAbsent, dispositionReview},
+			store.AttemptStarting, store.EvidenceStartAuthorized, "", assignment.ObservedAbsent, dispositionReview},
 		"an attempt an operator returned to the queue is left alone": {
-			store.AttemptReady, store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptReady, store.EvidenceNotStarted, "", "", dispositionNone},
 		"a superseded attempt is left alone": {
-			store.AttemptSuperseded, store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptSuperseded, store.EvidenceNotStarted, "", "", dispositionNone},
 		"a held attempt is left alone": {
-			store.AttemptManualReview, store.EvidenceNotStarted, "", dispositionNone},
+			store.AttemptManualReview, store.EvidenceNotStarted, "", "", dispositionNone},
 		"a settled attempt is left alone": {
-			store.AttemptSettled, store.EvidenceExitObserved, "", dispositionNone},
+			store.AttemptSettled, store.EvidenceExitObserved, "", "", dispositionNone},
 	} {
 		t.Run(name, func(t *testing.T) {
 			attempt := store.Attempt{State: tc.state, Evidence: tc.evidence}
-			if got := dispositionFor(attempt, tc.obs); got != tc.want {
+			lease := store.Lease{StartObservation: tc.stored}
+			if got, _ := dispositionFor(lease, attempt, tc.obs); got != tc.want {
 				t.Errorf("dispositionFor(%s, %s, %s) = %d; want %d",
 					tc.state, tc.evidence, tc.obs, got, tc.want)
 			}
@@ -646,5 +672,88 @@ func TestAnAttemptReturnedToTheQueueDoesNotPinItsLease(t *testing.T) {
 	}
 	if got := f.attemptState().State; got != store.AttemptReady {
 		t.Errorf("attempt = %s; want it left where the operator put it", got)
+	}
+}
+
+// TestARecordedProofSurvivesAFailedCleanup is the sequence the record
+// exists for.
+//
+// A capsule reports that the runner never owned the job, so the
+// attempt must return to the queue even though the capsule had already
+// reported itself up. Cleanup then fails against a wedged daemon and the
+// lease is quarantined -- the documented retry path. The pass that
+// measured the proof is therefore not the pass that disposes of the
+// attempt, and the retry arrives having measured nothing: absent,
+// because the capsule a measurement would have come from is the one this
+// cleanup is removing.
+//
+// Without the record the retry settles the attempt as one that ran, and
+// the workload is never served again while the books say it started.
+func TestARecordedProofSurvivesAFailedCleanup(t *testing.T) {
+	remover := &wedgedRemover{}
+	f := newFixture(t, remover)
+	f.driveTo(store.LeaseDraining)
+	f.advanceAttemptTo(store.AttemptRunning)
+	f.tx(func(tx *store.Tx) error {
+		if err := tx.RecordEvidence(f.lease.AttemptID, store.EvidenceRunningObserved); err != nil {
+			return err
+		}
+		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, "runner", "runpool-runner-proof")
+		if err != nil {
+			return err
+		}
+		return tx.MarkResourcePresent(assignment.ResourceIntentID(id), "proof-1")
+	})
+
+	// The pass that measured the proof cannot finish: the daemon is wedged.
+	if err := f.m.FinishCleaning(t.Context(), f.reload(), assignment.ObservedCreated); err == nil {
+		t.Fatal("cleanup against a wedged daemon reported success")
+	}
+	if got := f.reload().StartObservation; got != assignment.ObservedCreated {
+		t.Fatalf("the serving recorded %q; the proof has to outlive the pass that took it", got)
+	}
+
+	// The daemon heals and the retry runs, having measured nothing.
+	remover.healed = true
+	if err := f.m.FinishCleaning(t.Context(), f.reload(), assignment.ObservedAbsent); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	got := f.attemptState()
+	if got.State != store.AttemptReady {
+		t.Errorf("attempt = %s; want ready — the capsule proved the runner never owned this job", got.State)
+	}
+	if got.Resolution != "" {
+		t.Errorf("attempt resolution = %q; a job that never ran is not settled", got.Resolution)
+	}
+}
+
+// TestOnlyAMeasurementIsRecorded holds the predicate in Go and the
+// column's own constraint to one rule. They are two statements of it in
+// different languages, and both directions of drift are a real failure:
+// a value that establishes nothing written over a proof spends it, and a
+// value that does establish something refused by the database aborts a
+// recovery in the middle and pins a lease that should have released.
+func TestOnlyAMeasurementIsRecorded(t *testing.T) {
+	// The list is every value of the vocabulary, NoObservation included,
+	// so this covers the value a retry arrives with as well as the
+	// measurements.
+	for _, obs := range assignment.AllExecutionObservations {
+		name := string(obs)
+		if obs == assignment.NoObservation {
+			name = "nothing measured"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, nopRemover{})
+			if err := f.m.RecordStartObservation(t.Context(), f.lease.ID, obs); err != nil {
+				t.Fatalf("recording %q: %v", obs, err)
+			}
+			want := obs
+			if !obs.Establishes() {
+				want = ""
+			}
+			if got := f.reload().StartObservation; got != want {
+				t.Errorf("the serving recorded %q; want %q", got, want)
+			}
+		})
 	}
 }

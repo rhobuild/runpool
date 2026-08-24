@@ -145,6 +145,9 @@ func (m *Manager) FinishCleaning(ctx context.Context, lease store.Lease, obs ass
 			return err
 		}
 	}
+	if err := m.RecordStartObservation(ctx, lease.ID, obs); err != nil {
+		return err
+	}
 	if err := m.RemoveResources(ctx, lease.ID); err != nil {
 		return err
 	}
@@ -214,7 +217,8 @@ func (m *Manager) disposeAttempt(tx *store.Tx, lease store.Lease, startObs assig
 	if err := tx.RecordEvent(attempt.ID, "cleanup_completed:"+string(lease.ID), "cleanup_completed"); err != nil {
 		return err
 	}
-	return m.applyDisposition(tx, attempt, lease.ID, startObs, dispositionFor(attempt, startObs))
+	d, effective := dispositionFor(lease, attempt, startObs)
+	return m.applyDisposition(tx, attempt, lease.ID, effective, d)
 }
 
 // disposition is what the books must record about an attempt whose
@@ -280,7 +284,8 @@ func servedByThisLease(state store.AttemptState) bool {
 	return false
 }
 
-// dispositionFor decides what one ended serving means for its attempt.
+// dispositionFor decides what one ended serving means for its attempt,
+// and reports the observation it decided on.
 // The precedence is stated here, once, in the order these cases are
 // written — but the cases are exhaustive over a value, so adding one
 // cannot silently reorder the others the way inserting a switch case
@@ -294,7 +299,26 @@ func servedByThisLease(state store.AttemptState) bool {
 // exit code it reserves for exactly that. ObservedNeverStarted is the
 // daemon's: a container it has never started. They differ in who is
 // saying it and not in what it proves, so both requeue.
-func dispositionFor(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
+//
+// A proof also outranks a later pass that measured nothing. Cleanup can
+// fail and be retried, and the retry re-enters this with no observation
+// or with absent — neither of which establishes anything, and the second
+// only because the capsule the measurement would have come from is the
+// one this cleanup is removing. Reading back what the serving recorded
+// is what keeps the proof from being spent by the pass that took it. A
+// later measurement that does establish something still wins, because
+// the accounts arrive in order: the daemon's, then the capsule's own,
+// then the provider's.
+func dispositionFor(lease store.Lease, attempt store.Attempt,
+	obs assignment.ExecutionObservation) (disposition, assignment.ExecutionObservation) {
+
+	if !obs.Establishes() && lease.StartObservation.Establishes() {
+		obs = lease.StartObservation
+	}
+	return dispositionOf(attempt, obs), obs
+}
+
+func dispositionOf(attempt store.Attempt, obs assignment.ExecutionObservation) disposition {
 	switch {
 	case !servedByThisLease(attempt.State):
 		return dispositionNone
@@ -397,7 +421,8 @@ func (m *Manager) requeueOrReview(tx *store.Tx, attemptID assignment.AttemptID, 
 // disposeAttempt once carried their own switches and drifted apart.
 func (m *Manager) DisposeStranded(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
 	m.withAttemptOfLease(ctx, lease.ID, func(tx *store.Tx, attempt store.Attempt) error {
-		return m.applyDisposition(tx, attempt, lease.ID, obs, dispositionFor(attempt, obs))
+		d, effective := dispositionFor(lease, attempt, obs)
+		return m.applyDisposition(tx, attempt, lease.ID, effective, d)
 	})
 }
 
@@ -438,6 +463,29 @@ func (m *Manager) Quarantine(leaseID assignment.LeaseID) {
 		m.log.Error("cannot quarantine the lease; it stays in its current state",
 			"lease", leaseID, "error", err)
 	}
+}
+
+// RecordStartObservation keeps what this serving measured about whether
+// the workload began, so a cleanup that has to be retried does not lose
+// it. Only a measurement that establishes something is written: the
+// values a retry produces establish nothing, and writing one would spend
+// the proof the pass before it recorded.
+//
+// It runs on a context detached from the caller's for the same reason
+// evidence does: the answer is about work that has already happened, and
+// a cancelled recovery that has seen something must still be able to say
+// so.
+func (m *Manager) RecordStartObservation(ctx context.Context, leaseID assignment.LeaseID,
+	obs assignment.ExecutionObservation) error {
+
+	if !obs.Establishes() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	return m.store.Tx(ctx, func(tx *store.Tx) error {
+		return tx.RecordLeaseStartObservation(leaseID, obs)
+	})
 }
 
 // RemoveResources drives every one of a lease's intents to absent, in
