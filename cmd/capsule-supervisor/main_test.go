@@ -99,14 +99,16 @@ func TestPrepareRunnerConfigRejectsPathsAndCollisions(t *testing.T) {
 func TestTerminalFailureDistinguishesUnstartedRunners(t *testing.T) {
 	err := errors.New("no credential was delivered")
 
-	for _, state := range []string{"", "waiting", "starting"} {
-		if got := terminalFailure(state, err); !strings.HasPrefix(got, "aborted:") {
+	// Raw, deliberately: these are the wire values, and a pin spelled
+	// through the constants would follow them anywhere they moved.
+	for _, state := range []protocol.State{"", "booting", "waiting", "starting"} {
+		if got := terminalFailure(state, err); !strings.HasPrefix(string(got), "aborted:") {
 			t.Errorf("failure from state %q = %q; want an aborted state", state, got)
 		}
 	}
 	// Past `running` the runner owned the job; claiming it never started
 	// would run it a second time.
-	if got := terminalFailure("running", err); !strings.HasPrefix(got, "failed:") {
+	if got := terminalFailure("running", err); !strings.HasPrefix(string(got), "failed:") {
 		t.Errorf("failure after the runner started = %q; want a failed state", got)
 	}
 }
@@ -370,7 +372,7 @@ func TestTheStartAuthorizationRecordsItselfBeforeItLands(t *testing.T) {
 	if err := authorizeStart(record); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"state=" + protocol.StateStarting, "start=" + protocolVersion}
+	want := []string{"state=" + string(protocol.StateStarting), "start=" + protocolVersion}
 	if !slices.Equal(wrote, want) {
 		t.Errorf("the authorization wrote %v; want %v.\nUntil the state is recorded the capsule "+
 			"answers `waiting`, which is read as proof that no runner ever started.", wrote, want)
@@ -399,7 +401,7 @@ func TestAnAuthorizationThatCannotLandSaysSo(t *testing.T) {
 	if err := authorizeStart(record); !errors.Is(err, full) {
 		t.Fatalf("authorize returned %v; want the write's own failure", err)
 	}
-	if len(wrote) == 0 || wrote[len(wrote)-1] != protocol.StateWaiting {
+	if len(wrote) == 0 || protocol.State(wrote[len(wrote)-1]) != protocol.StateWaiting {
 		t.Errorf("the capsule was left saying %v after an authorization that never landed; "+
 			"it has to say the state a launcher requeues from", wrote)
 	}

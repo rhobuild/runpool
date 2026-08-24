@@ -148,7 +148,7 @@ func supervise(log *slog.Logger) int {
 	if err := boot(log); err != nil {
 		log.Error("capsule boot failed", "error", err)
 		// Boot is entirely before the runner: nothing was ever handed over.
-		setState(protocol.AbortedPrefix + err.Error())
+		setState(protocol.State(protocol.AbortedPrefix + err.Error()))
 		return exitAborted
 	}
 
@@ -157,7 +157,7 @@ func supervise(log *slog.Logger) int {
 		log.Error("capsule run failed", "error", err)
 		state := terminalFailure(currentState(), err)
 		setState(state)
-		if strings.HasPrefix(state, protocol.AbortedPrefix) {
+		if strings.HasPrefix(string(state), protocol.AbortedPrefix) {
 			return exitAborted
 		}
 		return 1
@@ -167,7 +167,7 @@ func supervise(log *slog.Logger) int {
 		log.Warn("the runner exited with the reserved abort code; reporting it as a plain failure",
 			"runner_exit", code, "reported", reported)
 	}
-	setState(protocol.ExitedPrefix + strconv.Itoa(reported))
+	setState(protocol.State(protocol.ExitedPrefix + strconv.Itoa(reported)))
 	log.Info("capsule finished", "exit", reported)
 	return reported
 }
@@ -696,13 +696,13 @@ func authorizeStart(replace func(string, []byte, os.FileMode, int, int) error) e
 //
 // replace is a parameter so the fallback can be exercised without
 // filling a filesystem.
-func replaceState(path, state string, replace func(string, []byte, os.FileMode, int, int) error) {
+func replaceState(path string, state protocol.State, replace func(string, []byte, os.FileMode, int, int) error) {
 	if err := replace(path, []byte(state), 0o644, -1, -1); err != nil {
 		_ = os.WriteFile(path, []byte(state), 0o644)
 	}
 }
 
-func setState(s string) { replaceState(stateFile, s, atomicfile.Replace) }
+func setState(s protocol.State) { replaceState(stateFile, s, atomicfile.Replace) }
 
 // terminalFailure names a failure by whether the runner ever started,
 // which is the one thing the controller cannot infer from the outside.
@@ -711,19 +711,19 @@ func setState(s string) { replaceState(stateFile, s, atomicfile.Replace) }
 // outcome. Before it — no credential delivered, configuration unprepared,
 // dockerd never ready — the job never ran, and reporting an exit would settle
 // it as complete and never retry it.
-func terminalFailure(state string, err error) string {
+func terminalFailure(state protocol.State, err error) protocol.State {
 	if state == protocol.StateRunning {
-		return protocol.FailedPrefix + err.Error()
+		return protocol.State(protocol.FailedPrefix + err.Error())
 	}
-	return protocol.AbortedPrefix + err.Error()
+	return protocol.State(protocol.AbortedPrefix + err.Error())
 }
 
-func currentState() string {
+func currentState() protocol.State {
 	body, err := os.ReadFile(stateFile)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(body))
+	return protocol.State(strings.TrimSpace(string(body)))
 }
 
 // maxJITBundle bounds the credential delivery. A real bundle is a few

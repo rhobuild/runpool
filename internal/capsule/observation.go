@@ -32,7 +32,7 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 	if err != nil || code != 0 {
 		return assignment.ObservedUnavailable, fmt.Errorf("capsule state unreadable (exit %d): %s", code, out)
 	}
-	return classifySupervisorState(strings.TrimSpace(out))
+	return classifySupervisorState(protocol.State(strings.TrimSpace(out)))
 }
 
 // SupervisorAbortedExitCode is the status the capsule supervisor exits
@@ -66,7 +66,7 @@ func ClassifyExit(code int) assignment.ExecutionObservation {
 // `waiting` proves an authorization never took effect; `starting` says one
 // did and its outcome is not yet knowable, which is not something to guess
 // at when guessing wrong runs a job twice.
-func classifySupervisorState(state string) (assignment.ExecutionObservation, error) {
+func classifySupervisorState(state protocol.State) (assignment.ExecutionObservation, error) {
 	switch {
 	case state == protocol.StateBooting, state == protocol.StateWaiting:
 		return assignment.ObservedCreated, nil
@@ -79,9 +79,9 @@ func classifySupervisorState(state string) (assignment.ExecutionObservation, err
 		return assignment.ObservedUnavailable, nil
 	case state == protocol.StateRunning:
 		return assignment.ObservedRunning, nil
-	case strings.HasPrefix(state, protocol.AbortedPrefix):
+	case strings.HasPrefix(string(state), protocol.AbortedPrefix):
 		return assignment.ObservedCreated, nil
-	case strings.HasPrefix(state, protocol.ExitedPrefix), strings.HasPrefix(state, protocol.FailedPrefix):
+	case strings.HasPrefix(string(state), protocol.ExitedPrefix), strings.HasPrefix(string(state), protocol.FailedPrefix):
 		return assignment.ObservedExited, nil
 	default:
 		return assignment.ObservedUnavailable, fmt.Errorf("capsule reports unrecognized state %q", state)
