@@ -30,7 +30,7 @@ env:
   # The exact toolchain, so no step silently switches compilers: go.mod
   # names the version and this refuses any automatic substitution. A
   # reproducible build pins the compiler, not just the dependencies.
-  GOTOOLCHAIN: go1.26.6
+  GOTOOLCHAIN: go1.26.7
 
 jobs:
   dependency-review:
