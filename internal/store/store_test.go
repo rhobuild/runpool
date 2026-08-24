@@ -2289,3 +2289,48 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 		t.Error("a resolution outside the vocabulary was stored")
 	}
 }
+
+// TestEveryEventKindIsOneTheColumnAdmits: the trail's fourteen kinds are
+// closed by the schema and enumerated in Go, and the two lists are
+// written by different hands. A kind the machine can produce and the
+// column refuses fails at the write -- in a delivery path, at the moment
+// the trail is being written for an operator to read -- and a kind the
+// column admits with no constant is one the next writer spells by hand.
+func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	id := seedAttempt(t, s, binding, "msg-kinds", "job-kinds")
+
+	for _, k := range AllEventKinds {
+		if err := s.Tx(t.Context(), func(tx *Tx) error {
+			return tx.RecordEvent(id, "idem-"+string(k), k)
+		}); err != nil {
+			t.Errorf("the column refuses the kind %q the machine produces: %v", k, err)
+		}
+	}
+
+	// The other direction, against the column itself: the list is not
+	// short. Every kind the schema admits has a constant here.
+	var admitted []string
+	inTx(t, s, func(tx *Tx) error {
+		row := tx.tx.QueryRow(
+			`SELECT sql FROM sqlite_schema WHERE name = 'attempt_events'`)
+		var ddl string
+		if err := row.Scan(&ddl); err != nil {
+			return err
+		}
+		for _, m := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(ddl, -1) {
+			admitted = append(admitted, m[1])
+		}
+		return nil
+	})
+	if len(admitted) != len(AllEventKinds) {
+		t.Fatalf("the column admits %d kinds and AllEventKinds holds %d: %v",
+			len(admitted), len(AllEventKinds), admitted)
+	}
+	for _, a := range admitted {
+		if !slices.Contains(AllEventKinds, EventKind(a)) {
+			t.Errorf("the column admits %q and no constant names it", a)
+		}
+	}
+}

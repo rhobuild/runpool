@@ -128,7 +128,7 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
 		AttemptID:      id,
 		IdempotencyKey: "attempt_created",
-		Kind:           "attempt_created",
+		Kind:           string(EventAttemptCreated),
 		DetailJson:     "{}",
 	})
 	return err
@@ -175,7 +175,7 @@ func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkload
 	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
 		AttemptID:      open.ID,
 		IdempotencyKey: "attempt_superseded",
-		Kind:           "attempt_superseded",
+		Kind:           string(EventAttemptSuperseded),
 		DetailJson:     "{}",
 	})
 	return err
