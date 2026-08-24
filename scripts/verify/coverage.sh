@@ -5,7 +5,7 @@ set -euo pipefail
 # cover daemon and provider adapters separately; this floor prevents the
 # hermetic surface from regressing unnoticed.
 profile=${1:-coverage.out}
-minimum=${RUNPOOL_COVERAGE_MIN:-35.0}
+minimum=${RUNPOOL_COVERAGE_MIN:-55.0}
 
 if [ ! -f "$profile" ]; then
   echo "coverage profile not found: $profile" >&2

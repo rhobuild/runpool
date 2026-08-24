@@ -42,14 +42,20 @@ the egress decision, configuration validation, the lease machine, the
 cache planner — is tested in its own package with no daemon. These are the
 packages where a gap is a real gap:
 
-| Package | Expected |
+| Package | Measured, 2026-08-24 |
 | --- | --- |
-| `internal/assignment`, `internal/allocator`, `internal/disk` | ~100% |
-| `internal/config`, `internal/egress`, `internal/credential` | ~95% |
-| `internal/cache`, `internal/store`, `internal/lease` | ~80%, limited by SQL paths a fault has to be injected to reach |
+| `internal/allocator`, `internal/disk` | ~95% |
+| `internal/config`, `internal/egress`, `internal/cache` | ~85-90% |
+| `internal/assignment`, `internal/credential` | ~80% |
+| `internal/store`, `internal/lease` | ~70%, limited by SQL paths a fault has to be injected to reach |
 
-Those are review expectations, not a gate: `scripts/verify/coverage.sh`
-enforces one repo-wide floor (`RUNPOOL_COVERAGE_MIN`, 35% by default). A
+Measured numbers, kept honest by re-measuring when they are touched: an
+earlier form of this table said ~100% where the tree held 57%, and a
+table nothing checks drifts into advertising. They are review
+expectations, not a gate: `scripts/verify/coverage.sh` enforces one
+repo-wide floor (`RUNPOOL_COVERAGE_MIN`, 55% by default, against a tree
+that measures ~60%) -- a floor twenty-five points under the tree lets a
+quarter of the covered statements go dark before anything trips. A
 per-package gate would fail on the mechanics packages below, which are
 deliberately thin here and proved elsewhere.
 

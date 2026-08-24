@@ -1,6 +1,9 @@
 package assignment
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The fingerprint must be insensitive to arrival order — the provider
 // owes no ordering guarantee — and sensitive to every field the domain
@@ -55,5 +58,30 @@ func TestDeliveryKeyIsVersioned(t *testing.T) {
 func TestDeliveryKeySeparatesQueues(t *testing.T) {
 	if DeliveryKey(7, 41) == DeliveryKey(8, 41) {
 		t.Error("two queues issuing the same delivery id produced one key; the second delivery would be deduplicated away")
+	}
+}
+
+// TestAnAssignmentWithoutAWorkloadKeyIsRefused: the key is what
+// deduplication and recovery recognise an assignment by, so recording
+// one without it plants a row nothing can recognise again. The guard is
+// the first thing persistDelivery runs; without it the schema's own
+// constraint still refuses the row, but as an opaque constraint error on
+// a message at the head of an ordered queue — which stays unacknowledged
+// and wedges the binding.
+func TestAnAssignmentWithoutAWorkloadKeyIsRefused(t *testing.T) {
+	bad := WorkloadAssignment{TenantKey: "acme", ProjectKey: "app", SourceRunID: 7}
+	err := bad.Validate()
+	if err == nil {
+		t.Fatal("an assignment with no workload key validated")
+	}
+	for _, names := range []string{"acme", "app", "7"} {
+		if !strings.Contains(err.Error(), names) {
+			t.Errorf("error = %q; it has to name %q, which is all an operator has to find the run", err, names)
+		}
+	}
+	good := bad
+	good.SourceWorkloadKey = "job-1"
+	if err := good.Validate(); err != nil {
+		t.Errorf("a complete assignment was refused: %v", err)
 	}
 }
