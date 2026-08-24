@@ -166,7 +166,7 @@ func (n *Manager) build(ctx context.Context, budget time.Duration) (*capsule.San
 
 	uplinkID, err := n.daemon.EnsureOwnedNetwork(ctx, engine.NetworkSpec{
 		Name:   "runpool-uplink-" + string(n.instanceID)[:8],
-		Labels: engine.Ownership{Instance: n.instanceID, Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: n.instanceID, Role: engine.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uplink network: %w", err)
@@ -379,7 +379,7 @@ func (n *Manager) ConfirmLaunch(ctx context.Context, leaseID assignment.LeaseID,
 	}
 	var confirmed int
 	for _, c := range containers {
-		if c.Role != capsule.RoleGateway || c.LeaseID != leaseID || !c.Running {
+		if c.Role != engine.RoleGateway || c.LeaseID != leaseID || !c.Running {
 			continue
 		}
 		if err := n.reloadGateway(ctx, c, payload); err != nil {
@@ -589,7 +589,7 @@ func (n *Manager) reloadGateways(ctx context.Context, allow, deny []string) (fai
 	}
 	var mu sync.Mutex
 	eachGateway(containers, func(c engine.OwnedContainer) {
-		if c.Role != capsule.RoleGateway || !c.Running {
+		if c.Role != engine.RoleGateway || !c.Running {
 			return
 		}
 		if err := n.reloadGateway(ctx, c, payload); err != nil {
@@ -699,7 +699,7 @@ func (n *Manager) closeGateways(ctx context.Context) error {
 		failures int
 	)
 	eachGateway(containers, func(c engine.OwnedContainer) {
-		if c.Role != capsule.RoleGateway || !c.Running {
+		if c.Role != engine.RoleGateway || !c.Running {
 			return
 		}
 		if err := n.closeGateway(ctx, c.ID); err != nil {
@@ -731,7 +731,7 @@ func (n *Manager) discoverHostCIDRs(ctx context.Context) ([]string, error) {
 		Entrypoint:  []string{"/bin/sh", "-c"},
 		Cmd:         []string{"ip -o -4 addr show scope global"},
 		NetworkMode: "host",
-		Labels:      engine.Ownership{Instance: n.instanceID, Role: "probe"}.Labels(),
+		Labels:      engine.Ownership{Instance: n.instanceID, Role: engine.RoleProbe}.Labels(),
 	})
 	if err != nil {
 		return nil, err
