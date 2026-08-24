@@ -101,18 +101,7 @@ func (s *Session) Receive(ctx context.Context) (*Message, error) {
 			out.AcquireError = fmt.Errorf("acquire %d offered jobs: %w", len(ids), err)
 			acquired = nil
 		}
-		for _, id := range acquired {
-			j, ok := byID[id]
-			if !ok {
-				out.StrandedGrants = append(out.StrandedGrants, id)
-				continue
-			}
-			// One grant, one workload: the pairing is spent when it is
-			// used, so a second grant for the same id is stranded rather
-			// than claiming the workload twice.
-			delete(byID, id)
-			out.Acquired = append(out.Acquired, j)
-		}
+		mergeAcquired(&out, acquired, byID)
 	}
 
 	return &out, nil
@@ -160,3 +149,21 @@ func (s *Session) Acknowledge(ctx context.Context, messageID int) error {
 }
 
 func (s *Session) Close(ctx context.Context) error { return s.mc.Close(ctx) }
+
+// mergeAcquired folds the broker's grants into the message. One grant,
+// one workload: the pairing is spent when it is used, so a second grant
+// for the same id is stranded rather than claiming the workload twice —
+// a broker that answers with a duplicate id would otherwise have one CI
+// job admitted twice, and the strand is also what makes the duplicate
+// visible instead of silently absorbed.
+func mergeAcquired(out *Message, acquired []int64, byID map[int64]assignment.WorkloadAssignment) {
+	for _, id := range acquired {
+		j, ok := byID[id]
+		if !ok {
+			out.StrandedGrants = append(out.StrandedGrants, id)
+			continue
+		}
+		delete(byID, id)
+		out.Acquired = append(out.Acquired, j)
+	}
+}
