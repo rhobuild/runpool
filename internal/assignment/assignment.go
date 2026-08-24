@@ -161,6 +161,17 @@ type WorkloadLifecycleEvent struct {
 type ExecutionObservation string
 
 const (
+	// NoObservation means this pass took no observation at all: nothing
+	// asked the daemon or the capsule, so nothing is established and
+	// nothing is contradicted. It does not carry the Observed prefix
+	// because the six values that do each name what an observer saw, and
+	// this names that there was no observer.
+	//
+	// It is the zero value, and it is what a cleanup retry arrives with:
+	// the pass that measured is the pass that failed. What that pass
+	// recorded on the lease is what a retry reads back, because this
+	// value is not evidence against it.
+	NoObservation ExecutionObservation = ""
 	// ObservedCreated means the supervisor still holds the runner
 	// unstarted. It is the capsule's own account of itself, reached
 	// either by asking it or by reading the status it reserved for
@@ -183,7 +194,31 @@ const (
 	ObservedUnavailable ExecutionObservation = "unavailable"
 )
 
-// AllExecutionObservations is every observation that exists.
+// Establishes reports whether this observation says anything about
+// whether the workload began.
+//
+// Three do not, and they are the ones a retry produces: NoObservation
+// because that pass measured nothing, ObservedAbsent because the capsule
+// a measurement would have come from is the one the cleanup being
+// retried has already removed, and ObservedUnavailable because the
+// runtime could not be made to answer. None of them is evidence against
+// a measurement an earlier pass took, which is why what a serving
+// measures is kept rather than carried only by the goroutine that took
+// it.
+func (o ExecutionObservation) Establishes() bool {
+	switch o {
+	case ObservedCreated, ObservedNeverStarted, ObservedRunning, ObservedExited:
+		return true
+	default:
+		return false
+	}
+}
+
+// AllExecutionObservations is every value of this vocabulary, which is
+// one more than the observations: NoObservation is a value and not an
+// observation, and a switch that leaves it out decides for it by
+// omission -- in the one function whose contract is that nothing is
+// decided by omission.
 //
 // Anything deciding what to do with one has to decide for all of them,
 // and a switch says nothing when a value is added: it falls into
@@ -191,6 +226,7 @@ const (
 // value added here without a home elsewhere is what a totality check
 // has to fail on.
 var AllExecutionObservations = []ExecutionObservation{
+	NoObservation,
 	ObservedCreated,
 	ObservedNeverStarted,
 	ObservedRunning,

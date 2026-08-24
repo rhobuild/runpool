@@ -266,7 +266,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		defer endRecovery()
 		if err != nil {
 			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
-			if err := s.recoverCapsuleFailure(done, b, lease.ID, ""); err != nil {
+			if err := s.recoverCapsuleFailure(done, b, lease.ID, assignment.NoObservation); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -587,7 +587,7 @@ func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, ret
 	}
 	*retried++
 	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
-	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, ""); err != nil {
+	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.NoObservation); err != nil {
 		s.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)
 		return
