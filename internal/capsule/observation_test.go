@@ -18,7 +18,13 @@ import (
 // exit_observed, which disposes the attempt as completed and never requeues
 // it — a job GitHub handed over, that never ran, and that nobody retries.
 func TestClassifySupervisorStateSeparatesAbortFromExit(t *testing.T) {
-	for state, want := range map[string]assignment.ExecutionObservation{
+	// The keys are raw strings on purpose: they are the on-disk vocabulary
+	// the supervisor writes and this reads, and spelling them through the
+	// constants would pin nothing -- edit StateWaiting's value and an
+	// assertion using it drifts along and stays green. Do not "clean these
+	// up" into constants; the literal is the guard.
+	for state, want := range map[protocol.State]assignment.ExecutionObservation{
+		"booting":  assignment.ObservedCreated,
 		"waiting":  assignment.ObservedCreated,
 		"starting": assignment.ObservedUnavailable,
 		"running":  assignment.ObservedRunning,
@@ -42,7 +48,7 @@ func TestClassifySupervisorStateSeparatesAbortFromExit(t *testing.T) {
 // An unknown state refuses to guess rather than settling the attempt on an
 // assumption: the whole point of the observation is that it is observed.
 func TestClassifySupervisorStateRefusesToGuess(t *testing.T) {
-	for _, state := range []string{"", "wat", "exited", "aborted", "done:0"} {
+	for _, state := range []protocol.State{"", "wat", "exited", "aborted", "done:0"} {
 		got, err := classifySupervisorState(state)
 		if err == nil {
 			t.Errorf("state %q classified %q; want an error", state, got)
@@ -130,9 +136,9 @@ func TestAwaitStateGivesUpOnEveryTerminalState(t *testing.T) {
 		wantDone bool
 		wantErr  string // substring; empty means done with no error, or not done
 	}{
-		"the wanted state":          {0, want, nil, true, ""},
-		"trailing newline":          {0, want + "\n", nil, true, ""},
-		"still booting":             {0, protocol.StateBooting, nil, false, ""},
+		"the wanted state":          {0, string(want), nil, true, ""},
+		"trailing newline":          {0, string(want) + "\n", nil, true, ""},
+		"still booting":             {0, string(protocol.StateBooting), nil, false, ""},
 		"aborted before the runner": {0, protocol.AbortedPrefix + " dockerd did not become ready in time", nil, true, "dockerd did not become ready"},
 		"failed after the runner":   {0, protocol.FailedPrefix + " runner exploded", nil, true, "runner exploded"},
 		"already exited":            {0, protocol.ExitedPrefix + "0", nil, true, "exited:0"},
@@ -167,11 +173,11 @@ func TestAwaitStateGivesUpOnEveryTerminalState(t *testing.T) {
 // `waiting` reads "not yet" as "never", and the assignment is served a
 // second time while the first capsule starts its runner.
 func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
-	requeues := map[string]bool{}
-	for _, state := range []string{
+	requeues := map[protocol.State]bool{}
+	for _, state := range []protocol.State{
 		protocol.StateBooting, protocol.StateWaiting, protocol.StateStarting,
-		protocol.StateRunning, protocol.AbortedPrefix + "no credential",
-		protocol.ExitedPrefix + "0", protocol.FailedPrefix + "drained",
+		protocol.StateRunning, protocol.State(protocol.AbortedPrefix + "no credential"),
+		protocol.State(protocol.ExitedPrefix + "0"), protocol.State(protocol.FailedPrefix + "drained"),
 	} {
 		obs, err := classifySupervisorState(state)
 		if err != nil {
@@ -183,8 +189,8 @@ func TestOnlyWaitingProvesTheRunnerNeverStarted(t *testing.T) {
 		t.Error("a capsule that has accepted a start authorization is classified as one that " +
 			"never started; the assignment is requeued while the runner is being forked")
 	}
-	for _, proves := range []string{protocol.StateBooting, protocol.StateWaiting,
-		protocol.AbortedPrefix + "no credential"} {
+	for _, proves := range []protocol.State{protocol.StateBooting, protocol.StateWaiting,
+		protocol.State(protocol.AbortedPrefix + "no credential")} {
 		if !requeues[proves] {
 			t.Errorf("state %q no longer requeues; a job that was never handed over is left "+
 				"for a person or settled as though it ran", proves)

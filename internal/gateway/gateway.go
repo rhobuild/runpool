@@ -45,7 +45,7 @@ type Config struct {
 	// SetState reports readiness or failure through the supervisor's
 	// protocol; the controller polls it and refuses to start a capsule
 	// whose gateway never reported ready.
-	SetState func(string)
+	SetState func(protocol.State)
 }
 
 // PolicyPath is the policy in force, on the gateway's tmpfs. The relay
