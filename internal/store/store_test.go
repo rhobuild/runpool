@@ -2225,3 +2225,28 @@ func TestTheColumnRefusesAReviewerWithNoName(t *testing.T) {
 		t.Errorf("reviewed_by = %q; want the actor who resolved it", got.ReviewedBy)
 	}
 }
+
+// TestTheColumnRefusesAnEmptyLaneHolder: a free lane is NULL, and Go and
+// SQL each ask in their own language — GC reads LeasedBy == "" off a
+// coalesce while the delete guards on leased_by IS NULL. A stored empty
+// string would read as free to one and leased to the other: GC would
+// call the lane evictable and the delete would refuse it, forever. No
+// writer produces one today, which is exactly why the column refuses it
+// rather than trusting that to stay true.
+func TestTheColumnRefusesAnEmptyLaneHolder(t *testing.T) {
+	s := newStore(t)
+	err := s.Tx(t.Context(), func(tx *Tx) error {
+		project, err := tx.EnsureCacheProject("github.com/acme/app")
+		if err != nil {
+			return err
+		}
+		_, err = tx.LeaseCacheLane(project, "gen", "", 4)
+		return err
+	})
+	if err == nil {
+		t.Fatal("a lane was leased to an empty holder; freeness now has two spellings")
+	}
+	if !strings.Contains(err.Error(), "CHECK") {
+		t.Errorf("the write failed with %v; the column's own constraint is what has to refuse it", err)
+	}
+}
