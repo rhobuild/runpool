@@ -1222,3 +1222,37 @@ func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
 			"so it is not returned to the queue", got.State, got.Resolution)
 	}
 }
+
+// TestTheFirstTransitionUnwindsLikeEveryOther: every failure in a
+// capsule's launch walks the lease back through the failure path, which
+// is what returns its admission credit and its attempt to the queue. The
+// first one -- the transition out of reserved -- returned bare instead,
+// so a transient store error there left the lease reserved and its
+// credit held until the stranded grace elapsed and a periodic pass
+// noticed. Minutes of one tier's capacity, on the one step where that
+// was the cost.
+func TestTheFirstTransitionUnwindsLikeEveryOther(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-unwound", "app", 94)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attempt := leaseFor(t, h, "job-unwound")
+
+	// The lease is already past reserved, so the transition this launch
+	// opens with conflicts -- the natural shape of that step failing.
+	if err := h.srv.leases.Transition(t.Context(), lease.ID,
+		store.LeaseReserved, store.LeaseProvisioning); err != nil {
+		t.Fatal(err)
+	}
+
+	h.srv.wg.Add(1)
+	h.srv.runCapsule(h.bind, lease)
+
+	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
+		t.Errorf("lease = %s after a launch that could not start; want released — "+
+			"nothing unwound it and its credit is held until the stranded grace elapses", got.State)
+	}
+	if got := attemptState(t, h, attempt); got.State != store.AttemptReady {
+		t.Errorf("attempt = %s; want ready — nothing was ever prepared for it", got.State)
+	}
+}

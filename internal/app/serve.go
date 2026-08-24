@@ -343,6 +343,14 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	}
 
 	if err := s.reconcile(ctx); err != nil {
+		// Reconciliation starts a goroutine per adopted capsule before it
+		// can fail, and those outlive this return: the drain below is not
+		// registered yet, so nothing tells them the controller is going
+		// away. Saying so here is what stops each of them writing an
+		// error for every store and client call made under a process that
+		// is already exiting -- a burst of failures describing the
+		// shutdown rather than the start that failed.
+		s.abandoning.Store(true)
 		return fmt.Errorf("startup reconciliation: %w", err)
 	}
 

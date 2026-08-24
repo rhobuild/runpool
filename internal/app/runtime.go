@@ -90,7 +90,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	defer cancelPrep()
 
 	if err := s.leases.Transition(ctx, lease.ID, store.LeaseReserved, store.LeaseProvisioning); err != nil {
+		// Unwound like every other failure in this function. Returning
+		// bare left the lease reserved and its credit held until the
+		// stranded grace elapsed, which is minutes of one tier's
+		// capacity for a transient store error -- and the only step here
+		// where that was the cost.
 		log.Error("transition failed", "error", err)
+		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 
@@ -328,18 +334,48 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 // releaseCreditIfDone returns the binding's admission credit only when the lease has
 // reached its terminal state. A quarantined or otherwise stuck lease
 // keeps consuming capacity until reconciliation or cleanup resolves it.
+// creditReadAttempts and creditReadBackoff bound the one read that
+// decides whether an admission credit comes back. The store is a single
+// connection shared with every lease transition, every intent write, the
+// disk monitor and the reconciler, so losing this read is what a moment
+// of contention looks like rather than a lasting condition.
+const (
+	creditReadAttempts = 3
+	creditReadBackoff  = 200 * time.Millisecond
+)
+
 func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	// Retried rather than given up on. This is the only producer of a
+	// release for a lease that finished, and by here the lease is
+	// released -- which puts it outside every later working set, because
+	// those are built from live states. So a read that fails once and is
+	// abandoned costs the binding that credit for the life of the
+	// process, with one line in the log and nothing in status saying why.
+	// The answer is durable and cannot change, so a retry can only find
+	// the same one.
 	var lease store.Lease
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		lease, err = tx.LeaseByID(leaseID)
-		return err
-	}); err != nil {
-		// The lease cannot be read, so its disposition is unknown; holding
-		// the credit is the safe reading of an unknown.
-		s.log.Error("cannot confirm lease disposition; holding its credit", "lease", leaseID, "error", err)
+	var err error
+	for attempt := range creditReadAttempts {
+		if attempt > 0 {
+			select {
+			case <-time.After(creditReadBackoff):
+			case <-ctx.Done():
+			}
+		}
+		err = s.store.Tx(ctx, func(tx *store.Tx) error {
+			var rerr error
+			lease, rerr = tx.LeaseByID(leaseID)
+			return rerr
+		})
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		s.log.Error("cannot confirm lease disposition after retrying; holding its credit",
+			"lease", leaseID, "attempts", creditReadAttempts, "error", err)
 		return
 	}
 	if !lease.State.Terminal() {
