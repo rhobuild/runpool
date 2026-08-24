@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -25,7 +26,7 @@ type flakyScaleSets struct {
 	calls    atomic.Int32
 }
 
-func (f *flakyScaleSets) EnsureScaleSet(context.Context, string, string, int, bool) (githubactions.ScaleSet, error) {
+func (f *flakyScaleSets) EnsureScaleSet(context.Context, string, string, int, bool, func() error) (githubactions.ScaleSet, error) {
 	if f.calls.Add(1) <= f.failures {
 		return githubactions.ScaleSet{}, errors.New("provider unreachable")
 	}
@@ -197,7 +198,7 @@ type refusingScaleSets struct {
 	reached func()
 }
 
-func (r *refusingScaleSets) EnsureScaleSet(context.Context, string, string, int, bool) (githubactions.ScaleSet, error) {
+func (r *refusingScaleSets) EnsureScaleSet(context.Context, string, string, int, bool, func() error) (githubactions.ScaleSet, error) {
 	r.calls.Add(1)
 	r.reached()
 	return githubactions.ScaleSet{}, errors.New("provider unreachable")
@@ -324,7 +325,7 @@ func TestACrashBetweenCreatingAndRecordingConverges(t *testing.T) {
 					sets.lastIntended, tc.wantIntended)
 			}
 			if !namedBeforeTheCall {
-				t.Error("the provider was asked to create a name this binding had not written down")
+				t.Error("the callback the controller hands the provider did not write the name down; a crash after the create would leave a set nothing can account for")
 			}
 			if h.bind.scaleSetID != 42 || !h.bind.ensured {
 				t.Errorf("binding did not converge: id=%d ensured=%v", h.bind.scaleSetID, h.bind.ensured)
@@ -353,8 +354,13 @@ type recordingScaleSets struct {
 	duringCall func()
 }
 
-func (r *recordingScaleSets) EnsureScaleSet(_ context.Context, _, _ string, _ int, intended bool) (githubactions.ScaleSet, error) {
+func (r *recordingScaleSets) EnsureScaleSet(_ context.Context, _, _ string, _ int, intended bool, recordIntent func() error) (githubactions.ScaleSet, error) {
 	r.lastIntended = intended
+	// The name is free on this path, so the real adapter records the
+	// intention here, immediately before it creates the set.
+	if err := recordIntent(); err != nil {
+		return githubactions.ScaleSet{}, err
+	}
 	if r.duringCall != nil {
 		r.duringCall()
 	}
@@ -480,5 +486,54 @@ func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	}
 	if sourceBindingKey(base, "runpool-large") == want {
 		t.Error("two scale sets share one binding key")
+	}
+}
+
+// occupiedScaleSets answers the way the provider does when the name is
+// already taken: it adopts only for a caller that can show it created the
+// set, which is what the intention claims.
+type occupiedScaleSets struct {
+	nullProvider
+	adopted int
+}
+
+func (o *occupiedScaleSets) EnsureScaleSet(_ context.Context, _, name string, knownID int, intended bool, _ func() error) (githubactions.ScaleSet, error) {
+	if knownID == 0 && !intended {
+		return githubactions.ScaleSet{}, fmt.Errorf(
+			"scale set %q already exists and this instance has no record of creating it", name)
+	}
+	o.adopted++
+	return githubactions.ScaleSet{ID: 99, Adopted: true}, nil
+}
+
+// TestARefusedNameStaysRefusedOnTheNextPass: a set that merely shares a
+// name is a stranger's, and the refusal has to survive the retry that
+// follows it. The intention exists to tell a set this instance created
+// and failed to write down from one that was simply already there — so an
+// intention written by a pass that was then refused answers that question
+// with its own failure, and the binding adopts the stranger one poll
+// later.
+func TestARefusedNameStaysRefusedOnTheNextPass(t *testing.T) {
+	h := newHarness(t, 1)
+	h.bind.ref = config.TargetRef{
+		Scope: config.ScopeRepository, Owner: "acme", Repository: "app",
+		CanonicalURL: "https://github.com/acme/app",
+	}
+	h.bind.ensured = false
+	h.bind.scaleSetID = 0
+	sets := &occupiedScaleSets{}
+	h.bind.gh = sets
+
+	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+		t.Fatal("the first pass adopted a scale set this instance did not create")
+	}
+	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+		t.Fatal("the second pass adopted it: the refusal was defeated by the intention the refused pass wrote")
+	}
+	if sets.adopted != 0 {
+		t.Errorf("a stranger's scale set was adopted %d times", sets.adopted)
+	}
+	if h.bind.ensured {
+		t.Error("the binding reports itself ensured against a scale set it does not own")
 	}
 }

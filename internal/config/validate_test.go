@@ -163,6 +163,18 @@ func TestValidateRules(t *testing.T) {
 			dup.ID = "again"
 			c.Targets = append(c.Targets, dup)
 		}, "targets[1].url"},
+		// GitHub logins and repository names are case-insensitive, so two
+		// targets differing only in case are one scope. Left as duplicates
+		// they each get a binding key of their own, and the scale-set name
+		// check below is written on the premise that target URLs are
+		// unique — so both bindings would carry the same default name and
+		// collide on one remote scale set.
+		"the same target under another case": {func(c *Config) {
+			dup := c.Targets[0]
+			dup.ID = "again"
+			dup.URL = "https://github.com/Acme/App"
+			c.Targets = append(c.Targets, dup)
+		}, "targets[1].url"},
 		"duplicate scale-set name in scope": {func(c *Config) {
 			c.Tiers = append(c.Tiers, Tier{ID: "heavy"})
 			ApplyDefaults(c)

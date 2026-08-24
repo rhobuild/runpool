@@ -194,23 +194,29 @@ func (s *Controller) ensureScaleSet(ctx context.Context, b *binding) error {
 	// start refuses to adopt it — correctly, because a set that merely
 	// shares a name is a stranger's. The intention is what tells the two
 	// apart.
+	//
+	// It is recorded only once the provider says the name is free, which
+	// is why the write travels as a callback instead of happening here. An
+	// intention written before the lookup is left behind by a pass that is
+	// then refused, and reads on the next pass as proof this instance
+	// created the stranger it had just declined.
 	var intended bool
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		_, recorded, err := tx.GitHubScaleSet(b.bindingID)
-		if err != nil {
-			return err
-		}
 		intended = recorded
-		if recorded {
-			return nil
-		}
-		return tx.RecordGitHubBindingMetadata(b.bindingID, string(b.ref.Scope),
-			b.ref.CanonicalURL, b.target.RunnerGroup, b.scaleSetName, 0)
+		return err
 	}); err != nil {
 		return err
 	}
+	recordIntent := func() error {
+		return s.store.Tx(ctx, func(tx *store.Tx) error {
+			return tx.RecordGitHubBindingMetadata(b.bindingID, string(b.ref.Scope),
+				b.ref.CanonicalURL, b.target.RunnerGroup, b.scaleSetName, 0)
+		})
+	}
 
-	set, err := b.gh.EnsureScaleSet(ctx, b.target.RunnerGroup, b.scaleSetName, b.scaleSetID, intended)
+	set, err := b.gh.EnsureScaleSet(ctx, b.target.RunnerGroup, b.scaleSetName,
+		b.scaleSetID, intended, recordIntent)
 	if err != nil {
 		return err
 	}

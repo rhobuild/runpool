@@ -126,9 +126,14 @@ func newWrapper(t *testing.T, configURL, token string) *githubactions.Client {
 // deletion, even when the test fails midway.
 func ensureSet(t *testing.T, gh *githubactions.Client, name string) githubactions.ScaleSet {
 	t.Helper()
-	set, err := gh.EnsureScaleSet(testCtx(t), "", name, 0, false)
+	intent := &intentRecorder{}
+	set, err := gh.EnsureScaleSet(testCtx(t), "", name, 0, false, intent.record)
 	if err != nil {
 		t.Fatalf("ensure scale set %q: %v", name, err)
+	}
+	if intent.calls != 1 {
+		t.Fatalf("the intention was recorded %d times while creating %q; a create that is not"+
+			" written down first cannot be recovered from", intent.calls, name)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -162,4 +167,32 @@ func createScaleSet(t *testing.T, c *scaleset.Client, group *scaleset.RunnerGrou
 		t.Fatal("created scale set has no id")
 	}
 	return created
+}
+
+// intentRecorder stands in for the controller.s durable record of the
+// name it is about to create. Which branch calls it is a property only
+// these contracts can observe: the real provider decides whether the name
+// is free, and recording the intention on a path that adopts rather than
+// one that creates is what turns a refusal into an adoption on the pass
+// that follows it.
+type intentRecorder struct{ calls int }
+
+func (r *intentRecorder) record() error {
+	r.calls++
+	return nil
+}
+
+// adoption returns a recorder that fails the test if it is ever called.
+// Adoption is not a create, and an intention recorded on this path is the
+// record that tells a refusal from a crash — written by a pass that had
+// nothing to write down.
+func adoption(t *testing.T) *intentRecorder {
+	t.Helper()
+	r := &intentRecorder{}
+	t.Cleanup(func() {
+		if r.calls != 0 {
+			t.Errorf("adopting an existing scale set recorded the intention to create one, %d times", r.calls)
+		}
+	})
+	return r
 }

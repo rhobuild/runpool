@@ -172,12 +172,18 @@ func (c *Client) RunnerGroupID(ctx context.Context, groupName string) (int, erro
 // exists under the requested name is adopted only when its id matches
 // that record: name equality is not ownership, and adopting a
 // stranger's set would route work through it and later delete it.
-// intended says the caller recorded, before this call, that it was about
-// to create this exact name. It is what separates a set this instance
-// created and failed to write down from a set that was simply already
-// there: without it the first is indistinguishable from the second and
-// the binding can never serve again.
-func (c *Client) EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool) (ScaleSet, error) {
+// intended says an earlier pass recorded that it was about to create
+// this exact name. It is what separates a set this instance created and
+// failed to write down from a set that was simply already there: without
+// it the first is indistinguishable from the second and the binding can
+// never serve again.
+//
+// recordIntent writes that record, and is called only once the name is
+// known to be free. Recording it any earlier would have a pass that is
+// about to be refused leave behind the very evidence that tells a
+// refusal from a crash, and the next pass would adopt the stranger this
+// one declined.
+func (c *Client) EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool, recordIntent func() error) (ScaleSet, error) {
 	existing, found, err := c.ScaleSetByName(ctx, groupName, name)
 	if err != nil {
 		return ScaleSet{}, err
@@ -219,6 +225,13 @@ func (c *Client) EnsureScaleSet(ctx context.Context, groupName, name string, kno
 		}
 		existing.Adopted = true
 		return existing, nil
+	}
+	// The name is free, so this is the moment the intention becomes true:
+	// written down before the set exists, and only for a name nothing else
+	// holds. The create below is the step that can be lost, and this is
+	// what makes losing it recoverable.
+	if err := recordIntent(); err != nil {
+		return ScaleSet{}, fmt.Errorf("record the intention to create scale set %q: %w", name, err)
 	}
 	// DisableUpdate is what keeps the runner inside the image it was
 	// built from. Left unset, the scale set tells a runner to upgrade

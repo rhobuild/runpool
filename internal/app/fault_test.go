@@ -82,7 +82,7 @@ func (f *fakeCapsule) InspectExecution(ctx context.Context, _ capsule.PreparedRu
 // carry methods its test never exercises.
 type nullProvider struct{}
 
-func (nullProvider) EnsureScaleSet(context.Context, string, string, int, bool) (githubactions.ScaleSet, error) {
+func (nullProvider) EnsureScaleSet(context.Context, string, string, int, bool, func() error) (githubactions.ScaleSet, error) {
 	return githubactions.ScaleSet{}, nil
 }
 
