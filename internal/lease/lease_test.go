@@ -750,7 +750,7 @@ func TestOnlyAMeasurementIsRecorded(t *testing.T) {
 			}
 			want := obs
 			if !obs.Establishes() {
-				want = ""
+				want = assignment.NoObservation
 			}
 			if got := f.reload().StartObservation; got != want {
 				t.Errorf("the serving recorded %q; want %q", got, want)

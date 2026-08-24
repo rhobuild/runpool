@@ -53,9 +53,11 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	defer s.wg.Done()
 	attemptID := lease.AttemptID
 	// startObs carries the classification of an ambiguous start into the
-	// finalizing transaction. It lives in memory because it is taken
-	// before cleanup destroys the container that proves it; after a
-	// crash, recovery re-takes the same observation from the daemon.
+	// finalizing transaction. Recovery does not re-take it: the pass that
+	// inspects a runtime only does so while the evidence is still
+	// start_authorized, and an ambiguous start reaches here past that. So
+	// it is recorded with the lease on the way into cleanup, and a retry
+	// reads it back rather than measuring again.
 	var startObs assignment.ExecutionObservation
 	// The scheduler claims the lease before this goroutine is started, so
 	// the claim is unbroken from the moment the lease row exists. Claiming
@@ -393,6 +395,14 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 	// already past this point runs to completion: its transitions are
 	// durable, and the successor resumes whatever it left.
 	if s.abandoning.Load() {
+		// The lease is left as it is, but what this pass measured is not:
+		// nothing re-takes it, and the successor arrives with an evidence
+		// state past the one that would make it inspect. Recording is a
+		// column rather than a state, so it leaves the successor a lease
+		// to recover exactly as this branch intends.
+		if err := s.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
+			log.Error("cannot record what this serving measured before abandoning it", "error", err)
+		}
 		log.Warn("drain window elapsed; the lease is left as it is for the next start to recover")
 		return nil
 	}
