@@ -381,6 +381,12 @@ version. Runpool has no down migrations: a schema change is not assumed to
 be losslessly reversible, and restore also covers an upgrade that failed
 half-way.
 
+Nothing prunes those copies. Each is a full copy of the state database,
+they survive `runpool uninstall`, and the disk monitor never evicts
+state -- so on a long-lived deployment they accumulate until removed by
+hand. Keep the newest copy for each version you might roll back to and
+remove the rest once an upgrade has proven itself.
+
 A database written by a build this one does not know is **refused, not
 repaired**: the error says how to export from the build that wrote it,
 or how to start clean. Runpool does not guess at a schema it cannot

@@ -65,8 +65,9 @@ func TestSchemaIdentifiedByContentsNotCount(t *testing.T) {
 		if err == nil {
 			t.Fatal("a database written from different migrations was opened for reporting")
 		}
-		if strings.Contains(err.Error(), "no such table") {
-			t.Errorf("error = %q; the raw error is what this check exists to replace", err)
+		if !strings.Contains(err.Error(), "different migrations") {
+			t.Errorf("error = %q; want the schema refusal itself -- excluding the raw error also "+
+				"accepted any unrelated failure, which is not this check working", err)
 		}
 	})
 
@@ -122,4 +123,92 @@ func openRaw(t *testing.T, dir string) *Store {
 	}
 	db.SetMaxOpenConns(1)
 	return &Store{db: db, dir: dir, retryBudget: DefaultRetryBudget}
+}
+
+// TestAnEditedMigrationBelowAPendingOneIsRefused: pending migrations are
+// no exemption from the identity check. Verified only when nothing was
+// pending, an edited migration below the pending one slipped through --
+// the upgrade applied, the edited set's fingerprint was stamped, and
+// every later open verified clean against a database the edit never
+// reached. The first query touching the difference then failed with the
+// raw error the fingerprint exists to replace.
+func TestAnEditedMigrationBelowAPendingOneIsRefused(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	seed := migrations[len(migrations)-1]
+	seed.up = strings.Replace(seed.up,
+		"CREATE TABLE meta (", "CREATE TABLE unrelated (x INTEGER);\nCREATE TABLE meta (", 1)
+	older := append(append([]migration{}, migrations[:len(migrations)-1]...), seed)
+
+	s := openRaw(t, dir)
+	for _, m := range older {
+		stamp := ""
+		if m.version == len(older) {
+			stamp = schemaFingerprint(older)
+		}
+		if err := s.applyScript(m.up, m.version, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer s.Close()
+
+	pending := append(append([]migration{}, migrations...), migration{
+		version: len(migrations) + 1,
+		name:    "synthetic",
+		up:      `CREATE TABLE synthetic_two (id INTEGER PRIMARY KEY);`,
+	})
+	err = s.applyMigrations(pending)
+	if err == nil {
+		t.Fatal("a pending migration was applied on top of a prefix another build wrote")
+	}
+	if !strings.Contains(err.Error(), "different migrations") {
+		t.Errorf("error = %q; want the schema refusal", err)
+	}
+	if v, _ := s.SchemaVersion(); v != len(older) {
+		t.Errorf("schema version = %d after the refusal; the pending migration must not have applied", v)
+	}
+}
+
+// TestAnUpgradeInterruptedMidSequenceResumes: each migration commits the
+// fingerprint of the set up to and including itself, in its own
+// transaction. Stamped only with the last, a crash between two pending
+// migrations left a database whose applied prefix had grown while its
+// recorded identity had not — and the resume's own identity check then
+// refused the database it was resuming.
+func TestAnUpgradeInterruptedMidSequenceResumes(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	s := openRaw(t, dir)
+	defer s.Close()
+	if err := s.applyMigrations(migrations); err != nil {
+		t.Fatal(err)
+	}
+
+	good := migration{version: len(migrations) + 1, name: "first",
+		up: `CREATE TABLE synthetic_one (id INTEGER PRIMARY KEY);`}
+	bad := migration{version: len(migrations) + 2, name: "second",
+		up: `THIS IS NOT SQL;`}
+	if err := s.applyMigrations(append(append([]migration{}, migrations...), good, bad)); err == nil {
+		t.Fatal("a migration that is not SQL applied")
+	}
+	// The crash-shaped state the failure leaves: the first pending
+	// migration committed, the second did not.
+	if v, _ := s.SchemaVersion(); v != len(migrations)+1 {
+		t.Fatalf("schema version = %d; want %d — each migration commits alone", v, len(migrations)+1)
+	}
+
+	fixed := migration{version: len(migrations) + 2, name: "second",
+		up: `CREATE TABLE synthetic_two (id INTEGER PRIMARY KEY);`}
+	if err := s.applyMigrations(append(append([]migration{}, migrations...), good, fixed)); err != nil {
+		t.Fatalf("resuming an interrupted upgrade: %v", err)
+	}
+	if v, _ := s.SchemaVersion(); v != len(migrations)+2 {
+		t.Errorf("schema version = %d; want %d", v, len(migrations)+2)
+	}
 }
