@@ -159,7 +159,10 @@ func Reload(controlDir string, r io.Reader) error {
 	if err := json.Unmarshal(payload, &incoming); err != nil {
 		return err
 	}
-	return installPolicy(controlDir, func(current egress.Policy) (egress.Policy, error) {
+	return installPolicy(controlDir, func(current egress.Policy, inForce bool) (egress.Policy, error) {
+		if !inForce {
+			return egress.Policy{}, errNoPolicyInForce
+		}
 		next := egress.Policy{
 			InternalSubnet: current.InternalSubnet,
 			UplinkSubnet:   current.UplinkSubnet,
@@ -186,7 +189,10 @@ func Reload(controlDir string, r io.Reader) error {
 // "narrower", it is merely older, and a subnet that appeared since is
 // reachable under it.
 func DenyAll(controlDir string) error {
-	return installPolicy(controlDir, func(current egress.Policy) (egress.Policy, error) {
+	return installPolicy(controlDir, func(current egress.Policy, inForce bool) (egress.Policy, error) {
+		if !inForce {
+			return egress.Policy{}, errNoPolicyInForce
+		}
 		return egress.Policy{
 			InternalSubnet: current.InternalSubnet,
 			UplinkSubnet:   current.UplinkSubnet,
@@ -204,7 +210,7 @@ func DenyAll(controlDir string) error {
 // The two legs always come from the policy in force. Which networks a
 // gateway bridges is a fact of its own creation, not something a later
 // discovery pass may redefine.
-func installPolicy(controlDir string, build func(current egress.Policy) (egress.Policy, error)) error {
+func installPolicy(controlDir string, build func(current egress.Policy, inForce bool) (egress.Policy, error)) error {
 	return installPolicyWith(controlDir, build, applyToKernel)
 }
 
@@ -226,7 +232,7 @@ func applyToKernel(next egress.Policy) error {
 }
 
 func installPolicyWith(controlDir string,
-	build func(current egress.Policy) (egress.Policy, error),
+	build func(current egress.Policy, inForce bool) (egress.Policy, error),
 	apply func(next egress.Policy) error) error {
 
 	// The two callers reach this from separate `docker exec` processes
@@ -256,15 +262,23 @@ func installPolicyWith(controlDir string,
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	path := PolicyPath(controlDir)
-	inForce, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("no policy in force: %w", err)
-	}
+	// An absent file is not an error here. A gateway installs its first
+	// policy through this same lock, so that one installer has no
+	// predecessor to read -- and every other build says so itself rather
+	// than inferring it from a read that failed.
 	var current egress.Policy
-	if err := json.Unmarshal(inForce, &current); err != nil {
-		return err
+	inForce := true
+	switch encoded, err := os.ReadFile(path); {
+	case os.IsNotExist(err):
+		inForce = false
+	case err != nil:
+		return fmt.Errorf("read the policy in force: %w", err)
+	default:
+		if err := json.Unmarshal(encoded, &current); err != nil {
+			return err
+		}
 	}
-	next, err := build(current)
+	next, err := build(current, inForce)
 	if err != nil {
 		return err
 	}
@@ -277,3 +291,8 @@ func installPolicyWith(controlDir string,
 	}
 	return atomicfile.Replace(path, encoded, 0o600, -1, -1)
 }
+
+// errNoPolicyInForce is what a build returns when it needs a predecessor
+// and there is none. Only a gateway's first install is entitled to that,
+// and it is the one build that does not ask.
+var errNoPolicyInForce = errors.New("no policy in force")

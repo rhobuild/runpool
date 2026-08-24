@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -189,14 +190,14 @@ func TestAConcurrentInstallLeavesAPolicyInForce(t *testing.T) {
 	// ever touched.
 	noKernel := func(egress.Policy) error { return nil }
 	reload := func() error {
-		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+		return installPolicyWith(dir, func(current egress.Policy, _ bool) (egress.Policy, error) {
 			next := current
 			next.Deny = []string{"10.0.0.0/8", "192.168.0.0/16"}
 			return next, next.Validate()
 		}, noKernel)
 	}
 	denyAll := func() error {
-		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+		return installPolicyWith(dir, func(current egress.Policy, _ bool) (egress.Policy, error) {
 			next := current
 			next.Allow, next.Deny = nil, []string{"0.0.0.0/0"}
 			return next, nil
@@ -299,7 +300,7 @@ func TestConcurrentInstallsAreSerialized(t *testing.T) {
 	// to hold shut.
 	var inside, peak atomic.Int32
 	install := func() error {
-		return installPolicyWith(dir, func(current egress.Policy) (egress.Policy, error) {
+		return installPolicyWith(dir, func(current egress.Policy, _ bool) (egress.Policy, error) {
 			n := inside.Add(1)
 			for {
 				seen := peak.Load()
@@ -475,5 +476,57 @@ func TestAnEqualLengthInstallIsNotMissed(t *testing.T) {
 	if s.Generation() == baseline {
 		t.Error("the generation did not move on the second install; the pooled transport " +
 			"keeps every connection the previous policy authorised")
+	}
+}
+
+// TestOnlyAFirstInstallMayFindNoPolicyInForce: a gateway installs the
+// policy it boots with through the same lock a reload takes, so exactly
+// one installer has no predecessor to read. Every other build says it
+// needs one rather than inferring it from a read that failed — an
+// inference that would let a reload seed a gateway whose legs nothing has
+// identified, and whose kernel carries no ruleset at all.
+//
+// The lock file is what says the boot install went through that path.
+// Written outside it, a reload arriving during the boot either failed on
+// a file that did not exist yet or was clobbered by the write that
+// followed it, leaving the kernel on one policy and the relay's own check
+// on another.
+func TestOnlyAFirstInstallMayFindNoPolicyInForce(t *testing.T) {
+	dir := t.TempDir()
+
+	// Both refuse, and both say why. Refusing is not the property at
+	// risk -- an empty predecessor leaves no legs, so the kernel step
+	// would refuse either way -- it is that the operator is told the
+	// gateway has no policy in force rather than being handed a
+	// validation failure about subnets nobody wrote.
+	if err := Reload(dir, strings.NewReader(`{"allow":[],"deny":["10.0.0.0/8"]}`)); !errors.Is(err, errNoPolicyInForce) {
+		t.Errorf("reload with no policy in force = %v; want %v", err, errNoPolicyInForce)
+	}
+	if err := DenyAll(dir); !errors.Is(err, errNoPolicyInForce) {
+		t.Errorf("emergency close with no policy in force = %v; want %v", err, errNoPolicyInForce)
+	}
+	if _, err := os.Stat(PolicyPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("a refused install left a policy behind: %v", err)
+	}
+
+	first := egress.Policy{
+		InternalSubnet: "172.31.0.0/24",
+		UplinkSubnet:   "172.31.1.0/24",
+		Deny:           []string{"10.0.0.0/8"},
+	}
+	err := installPolicyWith(dir, func(_ egress.Policy, inForce bool) (egress.Policy, error) {
+		if inForce {
+			t.Error("the first install found a policy in force")
+		}
+		return first, nil
+	}, func(egress.Policy) error { return nil })
+	if err != nil {
+		t.Fatalf("the first install failed: %v", err)
+	}
+	if _, err := (&PolicyStore{Path: PolicyPath(dir)}).Current(); err != nil {
+		t.Fatalf("no policy in force after the first install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, policyLockFile)); err != nil {
+		t.Errorf("the first install did not take the lock a reload takes: %v", err)
 	}
 }

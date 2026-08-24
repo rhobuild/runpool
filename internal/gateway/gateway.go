@@ -33,7 +33,6 @@ import (
 
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // Config is what the gateway needs to start. The caller supplies the
@@ -69,15 +68,19 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("interfaces: %w", err)
 	}
-	if err := ApplyFirewall(policy, legs); err != nil {
+	// The kernel and the file go under the lock a reload takes, and in the
+	// order a reload uses. Applied outside it, a reload arriving while this
+	// gateway boots either failed on a file that did not exist yet, or
+	// completed and was then clobbered by the write that followed it --
+	// leaving the kernel on one policy and the relay's own check on
+	// another. Blocking on the lock, it now waits for this install and
+	// then finds a policy in force.
+	if err := installPolicy(cfg.ControlDir, func(egress.Policy, bool) (egress.Policy, error) {
+		return policy, nil
+	}); err != nil {
 		return fmt.Errorf("ruleset: %w", err)
 	}
-	// The policy in force lives in a file from here on, so a reload
-	// exec and this process agree on one source.
 	path := PolicyPath(cfg.ControlDir)
-	if err := atomicfile.Replace(path, []byte(cfg.Policy), 0o600, -1, -1); err != nil {
-		return fmt.Errorf("policy file: %w", err)
-	}
 	store := &PolicyStore{Path: path}
 	if _, err := store.Current(); err != nil {
 		return fmt.Errorf("policy: %w", err)
