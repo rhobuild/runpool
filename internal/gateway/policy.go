@@ -155,6 +155,13 @@ func Reload(controlDir string, r io.Reader) error {
 	if len(payload) == 0 {
 		return errors.New("no policy supplied")
 	}
+	if len(payload) > MaxPolicyBytes {
+		// The comparison the read-one-past exists for. Without it the
+		// oversized document was not refused -- its first MaxPolicyBytes+1
+		// bytes went to the decoder, and a prefix that happens to be
+		// complete JSON installed a policy nobody wrote in full.
+		return fmt.Errorf("policy document exceeds %d bytes", MaxPolicyBytes)
+	}
 	var incoming egress.Policy
 	if err := json.Unmarshal(payload, &incoming); err != nil {
 		return err
