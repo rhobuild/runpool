@@ -183,6 +183,13 @@ the discovered deny set. This observes networks created by other stacks and
 recreates an idle uplink removed by external cleanup without sharing mutable
 policy slices between concurrent capsules.
 
+The copy is not the guarantee. A policy pass fans a change out to the gateways
+it can enumerate, and a gateway still being created is not among them — so the
+launch that created one proves it carries the set in force before its capsule
+is authorized to start. That check is where a capsule launched across a
+tightening is caught; without it the copy it was handed would confine it for
+the whole life of its job, and no later pass would revisit it.
+
 ## Further reading
 
 - [Threat model](security/threat-model.md) — what is defended and what is accepted

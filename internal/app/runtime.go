@@ -168,6 +168,15 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
+	// The gateway exists and is ready now, so this is the first moment
+	// the policy it carries can be checked against the one in force --
+	// and the last moment before the capsule is authorized to start, so
+	// it is the only one at which a stale gateway is still free.
+	if err := s.netSandbox.confirmLaunch(prepCtx, lease.ID, sandbox); err != nil {
+		log.Error("the capsule's gateway does not carry the egress policy in force", "error", err)
+		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		return
+	}
 	// Recorded after the preparation exists — evidence names what
 	// happened, never what was about to be attempted.
 	if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRuntimePrepared); err != nil {

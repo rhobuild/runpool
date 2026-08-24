@@ -160,6 +160,22 @@ classified before it is installed:
 - **discovery failing at all** closes every gateway. An undiscovered
   network is indistinguishable from one that was never there, so a
   policy that cannot be shown to be current is not treated as current.
+- **a restriction that could neither be installed nor closed** stops the
+  pass. The new set is not recorded, so the next pass attempts it again,
+  and the pass reports the failure — which closes every gateway on the
+  host to all egress, on the same rule as a failed discovery. The log
+  line names the container. **The remedy is the daemon holding it, not
+  the policy**: a container that refuses both an exec and a bounded
+  removal is a wedged daemon, and launches and teardowns are failing on
+  it too. Remove the container by hand, or restart the daemon; egress
+  returns on the next pass.
+
+A capsule created while a change is being installed is not left behind.
+The gateway does not exist yet when the pass enumerates, so the launch
+that creates it proves it carries the set in force before the job is
+authorized to start. A gateway that cannot be reached at that point fails
+its launch: the attempt returns to the queue and the lease's resources
+are removed.
 
 The handover is atomic on each half — one kernel restore, one file
 rename — and the window between them is deliberately the stricter of
