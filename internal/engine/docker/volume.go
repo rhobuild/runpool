@@ -13,7 +13,26 @@ import (
 
 // CreateVolume creates a named, labeled volume — an ephemeral capsule
 // volume (dind data), removed with its lease.
+//
+// It inspects before creating, because the daemon's volume create is the
+// one create behind this port that does not refuse a taken name: it
+// returns the volume that is already there, keeping its original labels,
+// and reports no error. Every other create here reports a collision, and
+// the callers are built on that report — a taken name is what sends them
+// to prove ownership before adopting anything. Without this, a volume
+// another owner holds is confirmed as the lease's own and mounted as the
+// data root of a privileged daemon.
+//
+// What it does not close is the instant between the two calls. A volume
+// created there is still adopted silently, which is why ownership is
+// proven by the caller rather than inferred from this call succeeding.
 func (c *Client) CreateVolume(ctx context.Context, name string, labels map[string]string) (string, error) {
+	switch _, err := c.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); {
+	case err == nil:
+		return "", fmt.Errorf("%w: volume %q", engine.ErrAlreadyExists, name)
+	case !cerrdefs.IsNotFound(err):
+		return "", classify(err)
+	}
 	created, err := c.cli.VolumeCreate(ctx, client.VolumeCreateOptions{Name: name, Labels: labels})
 	if err != nil {
 		return "", classify(err)

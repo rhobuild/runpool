@@ -663,6 +663,39 @@ func TestEnsureOwnedVolume(t *testing.T) {
 	}
 }
 
+// TestCreateVolumeRefusesATakenName is the other half, and the one the
+// capsule depends on. The daemon's volume create is the only create
+// behind this port that answers a taken name with the volume that is
+// already there and no error, so a launcher built on collisions being
+// reported would adopt a stranger's volume and mount it as the data root
+// of a privileged daemon. The adapter is what makes the daemon's answer
+// match the port's contract.
+func TestCreateVolumeRefusesATakenName(t *testing.T) {
+	c, instance := client(t)
+	ctx := t.Context()
+
+	name := instance + "-taken"
+	t.Cleanup(func() { _ = c.RemoveVolume(context.Background(), name) })
+	if _, err := c.CreateVolume(ctx, name, map[string]string{"someone": "else"}); err != nil {
+		t.Fatalf("seeding the volume that is already there: %v", err)
+	}
+
+	own := map[string]string{
+		"io.runpool.managed":  "true",
+		"io.runpool.instance": instance,
+		"io.runpool.role":     "dind-data",
+	}
+	_, err := c.CreateVolume(ctx, name, own)
+	if !errors.Is(err, engine.ErrAlreadyExists) {
+		t.Fatalf("creating over an existing volume = %v; want ErrAlreadyExists", err)
+	}
+	// And the volume that was there is untouched: the labels are still
+	// its owner's, so nothing read this as an adoption.
+	if _, err := c.CreateVolume(ctx, name, own); !errors.Is(err, engine.ErrAlreadyExists) {
+		t.Fatalf("the second create = %v; want the same refusal", err)
+	}
+}
+
 // TestCacheLaneVolumes is the live cache contract, end to end through
 // the real manager and store against the real daemon: warm data left by
 // one job is what the next job of the same lane mounts; another

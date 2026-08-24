@@ -153,6 +153,24 @@ by its public and operational effects.
   restriction that could neither be installed into a gateway nor close it
   no longer enters the record either, so the next pass attempts it again
   rather than never trying it again.
+- **A volume that already exists under a capsule's name is refused, not
+  adopted.** Ownership is proven by labels and never by name, and every
+  create behind the engine port reports a taken name so the caller can
+  prove ownership before adopting anything. The daemon's volume create is
+  the exception: it answers a taken name with the volume that is already
+  there, keeping its original labels, and reports no error. So a volume
+  another owner held could be confirmed as a lease's own and mounted as
+  the data root of a privileged daemon. The adapter now inspects first and
+  reports the collision, which is what sends the launcher to the ownership
+  proof it already had.
+- **A capsule that exits before it is ready says so, and says why.** A
+  supervisor writes its terminal state and then exits, so that state is
+  readable for an instant and a poll can miss it — and an exec into a
+  container that is gone always fails, which the wait read as "not yet".
+  A capsule that aborted was therefore polled for the full readiness
+  deadline and reported as a timeout naming nothing actionable. The wait
+  now asks the daemon whether the container is still there, and reports
+  the exit code it left behind.
 
 ### State and operations
 
