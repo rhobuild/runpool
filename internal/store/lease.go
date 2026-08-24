@@ -109,7 +109,10 @@ type Lease struct {
 }
 
 // ResourceKind is the Docker object type of an owned capsule resource;
-// Role says which part of the capsule it is (runner, dind, workspace...).
+// Role says which part of the capsule it is, spelled as engine.Role and
+// stored as text. Neither is derived from the port's type: this is a row
+// that outlives the build that wrote it, and a role that stopped
+// existing must still read back.
 type ResourceKind string
 
 const (

@@ -4,8 +4,6 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/cache"
-	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
@@ -242,14 +240,14 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	doc.ManualReview = append(doc.ManualReview, review...)
 	for _, c := range obs.containers {
 		doc.Containers = append(doc.Containers, containerDTO{
-			Name: c.Name, Role: c.Role, LeaseID: string(c.LeaseID), Running: c.Running,
+			Name: c.Name, Role: string(c.Role), LeaseID: string(c.LeaseID), Running: c.Running,
 		})
 	}
 	for _, n := range obs.networks {
-		doc.Networks = append(doc.Networks, resourceDTO{Kind: "network", Role: n.Role, Name: n.ID, LeaseID: string(n.LeaseID)})
+		doc.Networks = append(doc.Networks, resourceDTO{Kind: "network", Role: string(n.Role), Name: n.ID, LeaseID: string(n.LeaseID)})
 	}
 	for _, v := range obs.volumes {
-		doc.Volumes = append(doc.Volumes, resourceDTO{Kind: "volume", Role: v.Role, Name: v.ID, LeaseID: string(v.LeaseID)})
+		doc.Volumes = append(doc.Volumes, resourceDTO{Kind: "volume", Role: string(v.Role), Name: v.ID, LeaseID: string(v.LeaseID)})
 	}
 	if obs.err != nil {
 		doc.EngineError = obs.err.Error()
@@ -349,7 +347,7 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 		}
 	}
 
-	check := func(kind string, resources []engine.OwnedResource, persistentRole string) {
+	check := func(kind string, resources []engine.OwnedResource, persistentRole engine.Role) {
 		for _, r := range resources {
 			switch {
 			case r.Role == persistentRole:
@@ -362,8 +360,8 @@ func discrepancies(leases []store.Lease, obs daemonObservation) []string {
 			}
 		}
 	}
-	check("network", obs.networks, capsule.RoleUplink)
-	check("volume", obs.volumes, cache.RoleCacheLane)
+	check("network", obs.networks, engine.RoleUplink)
+	check("volume", obs.volumes, engine.RoleCacheLane)
 	return out
 }
 

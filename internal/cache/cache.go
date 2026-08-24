@@ -22,17 +22,15 @@ import (
 )
 
 // Volume labels a cache lane carries, alongside the instance ownership
-// pair every managed object has. RoleCacheLane distinguishes persistent
+// pair every managed object has. engine.RoleCacheLane distinguishes persistent
 // lanes from a lease's ephemeral volumes in every sweep: a lane belongs
 // to the instance, not to any lease.
 const (
 	// LabelProject carries the opaque source-project id a lane is warm for.
-	LabelProject   = "io.runpool.cache.project"
-	LabelGen       = "io.runpool.cache.generation"
-	LabelLane      = "io.runpool.cache.lane"
-	RoleCacheLane  = "cache-lane"
-	volumePrefix   = "runpool-cache-"
-	labelRoleValue = RoleCacheLane
+	LabelProject = "io.runpool.cache.project"
+	LabelGen     = "io.runpool.cache.generation"
+	LabelLane    = "io.runpool.cache.lane"
+	volumePrefix = "runpool-cache-"
 )
 
 // LaneMount tells a capsule which volume its lane is. There is no path
@@ -100,7 +98,7 @@ func (m *LaneManager) Acquire(ctx context.Context, sourceProjectKey, generation 
 	// The lane's own three go on top of the ownership every managed
 	// object carries: what a lane is warm for is the cache's vocabulary,
 	// not the daemon's.
-	labels := engine.Ownership{Instance: m.instanceID, Role: labelRoleValue}.Labels()
+	labels := engine.Ownership{Instance: m.instanceID, Role: engine.RoleCacheLane}.Labels()
 	labels[LabelProject] = lane.ProjectID
 	labels[LabelGen] = lane.Generation
 	labels[LabelLane] = lane.ID
