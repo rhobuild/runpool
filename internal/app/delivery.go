@@ -428,7 +428,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 	// independent answer to the same question: after a requeue it named
 	// the successor, so a late cancellation of the run that preceded it
 	// closed work that had just been handed to this instance.
-	record := func(ev assignment.WorkloadLifecycleEvent, kind, idempotency string, cancel bool) error {
+	record := func(ev assignment.WorkloadLifecycleEvent, idempotency string, kind store.EventKind, cancel bool) error {
 		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 			attemptID, err := s.attemptForObservation(tx, b, ev)
 			if err != nil || attemptID == "" {
@@ -459,7 +459,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 	for _, ev := range msg.Started {
 		s.log.Info("workload started",
 			"binding", b.key, "workload", ev.SourceWorkloadKey, "runtime", ev.RuntimeName)
-		if err := record(ev, "running_observed", "remote_running_observed:"+string(ev.RuntimeName), false); err != nil {
+		if err := record(ev, "remote_running_observed:"+string(ev.RuntimeName), store.EventRunningObserved, false); err != nil {
 			return err
 		}
 	}
@@ -469,11 +469,11 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 		// An idempotency key, not a runtime name: the same concatenation
 		// one line up converts, and this one did not, so the key carried
 		// the type of the thing it names.
-		kind, idempotency := "exit_observed", "remote_exit_observed:"+string(ev.RuntimeName)
+		idempotency, kind := "remote_exit_observed:"+string(ev.RuntimeName), store.EventExitObserved
 		if ev.Canceled {
-			kind, idempotency = "remote_canceled", "remote_canceled"
+			idempotency, kind = "remote_canceled", store.EventRemoteCanceled
 		}
-		if err := record(ev, kind, idempotency, ev.Canceled); err != nil {
+		if err := record(ev, idempotency, kind, ev.Canceled); err != nil {
 			return err
 		}
 	}
