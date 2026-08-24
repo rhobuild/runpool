@@ -82,3 +82,30 @@ func TestTranslateEmptyStatistics(t *testing.T) {
 		t.Errorf("empty message translated to %+v / %+v", out, available)
 	}
 }
+
+// TestTheProviderWordForCancellationStopsHere: the domain decides
+// differently for a cancelled workload -- it settles the attempt as
+// remote_canceled instead of recording an exit -- and it used to make
+// that decision by comparing the provider's own word. A provider that
+// respelled it would have stopped cancellations cancelling, silently,
+// with every test green: the comparison would simply never match again.
+//
+// So the word is translated here, and this is where it is pinned.
+func TestTheProviderWordForCancellationStopsHere(t *testing.T) {
+	for result, want := range map[string]bool{
+		"canceled":  true,
+		"cancelled": false, // the other spelling is not the one GitHub sends
+		"succeeded": false,
+		"failed":    false,
+		"":          false,
+	} {
+		got := observation(assignment.LifecycleCompleted,
+			scaleset.JobMessageBase{JobID: "job-1"}, "runner-1", result)
+		if got.Canceled != want {
+			t.Errorf("result %q translated to Canceled=%v; want %v", result, got.Canceled, want)
+		}
+		if got.Result != result {
+			t.Errorf("Result = %q; the provider's own word travels for reporting", got.Result)
+		}
+	}
+}
