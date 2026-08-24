@@ -70,7 +70,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 
 	runnerByLease := make(map[assignment.LeaseID]engine.OwnedContainer, len(containers))
 	for _, c := range containers {
-		if c.Role == capsule.RoleCapsule {
+		if c.Role == engine.RoleCapsule {
 			runnerByLease[c.LeaseID] = c
 		}
 	}

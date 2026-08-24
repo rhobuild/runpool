@@ -78,7 +78,7 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 	sizes := map[string]int64{} // lane id -> bytes
 	orphaned := map[string]int64{}
 	for _, u := range usage {
-		if u.Role != RoleCacheLane {
+		if u.Role != engine.RoleCacheLane {
 			continue
 		}
 		size := u.Size
@@ -111,7 +111,7 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 		}
 	}
 	for _, u := range usage {
-		if u.Role != RoleCacheLane {
+		if u.Role != engine.RoleCacheLane {
 			continue
 		}
 		lane := u.Labels[LabelLane]

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhobuild/runpool/internal/cache"
-	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
@@ -88,11 +86,11 @@ func TestStatusDiscrepanciesCoverEveryKind(t *testing.T) {
 		},
 		networks: []engine.OwnedResource{
 			{ID: "net-orphan", LeaseID: "lease-done"},
-			{ID: "uplink", Role: capsule.RoleUplink},
+			{ID: "uplink", Role: engine.RoleUplink},
 		},
 		volumes: []engine.OwnedResource{
 			{ID: "vol-unclassified"},
-			{ID: "lane", Role: cache.RoleCacheLane},
+			{ID: "lane", Role: engine.RoleCacheLane},
 		},
 	}
 	got := discrepancies(leases, obs)

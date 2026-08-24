@@ -271,7 +271,7 @@ func checkIsolatedBridge(ctx context.Context, d networkProbeClient, cfg *config.
 			// sweep.
 			Instance: "doctor",
 			Kind:     engine.KindNetwork,
-			Role:     "preflight-probe",
+			Role:     engine.RolePreflightProbe,
 		}.Labels(),
 	})
 	if err != nil {

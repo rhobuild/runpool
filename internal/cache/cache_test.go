@@ -81,7 +81,7 @@ func (f *fakeVolumes) OwnedVolumeUsage(context.Context, assignment.InstanceID) (
 		// volume nobody owns.
 		out = append(out, engine.VolumeUsage{
 			Name:   name,
-			Role:   labels["io.runpool.role"],
+			Role:   engine.Role(labels["io.runpool.role"]),
 			Labels: labels,
 			Size:   size,
 		})
@@ -209,7 +209,7 @@ func TestVolumeNamesAreOpaque(t *testing.T) {
 	if strings.Contains(labels[LabelProject], "acme") {
 		t.Errorf("repository text reached the labels: %q", labels[LabelProject])
 	}
-	if labels["io.runpool.managed"] != "true" || labels["io.runpool.role"] != RoleCacheLane {
+	if labels["io.runpool.managed"] != "true" || engine.Role(labels["io.runpool.role"]) != engine.RoleCacheLane {
 		t.Errorf("ownership labels wrong: %v", labels)
 	}
 }

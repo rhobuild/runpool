@@ -67,19 +67,6 @@ const (
 	KindContainer = engine.KindContainer
 	KindNetwork   = engine.KindNetwork
 	KindVolume    = engine.KindVolume
-
-	RoleNetwork  = "capsule-net"
-	RoleDindData = "dind-data"
-	// RoleCapsule is the outer container itself — the adoptable object
-	// whose exit is the job's exit.
-	RoleCapsule = "capsule"
-	// RoleGateway is the capsule's egress gateway: the only container on
-	// both the internal isolated bridge and the Runpool uplink.
-	RoleGateway = "gateway"
-	// RoleUplink is the instance's one egress network: gateways' second
-	// leg. Like a cache lane it carries no lease, and sweeps must read
-	// that as "infrastructure", never as "orphan".
-	RoleUplink = "uplink"
 )
 
 const (
@@ -168,14 +155,14 @@ type ResourceRecorder interface {
 // is ours from an earlier incarnation of this same intent — adopted by
 // proven ownership, never by name — or it is foreign and the launch
 // fails closed.
-func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind engine.ObjectKind, role, name string,
+func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind engine.ObjectKind, role engine.Role, name string,
 	createFn func() (string, error), resolve func() (string, error)) (string, error) {
 	// The kind crosses as a string on purpose: the recorder is the lease
 	// machine, which may not know a container runtime -- cleanup that
 	// depends on one stops working exactly when the runtime is what
 	// failed. It names the same vocabulary in its own type on the far
 	// side, and this is the one place the two meet.
-	intentID, err := rec.Plan(string(kind), role, name)
+	intentID, err := rec.Plan(string(kind), string(role), name)
 	if err != nil {
 		return "", err
 	}
@@ -298,8 +285,8 @@ func (m *Launcher) Start(ctx context.Context, prepared PreparedRuntime) error {
 
 func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder) (string, error) {
 	short := engine.ShortID(string(spec.LeaseID))
-	name := func(role string) string { return "runpool-" + role + "-" + short }
-	labels := func(kind engine.ObjectKind, role string) map[string]string {
+	name := func(role engine.Role) string { return "runpool-" + string(role) + "-" + short }
+	labels := func(kind engine.ObjectKind, role engine.Role) map[string]string {
 		return engine.Ownership{
 			Instance: spec.InstanceID,
 			Lease:    spec.LeaseID,
@@ -326,15 +313,15 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	// there is one — its gateway, and placed under one parent cgroup.
 	cgroupParent := LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID))
 	capsuleShare := SplitEnvelope(spec.Resources, sandboxed)
-	netID, err := m.create(ctx, rec, KindNetwork, RoleNetwork, name(RoleNetwork),
+	netID, err := m.create(ctx, rec, KindNetwork, engine.RoleCapsuleNetwork, name(engine.RoleCapsuleNetwork),
 		func() (string, error) {
 			return m.dock.CreateNetwork(ctx, engine.NetworkSpec{
-				Name:     name(RoleNetwork),
+				Name:     name(engine.RoleCapsuleNetwork),
 				Internal: sandboxed,
 				Isolated: sandboxed,
-				Labels:   labels(KindNetwork, RoleNetwork),
+				Labels:   labels(KindNetwork, engine.RoleCapsuleNetwork),
 			})
-		}, resolve(KindNetwork, name(RoleNetwork)))
+		}, resolve(KindNetwork, name(engine.RoleCapsuleNetwork)))
 	if err != nil {
 		return "", err
 	}
@@ -347,10 +334,10 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 		}
 	}
 
-	dindData, err := m.create(ctx, rec, KindVolume, RoleDindData, name(RoleDindData),
+	dindData, err := m.create(ctx, rec, KindVolume, engine.RoleDindData, name(engine.RoleDindData),
 		func() (string, error) {
-			return m.dock.CreateVolume(ctx, name(RoleDindData), labels(KindVolume, RoleDindData))
-		}, resolve(KindVolume, name(RoleDindData)))
+			return m.dock.CreateVolume(ctx, name(engine.RoleDindData), labels(KindVolume, engine.RoleDindData))
+		}, resolve(KindVolume, name(engine.RoleDindData)))
 	if err != nil {
 		return "", err
 	}
@@ -361,9 +348,9 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 	}
 
 	capsuleSpec := engine.ContainerSpec{
-		Name:       name(RoleCapsule),
+		Name:       name(engine.RoleCapsule),
 		Image:      spec.CapsuleImage,
-		Labels:     labels(KindContainer, RoleCapsule),
+		Labels:     labels(KindContainer, engine.RoleCapsule),
 		Privileged: true,
 		Network:    netID,
 		Mounts:     mounts,
@@ -399,10 +386,10 @@ func (m *Launcher) prepare(ctx context.Context, spec Spec, rec ResourceRecorder)
 			"NO_PROXY="+noProxy, "no_proxy="+noProxy,
 		)
 	}
-	outerID, err := m.create(ctx, rec, KindContainer, RoleCapsule, name(RoleCapsule),
+	outerID, err := m.create(ctx, rec, KindContainer, engine.RoleCapsule, name(engine.RoleCapsule),
 		func() (string, error) {
 			return m.dock.CreateContainer(ctx, capsuleSpec)
-		}, resolve(KindContainer, name(RoleCapsule)))
+		}, resolve(KindContainer, name(engine.RoleCapsule)))
 	if err != nil {
 		return "", err
 	}
@@ -510,7 +497,7 @@ func protocolVerdict(code int, out string) error {
 // gateway reporting ready. Any failure here fails the launch closed;
 // a capsule is never started with a half-made sandbox.
 func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRecorder, netID string,
-	name func(string) string, labels func(engine.ObjectKind, string) map[string]string,
+	name func(engine.Role) string, labels func(engine.ObjectKind, engine.Role) map[string]string,
 	resolve func(engine.ObjectKind, string) func() (string, error)) (netip.Addr, string, error) {
 
 	subnet, err := m.dock.NetworkSubnet(ctx, netID)
@@ -531,16 +518,16 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 		return netip.Addr{}, "", err
 	}
 
-	gwID, err := m.create(ctx, rec, KindContainer, RoleGateway, name(RoleGateway),
+	gwID, err := m.create(ctx, rec, KindContainer, engine.RoleGateway, name(engine.RoleGateway),
 		func() (string, error) {
 			return m.dock.CreateContainer(ctx, engine.ContainerSpec{
-				Name:       name(RoleGateway),
+				Name:       name(engine.RoleGateway),
 				Image:      m.gatewayImage,
 				Entrypoint: []string{supervisorPath, "gateway"},
 				// The policy is configuration, not secret; the one
 				// secret in the system never touches the gateway.
 				Env:     []string{"RUNPOOL_GATEWAY_POLICY=" + string(policyJSON)},
-				Labels:  labels(KindContainer, RoleGateway),
+				Labels:  labels(KindContainer, engine.RoleGateway),
 				Network: netID,
 				// NET_ADMIN for the ruleset, and nothing else: not
 				// privileged, no socket, no volumes, no credentials.
@@ -556,7 +543,7 @@ func (m *Launcher) prepareGateway(ctx context.Context, spec Spec, rec ResourceRe
 				PIDsLimit:       GatewayEnvelope().PIDsLimit,
 				CgroupParent:    LeaseCgroupParent(spec.CgroupDriver, string(spec.LeaseID)),
 			})
-		}, resolve(KindContainer, name(RoleGateway)))
+		}, resolve(KindContainer, name(engine.RoleGateway)))
 	if err != nil {
 		return netip.Addr{}, "", err
 	}

@@ -40,7 +40,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 
 	uplinkID, err := dock.CreateNetwork(ctx, engine.NetworkSpec{
 		Name:   leaseID + "-uplink",
-		Labels: engine.Ownership{Instance: "contract", Role: capsule.RoleUplink}.Labels(),
+		Labels: engine.Ownership{Instance: "contract", Role: engine.RoleUplink}.Labels(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+capsule.RoleGateway+"-"+short, "contract", assignment.LeaseID(leaseID))
+	gwID, err := dock.OwnedIDByName(ctx, engine.KindContainer, "runpool-"+string(engine.RoleGateway)+"-"+short, "contract", assignment.LeaseID(leaseID))
 	if err != nil || gwID == "" {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}

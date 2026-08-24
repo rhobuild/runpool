@@ -639,7 +639,7 @@ func TestEnsureOwnedVolume(t *testing.T) {
 	own := map[string]string{
 		"io.runpool.managed":  "true",
 		"io.runpool.instance": instance,
-		"io.runpool.role":     cache.RoleCacheLane,
+		"io.runpool.role":     string(engine.RoleCacheLane),
 	}
 	name := instance + "-ensure"
 	t.Cleanup(func() { _ = c.RemoveVolume(context.Background(), name) })
@@ -814,7 +814,7 @@ func TestOwnedVolumeUsage(t *testing.T) {
 
 	name := instance + "-usage"
 	t.Cleanup(func() { _ = c.RemoveVolume(context.Background(), name) })
-	if _, err := c.CreateVolume(ctx, name, labels(instance, "", "volume", cache.RoleCacheLane)); err != nil {
+	if _, err := c.CreateVolume(ctx, name, labels(instance, "", "volume", string(engine.RoleCacheLane))); err != nil {
 		t.Fatal(err)
 	}
 	code, out, err := c.RunTask(ctx, engine.ContainerSpec{
@@ -844,7 +844,7 @@ func TestOwnedVolumeUsage(t *testing.T) {
 	if found.Size < 512*1024 {
 		t.Errorf("size = %d; want at least the 512KiB written", found.Size)
 	}
-	if found.Role != cache.RoleCacheLane {
+	if found.Role != engine.RoleCacheLane {
 		t.Errorf("labels did not travel through disk usage: %v", found.Labels)
 	}
 }
