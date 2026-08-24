@@ -183,6 +183,18 @@ by its public and operational effects.
 
 ### State and operations
 
+- **The pre-migration backup is proven to be one.** It is the only rollback
+  that exists — there are no down migrations, deliberately — and what was
+  proven about it was that a file appeared: an empty file passes that, and
+  so does a copy taken after the upgrade. The suite now opens the copy and
+  requires the pre-upgrade schema version, the rows that were live, and
+  nothing the upgrade added. The schema identity check also covers the
+  prefix already applied while migrations are pending, and each migration
+  commits the fingerprint of the set up to itself — so an edited migration
+  below a pending one is refused by name instead of failing later on a raw
+  error, and an upgrade interrupted between two migrations resumes instead
+  of refusing the database it is resuming. The runbook says what nothing
+  prunes: the copies accumulate until removed by hand.
 - **Capacity a lease consumed comes back.** An admission credit is returned
   by one read that says the lease reached released, and that read used to be
   abandoned on its first failure — on a store whose single connection is
