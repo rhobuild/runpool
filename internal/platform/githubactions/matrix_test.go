@@ -38,18 +38,9 @@ func TestMatrixJobsAreDistinct(t *testing.T) {
 		t.Fatal("workload identity did not survive translation; deduplication would drop one")
 	}
 
-	// What the scheduler does with them: distinct identities are distinct
-	// work, a repeated identity is a redelivery.
-	seen := map[string]bool{}
-	admitted := 0
-	for _, d := range append(out.Assigned, out.Assigned[0]) { // last is a redelivery
-		if d.SourceWorkloadKey != "" && seen[d.SourceWorkloadKey] {
-			continue
-		}
-		seen[d.SourceWorkloadKey] = true
-		admitted++
-	}
-	if admitted != 2 {
-		t.Errorf("admitted %d jobs; want the two distinct ones, redelivery ignored", admitted)
-	}
+	// What the scheduler does with two distinct identities -- and with a
+	// repeated one -- is the store's dedup, proved where it lives: the
+	// delivery fingerprint and the open-attempt uniqueness in
+	// internal/store. A copy of that loop here asserted its own logic,
+	// which no production change could fail.
 }
