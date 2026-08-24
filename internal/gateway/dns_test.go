@@ -3,6 +3,8 @@ package gateway
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -230,4 +232,82 @@ func TestTCPCarriesWhatADatagramCannot(t *testing.T) {
 	if got := binary.BigEndian.Uint16(answer[:2]); got != 0x4321 {
 		t.Errorf("answer transaction id = %#x; want the query's", got)
 	}
+}
+
+// answerWithWrongID answers every query under a transaction id that is
+// not the query's. Which is what the fixtures above cannot express: they
+// copy the query's id into the answer, so the check that an answer
+// belongs to its query was compared against a value derived from the
+// thing under test — an assertion that cannot fail, over both checks
+// that exist, on the one transport where the id is all that keeps
+// pipelined answers matched to their queries.
+func answerWithWrongID(t *testing.T) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, MaxDNSMessage+1)
+		for {
+			n, client, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if n < MinDNSMessage {
+				continue
+			}
+			answer := header(binary.BigEndian.Uint16(buf[:2])^0xffff, 1, 1, 0)
+			_, _ = pc.WriteTo(answer, client)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// TestAnAnswerWithAnotherTransactionIDIsNeverForwarded, on both
+// transports. UDP's connected socket makes this defence in depth; TCP's
+// pipelining makes it the only thing keeping answers matched to queries.
+func TestAnAnswerWithAnotherTransactionIDIsNeverForwarded(t *testing.T) {
+	t.Run("udp", func(t *testing.T) {
+		if _, err := exchangeUDP(answerWithWrongID(t), header(0x1234, 1, 0, 30)); err == nil {
+			t.Fatal("an answer under another transaction id was forwarded")
+		}
+	})
+	t.Run("tcp", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			up, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer up.Close()
+			query, err := readDNSMessage(up)
+			if err != nil {
+				return
+			}
+			answer := header(binary.BigEndian.Uint16(query[:2])^0xffff, 1, 1, 0)
+			_ = writeDNSMessage(up, answer)
+		}()
+
+		relay := &DNSRelay{Upstream: ln.Addr().String(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		client, server := net.Pipe()
+		t.Cleanup(func() { client.Close(); server.Close() })
+		go relay.serveTCPConn(server)
+
+		if err := writeDNSMessage(client, header(0x5678, 1, 0, 30)); err != nil {
+			t.Fatal(err)
+		}
+		// The relay drops the connection rather than forwarding the
+		// mismatched answer: the read ends without a message.
+		client.SetReadDeadline(time.Now().Add(time.Second))
+		if answer, err := readDNSMessage(client); err == nil {
+			t.Fatalf("a mismatched answer was forwarded: id %#x for query 0x5678",
+				binary.BigEndian.Uint16(answer[:2]))
+		}
+	})
 }

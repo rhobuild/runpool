@@ -57,6 +57,9 @@ func embeddedMigrations() ([]migration, error) {
 		if err != nil || version < 1 {
 			return nil, fmt.Errorf("migration %q: invalid version", name)
 		}
+		// Redundant as a detector -- the contiguity check below fails on
+		// any duplicate too -- and kept for its message: this one names
+		// both files, where that one reports a position.
 		if other, dup := seen[version]; dup {
 			return nil, fmt.Errorf("migrations %q and %q share version %d", other, name, version)
 		}
@@ -147,11 +150,22 @@ func (s *Store) applyMigrations(migrations []migration) error {
 	if current > len(migrations) {
 		return newerSchemaError(current, len(migrations), s.dir)
 	}
+	if current > 0 {
+		// The prefix already applied has to be this build's prefix, and
+		// pending migrations are no exemption from that. Checked only
+		// when nothing was pending, an edited migration below the
+		// pending one slipped through: the upgrade applied, the edited
+		// set's fingerprint was stamped, and every later open verified
+		// clean against a database whose contents the edit never
+		// reached. The first query touching the difference then failed
+		// with a raw error -- precisely the outcome alteredSchemaError
+		// exists to replace.
+		if err := s.verifyFingerprint(migrations[:current]); err != nil {
+			return err
+		}
+	}
 	if current == len(migrations) {
-		// Nothing to apply, which is exactly when the version has stopped
-		// being evidence: the schema is only this build's if its contents
-		// are.
-		return s.verifyFingerprint(migrations)
+		return nil
 	}
 
 	if current > 0 {
@@ -167,17 +181,14 @@ func (s *Store) applyMigrations(migrations []migration) error {
 		}
 	}
 
-	fingerprint := schemaFingerprint(migrations)
 	for _, m := range migrations[current:] {
-		// The fingerprint lands with the last migration, in its
-		// transaction: a schema and its identity commit together or
-		// neither does, so a crash mid-upgrade cannot leave a database
-		// claiming to be something it is not.
-		stamp := ""
-		if m.version == len(migrations) {
-			stamp = fingerprint
-		}
-		if err := s.applyScript(m.up, m.version, stamp); err != nil {
+		// Each migration stamps the fingerprint of the set up to and
+		// including itself, in its own transaction: a schema and its
+		// identity commit together or neither does, so a crash anywhere
+		// in the sequence leaves a database whose recorded identity is
+		// exactly its applied prefix — which is what the check above
+		// verifies when the upgrade resumes.
+		if err := s.applyScript(m.up, m.version, schemaFingerprint(migrations[:m.version])); err != nil {
 			return fmt.Errorf("migration %06d_%s: %w", m.version, m.name, err)
 		}
 	}
