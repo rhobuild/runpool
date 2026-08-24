@@ -54,11 +54,35 @@ var ErrInvalidExecutionObservation = errors.New("execution observation is not a 
 // overwriting an observation.
 var ErrObservationConflict = errors.New("execution observation conflicts with what is recorded")
 
-// evidenceRank orders the vocabulary for the monotonic rule.
-var evidenceRank = map[Evidence]int{
-	EvidenceNotStarted: 0, EvidenceRuntimePrepared: 1,
-	EvidenceStartAuthorized: 2, EvidenceRunningObserved: 3, EvidenceExitObserved: 4,
+// AllEvidence is every state the monotonic machine can reach, in the
+// order it can reach them. The order is the rule: evidence only ever
+// moves forward, and a write that would move it back is refused.
+//
+// This is the source and the rank below is derived from it, not the
+// other way round. Building the slice by indexing the map assumed the
+// ranks were a contiguous run with no duplicates and no gaps -- true of
+// the data, stated by nothing, and both ways of breaking it are bad: a
+// gap panics in this package's initializer, which takes down every
+// binary that imports the store at startup, and a duplicate leaves a
+// hole in the slice that only a test happens to catch. Written this way
+// neither is expressible, and the hand-assigned numbers are gone with
+// their own chance to disagree.
+var AllEvidence = []Evidence{
+	EvidenceNotStarted,
+	EvidenceRuntimePrepared,
+	EvidenceStartAuthorized,
+	EvidenceRunningObserved,
+	EvidenceExitObserved,
 }
+
+// evidenceRank orders the vocabulary for the monotonic rule.
+var evidenceRank = func() map[Evidence]int {
+	m := make(map[Evidence]int, len(AllEvidence))
+	for i, e := range AllEvidence {
+		m[e] = i
+	}
+	return m
+}()
 
 // Valid reports whether e is part of the vocabulary.
 func (e Evidence) Valid() bool {

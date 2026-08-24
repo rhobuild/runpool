@@ -401,7 +401,7 @@ func TestPurgeLeaseRefusesWhileItsAttemptIsUnresolved(t *testing.T) {
 	}
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(attempt, AttemptLeased, "completed_observed"); err != nil {
+		if err := tx.Settle(attempt, AttemptLeased, assignment.ResolutionCompletedObserved); err != nil {
 			return err
 		}
 		return tx.PurgeLease(leaseID)
@@ -745,10 +745,10 @@ func TestRetentionMeasuresFromTheFinish(t *testing.T) {
 	backdateLease(t, s, resolved, longAgo, time.Now().Add(-time.Minute))
 
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(settledAttempt, AttemptLeased, "completed_observed"); err != nil {
+		if err := tx.Settle(settledAttempt, AttemptLeased, assignment.ResolutionCompletedObserved); err != nil {
 			return err
 		}
-		return tx.Settle(resolvedAttempt, AttemptLeased, "completed_observed")
+		return tx.Settle(resolvedAttempt, AttemptLeased, assignment.ResolutionCompletedObserved)
 	})
 
 	var removed int
@@ -805,13 +805,13 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	prunable, prunableAttempt := releasedLease(t, s, binding, "old")
 	backdateLease(t, s, prunable, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(prunableAttempt, AttemptLeased, "completed_observed")
+		return tx.Settle(prunableAttempt, AttemptLeased, assignment.ResolutionCompletedObserved)
 	})
 
 	// Finished, but recent: outside the window.
 	recent, recentAttempt := releasedLease(t, s, binding, "recent")
 	inTx(t, s, func(tx *Tx) error {
-		return tx.Settle(recentAttempt, AttemptLeased, "completed_observed")
+		return tx.Settle(recentAttempt, AttemptLeased, assignment.ResolutionCompletedObserved)
 	})
 
 	// Old and released, but its attempt is still open — the crash window.
@@ -822,7 +822,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 	wedged, wedgedAttempt := releasedLease(t, s, binding, "wedged")
 	backdateLease(t, s, wedged, old, old)
 	inTx(t, s, func(tx *Tx) error {
-		if err := tx.Settle(wedgedAttempt, AttemptLeased, "completed_observed"); err != nil {
+		if err := tx.Settle(wedgedAttempt, AttemptLeased, assignment.ResolutionCompletedObserved); err != nil {
 			return err
 		}
 		_, err := tx.PlanResource(wedged, ResourceContainer, "runner", "runpool-wedged")
@@ -1184,19 +1184,18 @@ func TestARetryInFlightIsNotStranded(t *testing.T) {
 func TestARequeueClearsTheAuthorizationItOutlived(t *testing.T) {
 	cases := []struct {
 		name    string
-		state   string
 		requeue func(*Tx, string) error
 	}{
-		{"plain requeue from prepared", "prepared", func(tx *Tx, id string) error {
-			if err := tx.Advance(assignment.AttemptID(id), "leased", "preparing"); err != nil {
+		{"plain requeue from prepared", func(tx *Tx, id string) error {
+			if err := tx.Advance(assignment.AttemptID(id), AttemptLeased, AttemptPreparing); err != nil {
 				return err
 			}
-			if err := tx.Advance(assignment.AttemptID(id), "preparing", "prepared"); err != nil {
+			if err := tx.Advance(assignment.AttemptID(id), AttemptPreparing, AttemptPrepared); err != nil {
 				return err
 			}
 			return tx.Requeue(assignment.AttemptID(id))
 		}},
-		{"proven inert from starting", "starting", func(tx *Tx, id string) error {
+		{"proven inert from starting", func(tx *Tx, id string) error {
 			for _, step := range [][2]AttemptState{
 				{AttemptLeased, AttemptPreparing}, {AttemptPreparing, AttemptPrepared}, {AttemptPrepared, AttemptStarting},
 			} {
@@ -2311,19 +2310,7 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 
 	// The other direction, against the column itself: the list is not
 	// short. Every kind the schema admits has a constant here.
-	var admitted []string
-	inTx(t, s, func(tx *Tx) error {
-		row := tx.tx.QueryRow(
-			`SELECT sql FROM sqlite_schema WHERE name = 'attempt_events'`)
-		var ddl string
-		if err := row.Scan(&ddl); err != nil {
-			return err
-		}
-		for _, m := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(ddl, -1) {
-			admitted = append(admitted, m[1])
-		}
-		return nil
-	})
+	admitted := checkVocabulary(t, s, "attempt_events", "kind")
 	if len(admitted) != len(AllEventKinds) {
 		t.Fatalf("the column admits %d kinds and AllEventKinds holds %d: %v",
 			len(admitted), len(AllEventKinds), admitted)
@@ -2333,4 +2320,93 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 			t.Errorf("the column admits %q and no constant names it", a)
 		}
 	}
+}
+
+// TestTheStateVocabulariesCoverTheirColumns holds the two remaining
+// enumerated vocabularies against the columns that close them. Both
+// lists live in Go and both sets live in the schema, written by
+// different hands: a value the machine can reach and the column refuses
+// fails at a transition, mid-lifecycle; a value the column admits with
+// no member naming it is one no reader accounts for.
+func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
+	s := newStore(t)
+
+	for name, tc := range map[string]struct {
+		table, column string
+		declared      []string
+	}{
+		"lease states": {"capsule_leases", "state         TEXT",
+			func() []string {
+				var o []string
+				for _, v := range AllLeaseStates {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"execution evidence": {"assignment_attempts", "execution_evidence",
+			func() []string {
+				var o []string
+				for _, v := range AllEvidence {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cols := checkVocabulary(t, s, tc.table, tc.column)
+			slices.Sort(cols)
+			declared := slices.Clone(tc.declared)
+			slices.Sort(declared)
+			if !slices.Equal(cols, declared) {
+				t.Errorf("the column admits %v\nand Go enumerates %v\n"+
+					"a value in one list and not the other is one that fails at a write "+
+					"or one nothing accounts for", cols, declared)
+			}
+		})
+	}
+}
+
+// checkVocabulary reads the values a column's own CHECK admits, from the
+// live schema rather than a copy of it.
+//
+// Two details are the whole of why it is a function. The window starts
+// at the CHECK and not at the column, because a DEFAULT sitting beside
+// it is a quoted literal too and counting it made a vocabulary look like
+// it held a value twice. And the class is "anything but a quote", not
+// "lowercase and underscore": the narrow class silently dropped any
+// value carrying a digit or a capital, so a word added to the column and
+// not to Go -- the exact drift this reads for -- would have left the two
+// sets equal and passed.
+//
+// Every way of mis-reading a CHECK this does not expect over-collects or
+// under-collects, so it fails. A missing CHECK is fatal rather than
+// silently harvesting the columns below it.
+func checkVocabulary(t *testing.T, s *Store, table, columnAnchor string) []string {
+	t.Helper()
+	var ddl string
+	inTx(t, s, func(tx *Tx) error {
+		return tx.tx.QueryRow(
+			`SELECT sql FROM sqlite_schema WHERE name = ?`, table).Scan(&ddl)
+	})
+	i := strings.Index(ddl, columnAnchor)
+	if i < 0 {
+		t.Fatalf("%s: no column matching %q in the stored schema; the anchor this reads "+
+			"by has moved", table, columnAnchor)
+	}
+	rest := ddl[i:]
+	c := strings.Index(rest, "CHECK")
+	if c < 0 {
+		t.Fatalf("%s.%s has no CHECK; this reads a closed vocabulary and the column no "+
+			"longer closes one", table, columnAnchor)
+	}
+	rest = rest[c:]
+	end := strings.Index(rest, "))")
+	if end < 0 {
+		t.Fatalf("the CHECK on %s.%s is not the shape this reads", table, columnAnchor)
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(rest[:end], -1) {
+		out = append(out, m[1])
+	}
+	return out
 }
