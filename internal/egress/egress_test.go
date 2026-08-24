@@ -376,3 +376,121 @@ func TestTheDenySetIsIPv4WhateverTheDaemonReports(t *testing.T) {
 		t.Errorf("the policy built from what the daemon reported does not validate: %v", err)
 	}
 }
+
+// outputRules extracts the OUTPUT chain in order. The order is the
+// decision: iptables evaluates top to bottom, so a terminal ACCEPT that
+// renders above a REJECT does not "mostly work" — it makes every rule
+// below it unreachable and the deny layer an accept-all.
+func outputRules(out string) []string {
+	var rules []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "-A OUTPUT ") {
+			rules = append(rules, line)
+		}
+	}
+	return rules
+}
+
+// TestTheRulesetIsHeldLineByLine: the existing render test checks that
+// lines exist, and existence is not a ruleset. Moving the terminal
+// ACCEPT above the deny loop kept every line present and every test
+// green while the kernel accepted everything; adding one INPUT accept
+// for the proxy port without a source subnet did the same while any
+// gateway on the uplink relayed any capsule's traffic under its own
+// policy. A chain is asserted as the ordered sequence it is evaluated
+// as, and INPUT as the exact set of accepts it may hold.
+func TestTheRulesetIsHeldLineByLine(t *testing.T) {
+	out := policy().RenderIPTables("eth0", 3128)
+
+	rules := outputRules(out)
+	if len(rules) == 0 {
+		t.Fatal("no OUTPUT rules at all, so this proves nothing")
+	}
+	last := rules[len(rules)-1]
+	if last != "-A OUTPUT -j ACCEPT" {
+		t.Fatalf("the last OUTPUT rule is %q; the unconditional accept must be the final rule", last)
+	}
+	for _, r := range rules[:len(rules)-1] {
+		if r == "-A OUTPUT -j ACCEPT" {
+			t.Fatalf("an unconditional accept renders above %q; every rule below it is unreachable "+
+				"and the deny layer is an accept-all", rules[len(rules)-1])
+		}
+	}
+	// Every REJECT is above the terminal accept by the assertion above;
+	// what remains is that each is present for the whole deny set.
+	for _, c := range policy().Deny {
+		want := "-A OUTPUT -d " + c + " -j REJECT --reject-with icmp-admin-prohibited"
+		if !slices.Contains(rules, want) {
+			t.Errorf("the deny set entry %s has no REJECT rule", c)
+		}
+	}
+
+	// INPUT is enumerated exactly. A rule added here is a door into the
+	// gateway, and the door the source subnet exists to close is another
+	// capsule's traffic arriving over the shared uplink.
+	var input []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "-A INPUT ") {
+			input = append(input, line)
+		}
+	}
+	wantInput := []string{
+		"-A INPUT -i lo -j ACCEPT",
+		"-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+		"-A INPUT -i eth0 -s 172.20.0.0/24 -p udp --dport 53 -j ACCEPT",
+		"-A INPUT -i eth0 -s 172.20.0.0/24 -p tcp --dport 53 -j ACCEPT",
+		"-A INPUT -i eth0 -s 172.20.0.0/24 -p tcp --dport 3128 -j ACCEPT",
+	}
+	if !slices.Equal(input, wantInput) {
+		t.Errorf("INPUT chain =\n%s\nwant exactly\n%s", strings.Join(input, "\n"), strings.Join(wantInput, "\n"))
+	}
+}
+
+// TestTheIP6RulesetIsExactlyLoopback: the previous assertion here could
+// not fire — it excused any ACCEPT whenever "-o lo" appeared anywhere in
+// the ruleset, and the loopback accept is always in it, so a fully open
+// IPv6 ruleset passed. The capsule has no IPv6 and the ruleset is what
+// turns "not enabled" into "denied even if something enables it", so it
+// is asserted as the exact document it is.
+func TestTheIP6RulesetIsExactlyLoopback(t *testing.T) {
+	want := strings.Join([]string{
+		"*filter",
+		":INPUT DROP [0:0]",
+		":FORWARD DROP [0:0]",
+		":OUTPUT DROP [0:0]",
+		"-A INPUT -i lo -j ACCEPT",
+		"-A OUTPUT -o lo -j ACCEPT",
+		"COMMIT",
+		"",
+	}, "\n")
+	if got := RenderIP6Tables(); got != want {
+		t.Errorf("ip6 ruleset =\n%s\nwant exactly\n%s", got, want)
+	}
+}
+
+// TestTheBaselineDenyIsTheTwelveRanges. Writing the twelve out is the
+// point: the baseline is the floor under every discovered deny, the
+// validator refuses operator allowances against what it withholds, and
+// a range deleted from it was withheld from capsules on every host —
+// while the previous test pinned seven of the twelve, so the other five
+// could go without a failure anywhere.
+func TestTheBaselineDenyIsTheTwelveRanges(t *testing.T) {
+	want := []string{
+		"0.0.0.0/8",
+		"10.0.0.0/8",
+		"100.64.0.0/10",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"172.16.0.0/12",
+		"192.0.0.0/24",
+		"192.168.0.0/16",
+		"198.18.0.0/15",
+		"224.0.0.0/4",
+		"240.0.0.0/4",
+		"255.255.255.255/32",
+	}
+	if !slices.Equal(baselineDeny, want) {
+		t.Errorf("baselineDeny = %v\nwant the twelve ranges written here, so a deletion is a diff "+
+			"in a security constant and not a silent narrowing", baselineDeny)
+	}
+}

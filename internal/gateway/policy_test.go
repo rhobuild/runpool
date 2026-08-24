@@ -530,3 +530,31 @@ func TestOnlyAFirstInstallMayFindNoPolicyInForce(t *testing.T) {
 		t.Errorf("the first install did not take the lock a reload takes: %v", err)
 	}
 }
+
+// TestAnOversizedPolicyIsRefusedNotTruncated: the reload reads one byte
+// past the bound so a document that exceeds it can be told from one that
+// fits — and then nothing compared the length, so the oversized document
+// was not refused. Its truncated prefix went to the decoder, and a
+// prefix that happens to be complete JSON installed a policy nobody
+// wrote in full: measured before the fix, a two-megabyte document
+// crafted that way moved the deny set.
+func TestAnOversizedPolicyIsRefusedNotTruncated(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(PolicyPath(dir),
+		[]byte(`{"internal_subnet":"172.31.0.0/24","uplink_subnet":"172.31.1.0/24","allow":[],"deny":["10.0.0.0/8"]}`),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A document whose first MaxPolicyBytes+1 bytes are complete JSON:
+	// the shape truncation turns into a different, valid policy.
+	head := `{"allow":[],"deny":["192.168.0.0/16"]}`
+	oversized := head + strings.Repeat(" ", MaxPolicyBytes)
+	err := Reload(dir, strings.NewReader(oversized))
+	if err == nil {
+		t.Fatal("a document past the bound was installed from its truncated prefix")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error = %q; it has to name the bound rather than fail parsing the truncation", err)
+	}
+}
