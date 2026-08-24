@@ -220,7 +220,16 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		// closed. It also has to land before anything schedules, or a
 		// cancellation arrives after the attempt it was meant to close
 		// has already been leased.
-		s.recordLifecycleEvents(ctx, b, msg)
+		if err := s.recordLifecycleEvents(ctx, b, msg); err != nil {
+			s.log.Error("cannot record the message's lifecycle events; leaving it for redelivery",
+				"binding", b.key, "error", err)
+			select {
+			case <-time.After(s.backoff()):
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
 
 		advanced := s.acknowledgeDelivery(ctx, b, assignment.DeliveryID(delivery), msg.ID)
 
@@ -409,13 +418,17 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 
 // recordLifecycleEvents persists the provider's started/completed
 // observations against the attempt they belong to.
-func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg *githubactions.Message) {
+// It returns on the first failure. The events after it are not lost:
+// the message stays unacknowledged, the broker sends it again, and
+// recording is idempotent -- so a redelivery replays the whole message
+// rather than the tail of one.
+func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg *githubactions.Message) error {
 	// One correlation per event, and everything the event causes acts on
 	// what it resolved. Cancelling by workload key instead was a second,
 	// independent answer to the same question: after a requeue it named
 	// the successor, so a late cancellation of the run that preceded it
 	// closed work that had just been handed to this instance.
-	record := func(ev assignment.WorkloadLifecycleEvent, kind, idempotency string, cancel bool) {
+	record := func(ev assignment.WorkloadLifecycleEvent, kind, idempotency string, cancel bool) error {
 		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 			attemptID, err := s.attemptForObservation(tx, b, ev)
 			if err != nil || attemptID == "" {
@@ -433,7 +446,9 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 		}); err != nil {
 			s.log.Error("cannot record a lifecycle event",
 				"binding", b.key, "workload", ev.SourceWorkloadKey, "error", err)
+			return err
 		}
+		return nil
 	}
 	// The hint keys carry the runtime, as cleanup's carry the lease: an
 	// attempt is served once per runtime, and a fixed key would swallow a
@@ -444,7 +459,9 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 	for _, ev := range msg.Started {
 		s.log.Info("workload started",
 			"binding", b.key, "workload", ev.SourceWorkloadKey, "runtime", ev.RuntimeName)
-		record(ev, "running_observed", "remote_running_observed:"+string(ev.RuntimeName), false)
+		if err := record(ev, "running_observed", "remote_running_observed:"+string(ev.RuntimeName), false); err != nil {
+			return err
+		}
 	}
 	for _, ev := range msg.Completed {
 		s.log.Info("workload completed (hint)",
@@ -456,8 +473,11 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 		if ev.Result == "canceled" {
 			kind, idempotency = "remote_canceled", "remote_canceled"
 		}
-		record(ev, kind, idempotency, ev.Result == "canceled")
+		if err := record(ev, kind, idempotency, ev.Result == "canceled"); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // cancelIfReady closes the attempt the cancellation was correlated to,

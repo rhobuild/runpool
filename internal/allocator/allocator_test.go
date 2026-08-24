@@ -272,9 +272,22 @@ func TestHoldWithholdsNewCapacity(t *testing.T) {
 		t.Errorf("b advertised %d under hold; want 0", got)
 	}
 
+	// Advertising nothing is half of it, and it is the half the broker
+	// sees. The other half is local: a pass already looping over a batch
+	// of ready attempts reads the pressure once, before the loop, so a
+	// hold that lands underneath it has to stop the admissions too --
+	// otherwise the emergency closes the door the broker knocks on and
+	// leaves the one this instance walks through itself.
+	if a.TryReserve("a") {
+		t.Error("a held binding reserved a credit; the capsule that admits starts on the filesystem the emergency is about")
+	}
+
 	a.Hold(false)
 	if got := a.Advertised("a"); got != 3 {
 		t.Errorf("a advertised %d after the hold lifted; want its demand again", got)
+	}
+	if !a.TryReserve("a") {
+		t.Error("a binding refused a credit after the hold lifted")
 	}
 }
 
