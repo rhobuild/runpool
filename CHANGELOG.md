@@ -568,7 +568,6 @@ by its public and operational effects.
   nothing to do, and installed nothing; every later pass then compared
   the new set against itself and returned before any fan-out. The
   capsule relayed under a superseded set for the whole of its job.
-### Interface
 - **A job that provably never ran is requeued after a restart, not
   settled.** The supervisor writes `running` once the start hand-over
   returns, before the runner is forked, so a capsule that aborts in that
@@ -578,6 +577,7 @@ by its public and operational effects.
   started. Same facts, answered differently by whether the controller
   happened to be alive.
 
+### Interface
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
   errors, exit codes are `0`/`1`/`2` and mean what they say, and
   destructive commands preview by default.

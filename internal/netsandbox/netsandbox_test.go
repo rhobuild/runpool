@@ -115,6 +115,9 @@ type fakeDaemon struct {
 	// what makes a serial pass distinguishable from a concurrent one.
 	delay time.Duration
 
+	// lastPayload is what the most recent reload carried.
+	lastPayload string
+
 	// The pass fans out over gateways now, so what it records is written
 	// from several goroutines and in no fixed order. The mutex is the
 	// fake's own; the accessors below sort, so a test asserts what was
@@ -252,13 +255,26 @@ func (f *fakeDaemon) Exec(_ context.Context, id string, cmd []string) (int, stri
 	}
 	return 0, "", nil
 }
-func (f *fakeDaemon) ExecWithInput(_ context.Context, id string, _ []string, _ []byte) (int, string, error) {
+func (f *fakeDaemon) ExecWithInput(_ context.Context, id string, _ []string, input []byte) (int, string, error) {
 	f.serve()
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
+	f.mu.Lock()
+	f.lastPayload = string(input)
+	f.mu.Unlock()
 	f.note(&f.reloaded, id)
 	return 0, "", nil
+}
+
+// payload is the policy the last reload carried. Asserting that a
+// gateway was reloaded says nothing about what it was reloaded with,
+// and a confirmation marshalling the launch's own set instead of the
+// one in force would pass that weaker assertion.
+func (f *fakeDaemon) payload() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPayload
 }
 func (f *fakeDaemon) RemoveContainer(ctx context.Context, id string) error {
 	f.mu.Lock()
@@ -1114,5 +1130,9 @@ func TestAConfirmationWaitsForAPassThatHasNotRecordedYet(t *testing.T) {
 	if got := d.reloads(); !slices.Equal(got, []string{"gw-late"}) {
 		t.Errorf("reloaded %v; the gateway created after the pass enumerated has to receive "+
 			"the set that pass recorded, which is the one it was too late to be given", got)
+	}
+	if got := d.payload(); !strings.Contains(got, "192.168.0.0/16") {
+		t.Errorf("the reload carried %q; it has to carry the set the pass recorded, not the "+
+			"one the launch was cut from", got)
 	}
 }

@@ -197,7 +197,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	// transaction then settles from evidence alone. The write is the
 	// whole point — nothing below reads the local copy, because every
 	// disposition re-reads the row inside its own transaction.
-	if obs == assignment.ObservedExited && evidence != store.EvidenceExitObserved {
+	if obs == assignment.ObservedExited {
 		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 			return tx.RecordEvidence(lease.AttemptID, store.EvidenceExitObserved)
 		}); err != nil {

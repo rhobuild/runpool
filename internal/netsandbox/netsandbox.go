@@ -68,7 +68,10 @@ type Daemon interface {
 // abandonable. What that costs is ownership: the token is bare, so a
 // drain anywhere other than the send's own defer releases it whoever
 // holds it, and two refreshes then run at once with nothing to say so.
-// refresh is the only place that takes it. A launch holds it for as long as a discovery and a
+// Two places take it: refresh, and the confirmation a launch performs --
+// which has to wait for a pass in flight, because a pass records its set
+// only after installing it and the snapshot holds the older one until
+// then. A launch holds it for as long as a discovery and a
 // gateway fan-out take, on a context that deliberately outlives the
 // serve loop so cleanup can still run; a mutex would park the shutdown
 // pass on that launch with no way to give up, and the wait for the serve
@@ -412,10 +415,13 @@ func (n *Manager) ConfirmLaunch(ctx context.Context, leaseID assignment.LeaseID,
 		// gateway that refused it.
 		return fmt.Errorf("lease %s owns no running gateway to confirm the egress policy against", leaseID)
 	}
-	// A pass that moved the set while this ran leaves the gateway one
-	// generation behind. A capsule must not start under a set that was
-	// current a moment ago, and the pass that moved it could not have
-	// reached this gateway either.
+	// An assertion on the slot, not a race this can lose. The only writer
+	// of the snapshot is a pass, and a pass holds the slot this function
+	// holds -- so the set cannot move while this runs, and this can only
+	// fire if two holders exist at once. That is the failure the token
+	// above names and nothing else detects: it costs one comparison, it
+	// fails closed, and it sits in the path that decides what a capsule
+	// may reach.
 	if after := n.state.snapshot(); !sameSandbox(inForce, after) {
 		return fmt.Errorf("the egress policy moved while the gateway was being confirmed")
 	}
