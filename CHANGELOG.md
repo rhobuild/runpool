@@ -558,6 +558,16 @@ by its public and operational effects.
   the provider re-offers it, and that dependency is now written down
   rather than assumed.
 
+- **A capsule cannot start under an egress policy that has been
+  superseded.** A policy pass records its set only once every gateway
+  that was relaying carries it, so between the moment it stops
+  enumerating and the moment it records, the snapshot still holds the
+  older set — and a gateway created after that enumeration was never
+  reached by the pass either. The confirmation each launch performs
+  compared against that snapshot without waiting for the pass, saw
+  nothing to do, and installed nothing; every later pass then compared
+  the new set against itself and returned before any fan-out. The
+  capsule relayed under a superseded set for the whole of its job.
 ### Interface
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage

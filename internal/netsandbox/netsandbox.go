@@ -365,6 +365,25 @@ func (n *Manager) ConfirmLaunch(ctx context.Context, leaseID assignment.LeaseID,
 	if n == nil || launched == nil {
 		return nil
 	}
+	// Under the slot, because the snapshot is not the whole answer. A
+	// pass records its set only once every gateway that was relaying
+	// carries it, so between the moment it stops enumerating and the
+	// moment it records, the snapshot still holds the older set -- and
+	// this gateway was created after that enumeration, so the pass never
+	// reached it either. Comparing outside the slot in that window sees
+	// "unchanged", installs nothing, and every later pass compares the
+	// new set against itself and returns before any fan-out. The capsule
+	// then relays under a superseded set for the whole of its job.
+	//
+	// Waiting is what ForLaunch already does on this same slot, and the
+	// wait is abandonable: a launch whose context ends stops waiting.
+	select {
+	case n.state.refreshing <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-n.state.refreshing }()
+
 	inForce := n.state.snapshot()
 	if sameSandbox(launched, inForce) {
 		return nil
