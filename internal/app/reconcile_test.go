@@ -237,3 +237,54 @@ func TestRecoveryRefinesFromTheRuntimeItStillHolds(t *testing.T) {
 		})
 	}
 }
+
+// TestAnAbortAfterRunningObservedIsRequeuedOnRestart: the supervisor
+// writes `running` once the start exec returns — before the runner is
+// forked. A capsule that aborts in that stretch (no credential, a
+// prepare failure, a fork that fails) exits carrying the one code
+// reserved for "the runner never owned the job", and that code exists
+// for exactly this: by the time a controller inspects it, the daemon
+// says `exited` and nothing inside can be read.
+//
+// The live wait requeues it. Adoption requeues it. Restart destroyed the
+// container unread and settled the attempt as started — the same facts
+// answered differently by whether the controller happened to be alive,
+// with a job that provably never ran never served again locally.
+func TestAnAbortAfterRunningObservedIsRequeuedOnRestart(t *testing.T) {
+	for name, tc := range map[string]struct {
+		obs            assignment.ExecutionObservation
+		wantState      store.AttemptState
+		wantResolution assignment.Resolution
+	}{
+		"an abort returns the attempt to the queue": {
+			obs: assignment.ObservedCreated, wantState: store.AttemptReady,
+		},
+		"a real exit settles as completed": {
+			obs: assignment.ObservedExited, wantState: store.AttemptSettled,
+			wantResolution: assignment.ResolutionCompletedObserved,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, 1)
+			workload := "job-restart-" + string(tc.obs)
+			if err := h.deliver(demand(workload, "app", 6)); err != nil {
+				t.Fatal(err)
+			}
+			lease, attemptID := leaseFor(t, h, assignment.SourceWorkloadKey(workload))
+			driveLeaseTo(t, h, lease.ID, store.LeaseWorkloadRunning)
+			// The evidence a serving reaches once its start exec returns.
+			h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+			h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), tc.obs)
+
+			got := attemptState(t, h, attemptID)
+			if got.State != tc.wantState {
+				t.Errorf("attempt = %s after a capsule reporting %s; want %s",
+					got.State, tc.obs, tc.wantState)
+			}
+			if got.Resolution != tc.wantResolution {
+				t.Errorf("resolution = %q; want %q", got.Resolution, tc.wantResolution)
+			}
+		})
+	}
+}

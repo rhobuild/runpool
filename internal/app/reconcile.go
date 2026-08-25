@@ -171,8 +171,20 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	// The observation is taken before any cleanup: the container is the
 	// only proof of whether an authorized start took effect, and the
 	// release below destroys it.
+	//
+	// running_observed is asked for too, and that is not belt and braces.
+	// The supervisor writes `running` once the start exec returns, which
+	// is before the runner is forked -- so a capsule that aborted after
+	// that point sits exited carrying the one code reserved for "the
+	// runner never owned the job", which is the entire reason that code
+	// exists. Gated on start_authorized alone, this pass destroyed that
+	// container unread and settled the attempt as started, where the
+	// same capsule reached by the live wait or by adoption is requeued.
+	// Same facts, different answer, decided by whether the controller
+	// happened to be alive.
 	obs := assignment.ObservedAbsent
-	if evidence == store.EvidenceStartAuthorized && hasRunner {
+	if hasRunner && (evidence == store.EvidenceStartAuthorized ||
+		evidence == store.EvidenceRunningObserved) {
 		var err error
 		obs, err = s.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
 		if err != nil {
@@ -185,7 +197,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	// transaction then settles from evidence alone. The write is the
 	// whole point — nothing below reads the local copy, because every
 	// disposition re-reads the row inside its own transaction.
-	if obs == assignment.ObservedExited && evidence == store.EvidenceStartAuthorized {
+	if obs == assignment.ObservedExited && evidence != store.EvidenceExitObserved {
 		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 			return tx.RecordEvidence(lease.AttemptID, store.EvidenceExitObserved)
 		}); err != nil {

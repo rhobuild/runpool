@@ -569,6 +569,14 @@ by its public and operational effects.
   the new set against itself and returned before any fan-out. The
   capsule relayed under a superseded set for the whole of its job.
 ### Interface
+- **A job that provably never ran is requeued after a restart, not
+  settled.** The supervisor writes `running` once the start hand-over
+  returns, before the runner is forked, so a capsule that aborts in that
+  stretch exits carrying the code reserved for "the runner never owned
+  the job". The live wait and adoption both read that code and requeue;
+  a restart destroyed the container unread and settled the attempt as
+  started. Same facts, answered differently by whether the controller
+  happened to be alive.
 
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
   errors, exit codes are `0`/`1`/`2` and mean what they say, and
