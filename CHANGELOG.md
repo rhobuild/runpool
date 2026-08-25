@@ -558,8 +558,26 @@ by its public and operational effects.
   the provider re-offers it, and that dependency is now written down
   rather than assumed.
 
-### Interface
+- **A capsule cannot start under an egress policy that has been
+  superseded.** A policy pass records its set only once every gateway
+  that was relaying carries it, so between the moment it stops
+  enumerating and the moment it records, the snapshot still holds the
+  older set — and a gateway created after that enumeration was never
+  reached by the pass either. The confirmation each launch performs
+  compared against that snapshot without waiting for the pass, saw
+  nothing to do, and installed nothing; every later pass then compared
+  the new set against itself and returned before any fan-out. The
+  capsule relayed under a superseded set for the whole of its job.
+- **A job that provably never ran is requeued after a restart, not
+  settled.** The supervisor writes `running` once the start hand-over
+  returns, before the runner is forked, so a capsule that aborts in that
+  stretch exits carrying the code reserved for "the runner never owned
+  the job". The live wait and adoption both read that code and requeue;
+  a restart destroyed the container unread and settled the attempt as
+  started. Same facts, answered differently by whether the controller
+  happened to be alive.
 
+### Interface
 - The CLI is **Cobra**: `--help` works, extra arguments are usage
   errors, exit codes are `0`/`1`/`2` and mean what they say, and
   destructive commands preview by default.

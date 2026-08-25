@@ -115,6 +115,9 @@ type fakeDaemon struct {
 	// what makes a serial pass distinguishable from a concurrent one.
 	delay time.Duration
 
+	// lastPayload is what the most recent reload carried.
+	lastPayload string
+
 	// The pass fans out over gateways now, so what it records is written
 	// from several goroutines and in no fixed order. The mutex is the
 	// fake's own; the accessors below sort, so a test asserts what was
@@ -252,13 +255,26 @@ func (f *fakeDaemon) Exec(_ context.Context, id string, cmd []string) (int, stri
 	}
 	return 0, "", nil
 }
-func (f *fakeDaemon) ExecWithInput(_ context.Context, id string, _ []string, _ []byte) (int, string, error) {
+func (f *fakeDaemon) ExecWithInput(_ context.Context, id string, _ []string, input []byte) (int, string, error) {
 	f.serve()
 	if f.refuse[id] {
 		return 1, "refused", nil
 	}
+	f.mu.Lock()
+	f.lastPayload = string(input)
+	f.mu.Unlock()
 	f.note(&f.reloaded, id)
 	return 0, "", nil
+}
+
+// payload is the policy the last reload carried. Asserting that a
+// gateway was reloaded says nothing about what it was reloaded with,
+// and a confirmation marshalling the launch's own set instead of the
+// one in force would pass that weaker assertion.
+func (f *fakeDaemon) payload() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPayload
 }
 func (f *fakeDaemon) RemoveContainer(ctx context.Context, id string) error {
 	f.mu.Lock()
@@ -1054,5 +1070,69 @@ func TestRediscoverClosesEveryGatewayWhenDiscoveryFails(t *testing.T) {
 	// answered in and nothing should depend on it.
 	if !slices.Equal(d.removes(), []string{"gw-1", "gw-2"}) {
 		t.Errorf("removed %v; a failed rediscovery has to close every gateway", d.removes())
+	}
+}
+
+// TestAConfirmationWaitsForAPassThatHasNotRecordedYet is the window
+// between the two the other confirmation tests hold.
+//
+// A pass records its set only once every gateway that was relaying
+// carries it — so between the moment it stops enumerating and the moment
+// it records, the snapshot still holds the older set. A gateway created
+// after that enumeration was never reached by the pass either. A
+// confirmation comparing against the snapshot in that window sees
+// "unchanged", installs nothing, and returns; every later pass then
+// compares the new set against itself, classifies it unchanged, and
+// returns before any fan-out. The capsule relays under a superseded set
+// for the whole of its job, and nothing anywhere says so.
+//
+// The window is not narrow. A pass closing gateways after a failed
+// restriction spends a control timeout on each, which is exactly the
+// pass whose set matters most.
+func TestAConfirmationWaitsForAPassThatHasNotRecordedYet(t *testing.T) {
+	older := &capsule.Sandbox{UplinkNetworkID: "up-1", UplinkSubnet: "172.30.0.0/24",
+		Deny: []string{"10.0.0.0/8"}}
+	newer := &capsule.Sandbox{UplinkNetworkID: "up-1", UplinkSubnet: "172.30.0.0/24",
+		Deny: []string{"10.0.0.0/8", "192.168.0.0/16"}}
+
+	d := &fakeDaemon{
+		containers: []engine.OwnedContainer{
+			{ID: "gw-late", Role: engine.RoleGateway, LeaseID: "lse-late", Running: true},
+		},
+	}
+	n := newTestSandbox(t, d, older)
+
+	// A pass mid-flight: past its enumeration, not yet at its record.
+	n.state.refreshing <- struct{}{}
+
+	done := make(chan error, 1)
+	go func() { done <- n.ConfirmLaunch(t.Context(), "lse-late", older) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("the confirmation returned (%v) while a pass had not recorded its set; "+
+			"it compared against a snapshot the pass was about to replace", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// The pass records and releases.
+	n.state.replace(newer)
+	<-n.state.refreshing
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("confirming after the pass recorded: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the confirmation never completed after the slot was released")
+	}
+	if got := d.reloads(); !slices.Equal(got, []string{"gw-late"}) {
+		t.Errorf("reloaded %v; the gateway created after the pass enumerated has to receive "+
+			"the set that pass recorded, which is the one it was too late to be given", got)
+	}
+	if got := d.payload(); !strings.Contains(got, "192.168.0.0/16") {
+		t.Errorf("the reload carried %q; it has to carry the set the pass recorded, not the "+
+			"one the launch was cut from", got)
 	}
 }
