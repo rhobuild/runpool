@@ -54,6 +54,19 @@ if ! command -v findmnt >/dev/null 2>&1; then
   exit 1
 fi
 backing=$(findmnt -no FSTYPE --target "$docker_root")
+# These two stay swallowed, and the difference from the guard above is
+# the whole reason. findmnt missing was a broken instrument reporting a
+# false fact -- the disk had a filesystem either way. iptables missing is
+# the fact: the host has no iptables, which is true, and reporting it is
+# this script's whole job. The same shape as rootless -- a disqualifying
+# property the collector states and the judges refuse, at the freeze
+# (the manifest requires both non-empty) and at the comparison, where an
+# empty version reads as "not installed" rather than as a different tool.
+#
+# Nothing here execs them either: the ruleset is applied by
+# iptables-restore inside the gateway container, from the image this
+# build ships, which installs its own. They record the netfilter
+# userspace the evidence was gathered under.
 iptables_version=$(iptables --version 2>/dev/null || true)
 nft_version=$(nft --version 2>/dev/null || true)
 
