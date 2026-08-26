@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/engine"
+	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -286,5 +288,139 @@ func TestAnAbortAfterRunningObservedIsRequeuedOnRestart(t *testing.T) {
 				t.Errorf("resolution = %q; want %q", got.Resolution, tc.wantResolution)
 			}
 		})
+	}
+}
+
+// TestAForgedAccountLosesToTheProviderOnEveryPath is the security
+// review's RP-SEC-001.
+//
+// The supervisor's state file lives on a tmpfs inside the capsule, and
+// the job's own daemon can reach it — the threat model says so, and says
+// the protection is that a provider still holding the runner busy
+// outranks the capsule's word that it never started. That promise names
+// no path, and only one path kept it: the serving loop's failure
+// handler. The recovery that resumes an interrupted release believed the
+// capsule, so a job that forged "never started" and waited for the
+// controller to die mid-cleanup had its own attempt returned to the
+// queue on the strength of a file it wrote.
+//
+// Contained — GitHub arbitrates one runner per job, so nothing reruns —
+// and the promise is the one protection stated against the one surface
+// the design admits is forgeable, which is why it holds everywhere now.
+func TestAForgedAccountLosesToTheProviderOnEveryPath(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-forged", "app", 7)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-forged")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	// The registration the provider still holds, and its refusal.
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.RecordGitHubRunnerID(attemptID, 4242)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// The forgery: the capsule says it never handed the job over.
+	h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), assignment.ObservedCreated)
+
+	got := attemptState(t, h, attemptID)
+	if got.State == store.AttemptReady {
+		t.Fatalf("the attempt was returned to the queue on the capsule's own word while the "+
+			"provider still held its runner busy; state=%s", got.State)
+	}
+	if got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionStartedObserved {
+		t.Errorf("attempt = %s/%q; the provider's account is what settles this",
+			got.State, got.Resolution)
+	}
+}
+
+// TestARecordedForgeryLosesToTheProviderToo is the narrower interleaving
+// of the same attack, and the one a first fix would have left open.
+//
+// A recovery that fails records what it measured before destroying the
+// container that proves it, so its retry arrives with nothing to measure
+// and reads that record back. Ask the provider before the read-back and
+// the question is about an absence: the refusal comes in, does not match
+// the observation it was asked about, is discarded — and the recorded
+// forgery then decides the disposition. The refusal was heard and
+// thrown away.
+func TestARecordedForgeryLosesToTheProviderToo(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-recorded", "app", 8)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-recorded")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	// What the failed pass wrote down: the capsule's own account.
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if err := tx.RecordGitHubRunnerID(attemptID, 4242); err != nil {
+			return err
+		}
+		return tx.RecordLeaseStartObservation(lease.ID, assignment.ObservedCreated)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// This pass measures nothing: the container is gone.
+	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
+	h.srv.resolveInterrupted(t.Context(), h.bind, reloadLease(t, h, lease.ID),
+		engine.OwnedContainer{}, false)
+
+	if got := attemptState(t, h, attemptID); got.State == store.AttemptReady {
+		t.Errorf("the recorded forgery returned the attempt to the queue while the provider, "+
+			"asked in this very pass, said the runner was busy; state=%s", got.State)
+	}
+}
+
+// TestAStrandedAttemptAsksTheProviderToo: the third path that ends a
+// serving. The invariant sweep disposes of an attempt whose lease is
+// already released — a state release-and-disposition committing together
+// makes unreachable, which is exactly why the sweep exists — and it
+// rules on the same forgeable observation the other two do.
+//
+// Left out, the one place reached only by an invariant already broken
+// would be the one place a forged account is still believed. Its two
+// siblings had tests and this did not: reverting only this call left the
+// whole suite green.
+func TestAStrandedAttemptAsksTheProviderToo(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-stranded-forged", "app", 9)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-stranded-forged")
+	driveLeaseTo(t, h, lease.ID, store.LeaseReleased)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.RecordGitHubRunnerID(attemptID, 4242)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// The released lease with an open attempt is what the sweep finds.
+	var stranded int
+	h.inStore(func(tx *store.Tx) error {
+		found, err := tx.StrandedAttempts()
+		stranded = len(found)
+		return err
+	})
+	if stranded != 1 {
+		t.Fatalf("the sweep found %d stranded attempts; this test is about the path that "+
+			"handles one", stranded)
+	}
+
+	h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), assignment.ObservedCreated)
+
+	if got := attemptState(t, h, attemptID); got.State == store.AttemptReady {
+		t.Errorf("the sweep returned the attempt to the queue on the capsule's own word "+
+			"while the provider held its runner busy; state=%s", got.State)
 	}
 }

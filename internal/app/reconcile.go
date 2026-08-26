@@ -207,6 +207,15 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 
 	switch lease.State {
 	case store.LeaseDraining, store.LeaseCleaning:
+		// The provider is asked here too. This resumes a release the
+		// serving loop began, and the observation it resumes with can be
+		// the capsule's own account of never having started -- which is
+		// written inside the machine running the job, on a tmpfs that
+		// job's daemon can reach. The threat model promises a forged one
+		// cannot return an assignment to the queue while the provider
+		// still holds the runner busy, and that promise was only kept on
+		// the failure path: this one believed the capsule.
+		obs = s.deregisterAndOverrule(ctx, b, lease, obs, log)
 		// Resume the interrupted release: external cleanup, then the
 		// finalizing transaction disposes of the attempt atomically.
 		log.Info("resuming an interrupted release")
@@ -220,8 +229,13 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// still open. Release and disposition commit together, so this
 		// should be unreachable; reaching it means something violated
 		// that, and the disposition is the only thing left to run.
+		// The provider is asked here too. This disposes of an attempt
+		// from the same observation the two paths above rule on, so
+		// leaving it out would mean the one place reached by an
+		// invariant already broken is the one place a forged account is
+		// still believed.
 		log.Warn("disposing of an attempt left open by a released lease")
-		s.leases.DisposeStranded(ctx, lease, obs)
+		s.leases.DisposeStranded(ctx, lease, s.deregisterAndOverrule(ctx, b, lease, obs, log))
 
 	case store.LeaseReserved, store.LeaseProvisioning,
 		store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning,
