@@ -17,7 +17,7 @@
   "schema_version": 2,
   "platforms": [
     {
-      "status": "pending",
+      "status": "frozen",
       "policy": {
         "os": "debian",
         "os_version": "13",
@@ -29,6 +29,27 @@
         "target_engine": "29.7.2",
         "reviewed": "2026-08-16",
         "freeze_point": "before-release-candidate"
+      },
+      "recorded": "2026-08-26T19:08:42Z",
+      "platform": {
+        "os": "debian",
+        "os_version": "13",
+        "os_codename": "trixie",
+        "arch": "amd64",
+        "kernel": "6.12.101+deb13-amd64",
+        "engine": "29.7.2",
+        "api": "1.55",
+        "cgroup_version": "2",
+        "cgroup_driver": "systemd",
+        "storage_driver": "overlayfs",
+        "backing_filesystem": "ext4",
+        "rootless": false,
+        "containerd": "aad11006b869517fcd3009450b6f82da282e1a9b",
+        "runc": "v1.4.3-0-gbb14dabe",
+        "buildx": "v0.36.1",
+        "compose": "5.5.0",
+        "iptables": "iptables v1.8.11 (nf_tables)",
+        "nftables": "nftables v1.1.3 (Commodore Bullmoose #4)"
       }
     }
   ]

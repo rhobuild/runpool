@@ -50,23 +50,24 @@ of the no-skip qualification before the support statement expands.
 The policy selects Docker Engine
 [29.7.2](https://docs.docker.com/engine/release-notes/29/#2972) from Docker's
 [official stable Debian channel](https://download.docker.com/linux/debian/dists/trixie/pool/stable/amd64/).
-The exact platform reference is currently **pending**: the
-production-class Linux host has not yet supplied the remaining facts. Release
-qualification is fail-closed until those facts are reviewed and frozen in
-`build/platform.lock.json` before the candidate tag. The host under test never
+The exact platform reference is **frozen** in
+`build/platform.lock.json`, captured from the production-class host before any
+candidate tag exists. Release qualification compares an observed host against
+those values and fails closed on any difference; the host under test never
 defines its own expectation.
 
 | | Reference value |
 | --- | --- |
-| OS | Debian 13 (trixie), amd64 — the selection in the one entry recorded; exact patch pending host capture |
-| Kernel | Pending host capture |
-| Docker Engine | **29.7.2** selected; exact installed package pending capture |
-| Engine API, containerd, runc | Pending host capture |
-| cgroups | v2 required; exact driver pending capture |
-| Storage and backing filesystem | Pending host capture |
+| OS | Debian 13 (trixie), amd64 |
+| Kernel | 6.12.101+deb13-amd64 |
+| Docker Engine | **29.7.2**, stable channel |
+| Engine API, containerd, runc | 1.55, aad11006b869…, v1.4.3-0-gbb14dabe |
+| cgroups | v2, systemd driver |
+| Storage and backing filesystem | overlayfs on ext4 |
 | Rootless | no |
-| Firewall backend | Stable Docker backend required; exact tools pending capture |
-| Buildx / Compose | Pending host capture |
+| Firewall backend | iptables v1.8.11 (nf_tables), nftables v1.1.3 (Commodore Bullmoose #4) |
+| Buildx / Compose | v0.36.1 / 5.5.0 |
+| Frozen | 2026-08-26 |
 | Policy reviewed | 2026-08-16 |
 
 Once frozen, every value is exact because a release record must identify what

@@ -280,6 +280,12 @@ func (q Qualified) validate() error {
 		"os":          {q.Policy.OS, q.Platform.OS},
 		"os_version":  {q.Policy.OSVersion, q.Platform.OSVersion},
 		"os_codename": {q.Policy.OSCodename, q.Platform.OSCodename},
+		// The engine belongs in this list for the reason above and was
+		// missing from it. A test held the rule for one architecture by
+		// reading that architecture out of the file; an entry added for
+		// another, frozen from an engine its own policy did not select,
+		// passed validation and qualified hosts against it.
+		"engine": {q.Policy.TargetEngine, q.Platform.Engine},
 	} {
 		if want, got := pair[0], pair[1]; got != "" && got != want {
 			return fmt.Errorf("the %s entry selects %s %q and froze %q; the facts are not from "+

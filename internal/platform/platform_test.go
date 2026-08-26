@@ -31,17 +31,44 @@ func TestManifestSelectsTheLatestReviewedStableEngine(t *testing.T) {
 	if !ok {
 		t.Fatalf("no entry for amd64; the release records %v", ref.Arches())
 	}
-	if amd64.Status != ReferenceStatusPending {
-		t.Errorf("status = %q; want pending until the server facts are frozen", amd64.Status)
-	}
 	if amd64.Policy.TargetEngine != "29.7.2" || amd64.Policy.DockerChannel != "stable" {
 		t.Errorf("Docker policy = %+v; want stable Engine 29.7.2", amd64.Policy)
 	}
-	if err := amd64.RequireFrozen(); err == nil {
-		t.Fatal("a pending reference was accepted for release qualification")
+	if amd64.Status != ReferenceStatusFrozen {
+		t.Fatalf("status = %q; the entry is frozen and qualification reads it", amd64.Status)
 	}
-	if got := amd64.Compare(Facts{}); len(got) != 1 || got[0].Property != "reference_status" {
+	if err := amd64.RequireFrozen(); err != nil {
+		t.Errorf("the frozen reference was refused for qualification: %v", err)
+	}
+	// The facts are the platform the policy selects, and the engine that
+	// ran the suites is the one the policy named. An entry frozen from
+	// somewhere else qualifies neither host.
+	if amd64.Platform.Engine != amd64.Policy.TargetEngine {
+		t.Errorf("froze engine %q against a policy naming %q",
+			amd64.Platform.Engine, amd64.Policy.TargetEngine)
+	}
+	if got := amd64.Compare(amd64.Platform); len(got) != 0 {
+		t.Errorf("the reference mismatched its own facts: %v", got)
+	}
+}
+
+// TestAPendingReferenceQualifiesNothing keeps the other half of what the
+// test above used to say. It read those refusals off the lock, which
+// held a pending entry then and holds a frozen one now -- so the rules
+// are stated here, over an entry this test owns, rather than over a file
+// whose contents are the thing under review.
+func TestAPendingReferenceQualifiesNothing(t *testing.T) {
+	pending := Qualified{Status: ReferenceStatusPending, Policy: testPolicy()}
+	if err := pending.RequireFrozen(); err == nil {
+		t.Error("a pending reference was accepted for release qualification")
+	}
+	got := pending.Compare(Facts{})
+	if len(got) != 1 || got[0].Property != "reference_status" {
 		t.Fatalf("pending comparison = %v; want a reference_status mismatch", got)
+	}
+	if got := pending.CompareDockerFacts(Facts{}); len(got) != 1 ||
+		got[0].Property != "reference_status" {
+		t.Errorf("pending runtime comparison = %v; want the same refusal", got)
 	}
 }
 
@@ -104,6 +131,10 @@ func TestAnEntryFrozenFromAnotherPlatformIsRefused(t *testing.T) {
 		"os":          func(q *Qualified) { q.Platform.OS = "ubuntu" },
 		"os_version":  func(q *Qualified) { q.Platform.OSVersion = "24.04" },
 		"os_codename": func(q *Qualified) { q.Platform.OSCodename = "noble" },
+		// The engine is the same rule and was missing from it: an entry
+		// frozen from an engine its own policy did not select qualifies
+		// hosts against a version nobody reviewed.
+		"engine": func(q *Qualified) { q.Platform.Engine = "29.7.1" },
 	} {
 		q := frozenQualified()
 		break_(&q)
@@ -380,5 +411,30 @@ func TestEveryDockerFactIsCompared(t *testing.T) {
 				t.Errorf("drifting %s produced %v; want exactly that one mismatch", property, got)
 			}
 		})
+	}
+}
+
+// TestTheRefusalsAValidatorOwesAreItsOwn covers the two branches nothing
+// reached. A pending entry carrying frozen facts is a record claiming
+// review that never happened, and a status word outside the vocabulary
+// is what this type's own doc warns about: compared against the wrong
+// word, a reference nobody reviewed reports as reviewed.
+func TestTheRefusalsAValidatorOwesAreItsOwn(t *testing.T) {
+	facts := Facts{
+		OS: "debian", OSVersion: "13", OSCodename: "trixie", Arch: "amd64",
+		Kernel: "k", Engine: "29.7.2", API: "1.55", CgroupVersion: "2",
+		CgroupDriver: "systemd", StorageDriver: "overlayfs", BackingFilesystem: "ext4",
+		Rootless: boolFact(false), Containerd: "c", Runc: "r", Buildx: "b",
+		Compose: "co", IPTables: "ipt", NFTables: "nft",
+	}
+	pending := Qualified{Status: ReferenceStatusPending, Policy: testPolicy(),
+		Recorded: "2026-08-26", Platform: facts}
+	if err := pending.validate(); err == nil {
+		t.Error("a pending entry carrying frozen facts validated; it claims a review nobody did")
+	}
+	unknown := Qualified{Status: "reviewed", Policy: testPolicy()}
+	if err := unknown.validate(); err == nil {
+		t.Error("a status outside the vocabulary validated; the wrong word reports an " +
+			"unreviewed reference as reviewed")
 	}
 }
