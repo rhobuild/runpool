@@ -65,7 +65,7 @@ defines its own expectation.
 | cgroups | v2, systemd driver |
 | Storage and backing filesystem | overlayfs on ext4 |
 | Rootless | no |
-| Firewall backend | iptables v1.8.11 (nf_tables), nftables v1.1.3 |
+| Firewall backend | iptables v1.8.11 (nf_tables), nftables v1.1.3 (Commodore Bullmoose #4) |
 | Buildx / Compose | v0.36.1 / 5.5.0 |
 | Frozen | 2026-08-26 |
 | Policy reviewed | 2026-08-16 |

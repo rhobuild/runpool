@@ -29,12 +29,19 @@ case "$security" in *rootless*) rootless=true ;; esac
 
 buildx=$(docker buildx version 2>/dev/null | awk '{print $2}' || true)
 compose=$(docker compose version --short 2>/dev/null || true)
-# The daemon says where its root is, and findmnt names the filesystem
-# rather than its magic number: stat -f prints "ext2/ext3" for ext4,
-# because the three share one magic, and this value is frozen into a
-# document whose whole purpose is to be read literally. A hardcoded
-# /var/lib/docker would also aim at the graphdriver root, which is not
-# where layers live once the containerd image store is the driver.
+# findmnt names the filesystem; stat -f prints its magic number, and
+# ext2, ext3 and ext4 share one -- so a host running ext4 was frozen into
+# this document as "ext2/ext3", and this document exists to be read
+# literally.
+#
+# The path is the daemon's own data root rather than a hardcoded one, so
+# a relocated --data-root is followed. What it is not is where layers
+# live under the containerd image store: those are under containerd's
+# root, which this does not probe. The fact has always named the
+# daemon's storage, the two roots are the same filesystem on any
+# ordinary host, and widening it to two values is a manifest change --
+# said here so the next reader does not mistake this for a probe of the
+# image store.
 docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
 backing=$(findmnt -no FSTYPE --target "$docker_root" 2>/dev/null || true)
 iptables_version=$(iptables --version 2>/dev/null || true)
