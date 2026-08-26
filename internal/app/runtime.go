@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -456,63 +457,7 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		startObs = was.StartObservation
 	}
 
-	// The runner id lives in the adapter's metadata for the attempt this
-	// lease serves; a binding of another provider has none, and zero
-	// means there is nothing to deregister. Reaching for it is this
-	// layer's job precisely because the lease machine must not know a
-	// provider exists.
-	var runnerGitHubID int64
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		runnerGitHubID, err = tx.GitHubRunnerID(was.AttemptID)
-		return err
-	}); err != nil {
-		log.Warn("cannot read the registered runner id; skipping deregistration", "error", err)
-	}
-
-	// b is nil for a lease whose target is no longer configured: clean
-	// its Docker resources, but there is no client to deregister the
-	// runner with — GitHub expires an unseen ephemeral runner on its own.
-	if runnerGitHubID != 0 && b != nil {
-		switch err := b.gh.RemoveRunner(ctx, int(runnerGitHubID)); {
-		case err == nil:
-		case errors.Is(err, githubactions.ErrRunnerNotFound):
-			// Already gone, which is what cleanup wanted.
-			log.Debug("the runner registration was already removed", "runner", runnerGitHubID)
-		case errors.Is(err, githubactions.ErrJobStillRunning):
-			// The provider still holds this runner busy, so the
-			// registration outlives the capsule that carried it and
-			// counts against the scale set until the provider expires it.
-			log.Warn("the provider refuses to deregister a runner it still considers busy; "+
-				"the registration is leaked until it expires there",
-				"runner", runnerGitHubID, "error", err)
-			// And it says something the capsule cannot be trusted to
-			// say. The capsule's own account of never having handed the
-			// job over -- the state it writes, the status it exits with
-			// -- is produced inside the machine running the job, whose
-			// daemon socket that job holds. This comes from the party
-			// that assigned the work, which still considers the runner
-			// busy with it.
-			//
-			// Only that one account is replaced. What the host daemon
-			// says is not the capsule's word and is not the weaker of
-			// the two: a container it has never started is a container
-			// in which nothing has run, observed from outside, more
-			// recently and closer to hand. And an outcome nobody could
-			// establish stays held for a person, because this does not
-			// establish it either -- it says a runner was busy, not that
-			// this attempt's runner ran.
-			if startObs == assignment.ObservedCreated {
-				log.Warn("the provider says the job was handed over; the capsule's own account "+
-					"of never having started it is not what settles this",
-					"observation", string(startObs))
-				startObs = assignment.ObservedRunning
-			}
-
-		default:
-			log.Warn("removing registered runner", "runner", runnerGitHubID, "error", err)
-		}
-	}
+	startObs = s.deregisterAndOverrule(ctx, b, was.AttemptID, startObs, log)
 
 	// Before the first destructive step, and after every refinement above
 	// that can overrule it. A recovery that cannot record what it saw must
@@ -611,4 +556,81 @@ func (s *Controller) inspectExecution(ctx context.Context,
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
 	return s.caps.InspectExecution(ctx, prepared)
+}
+
+// deregisterAndOverrule removes the provider's registration for an
+// attempt and lets what the provider says outrank what the capsule said
+// about itself.
+//
+// It is a function because two paths end a serving and both need it. The
+// failure path called it inline; the recovery that resumes an
+// interrupted release did not, so a capsule that forged "I never
+// started" was believed there -- and the threat model promised, without
+// naming a path, that such a forgery cannot return an assignment to the
+// queue while the provider still holds the runner busy. That promise is
+// the one protection stated against the one surface the design admits a
+// job can forge, and it is worth making true everywhere rather than
+// narrowing.
+func (s *Controller) deregisterAndOverrule(ctx context.Context, b *binding,
+	attemptID assignment.AttemptID, obs assignment.ExecutionObservation,
+	log *slog.Logger) assignment.ExecutionObservation {
+
+	// The runner id lives in the adapter's metadata for the attempt this
+	// lease serves; a binding of another provider has none, and zero
+	// means there is nothing to deregister. Reaching for it is this
+	// layer's job precisely because the lease machine must not know a
+	// provider exists.
+	var runnerGitHubID int64
+	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		runnerGitHubID, err = tx.GitHubRunnerID(attemptID)
+		return err
+	}); err != nil {
+		log.Warn("cannot read the registered runner id; skipping deregistration", "error", err)
+	}
+
+	// b is nil for a lease whose target is no longer configured: clean
+	// its Docker resources, but there is no client to deregister the
+	// runner with — GitHub expires an unseen ephemeral runner on its own.
+	if runnerGitHubID != 0 && b != nil {
+		switch err := b.gh.RemoveRunner(ctx, int(runnerGitHubID)); {
+		case err == nil:
+		case errors.Is(err, githubactions.ErrRunnerNotFound):
+			// Already gone, which is what cleanup wanted.
+			log.Debug("the runner registration was already removed", "runner", runnerGitHubID)
+		case errors.Is(err, githubactions.ErrJobStillRunning):
+			// The provider still holds this runner busy, so the
+			// registration outlives the capsule that carried it and
+			// counts against the scale set until the provider expires it.
+			log.Warn("the provider refuses to deregister a runner it still considers busy; "+
+				"the registration is leaked until it expires there",
+				"runner", runnerGitHubID, "error", err)
+			// And it says something the capsule cannot be trusted to
+			// say. The capsule's own account of never having handed the
+			// job over -- the state it writes, the status it exits with
+			// -- is produced inside the machine running the job, whose
+			// daemon socket that job holds. This comes from the party
+			// that assigned the work, which still considers the runner
+			// busy with it.
+			//
+			// Only that one account is replaced. What the host daemon
+			// says is not the capsule's word and is not the weaker of
+			// the two: a container it has never started is a container
+			// in which nothing has run, observed from outside, more
+			// recently and closer to hand. And an outcome nobody could
+			// establish stays held for a person, because this does not
+			// establish it either -- it says a runner was busy, not that
+			// this attempt's runner ran.
+			if obs == assignment.ObservedCreated {
+				log.Warn("the provider says the job was handed over; the capsule's own account "+
+					"of never having started it is not what settles this",
+					"observation", string(obs))
+				obs = assignment.ObservedRunning
+			}
+
+		default:
+			log.Warn("removing registered runner", "runner", runnerGitHubID, "error", err)
+		}
+	}
+	return obs
 }

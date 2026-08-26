@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
 
@@ -286,5 +287,52 @@ func TestAnAbortAfterRunningObservedIsRequeuedOnRestart(t *testing.T) {
 				t.Errorf("resolution = %q; want %q", got.Resolution, tc.wantResolution)
 			}
 		})
+	}
+}
+
+// TestAForgedAccountLosesToTheProviderOnEveryPath is the security
+// review's RP-SEC-001.
+//
+// The supervisor's state file lives on a tmpfs inside the capsule, and
+// the job's own daemon can reach it — the threat model says so, and says
+// the protection is that a provider still holding the runner busy
+// outranks the capsule's word that it never started. That promise names
+// no path, and only one path kept it: the serving loop's failure
+// handler. The recovery that resumes an interrupted release believed the
+// capsule, so a job that forged "never started" and waited for the
+// controller to die mid-cleanup had its own attempt returned to the
+// queue on the strength of a file it wrote.
+//
+// Contained — GitHub arbitrates one runner per job, so nothing reruns —
+// and the promise is the one protection stated against the one surface
+// the design admits is forgeable, which is why it holds everywhere now.
+func TestAForgedAccountLosesToTheProviderOnEveryPath(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-forged", "app", 7)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-forged")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	// The registration the provider still holds, and its refusal.
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.RecordGitHubRunnerID(attemptID, 4242)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// The forgery: the capsule says it never handed the job over.
+	h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), assignment.ObservedCreated)
+
+	got := attemptState(t, h, attemptID)
+	if got.State == store.AttemptReady {
+		t.Fatalf("the attempt was returned to the queue on the capsule's own word while the "+
+			"provider still held its runner busy; state=%s", got.State)
+	}
+	if got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionStartedObserved {
+		t.Errorf("attempt = %s/%q; the provider's account is what settles this",
+			got.State, got.Resolution)
 	}
 }

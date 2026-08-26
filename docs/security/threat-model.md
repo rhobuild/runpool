@@ -108,14 +108,20 @@ inside the capsule raises the effort without closing it: the same socket
 reaches PID 1's own namespaces.
 
 What the controller does about it is partial, and worth stating as such.
-The deregistration it performs on a failure path asks the party that
+The deregistration it performs when a serving ends asks the party that
 assigned the work, and a refusal naming that runner as still busy
 outranks the capsule's own word that it never started. So a forged
 refusal-to-start cannot return an assignment to the queue while the
 provider still considers it in flight. It does nothing for a forgery
 made after the provider has released the runner, and it does not fire
 when the deregistration cannot be attempted — a deconfigured target, no
-recorded runner id, or any other failure answering. In those cases the
+recorded runner id, or any other failure answering.
+
+Both paths that end a serving ask it. They did not always: the recovery
+that resumes a release an earlier process began went straight to the
+finalizing transaction, so a forgery made before a crash was believed
+there while the same forgery on the live path was overruled. A promise
+that names no path has to hold on all of them. In those cases the
 capsule's account is still what settles the attempt.
 
 The exit code is the same surface, and worth naming separately because
@@ -133,6 +139,13 @@ provider's own at-least-once delivery rather than on anything here.
 
 Closing it properly means the controller not depending on the capsule's
 account at all, which is not where the machine is today.
+
+**Names resolve, and resolution is not confined.** The relay judges
+addresses, not names, which is what makes rebinding harmless -- and it
+means a name lookup itself carries whatever the job encodes in it, to
+whatever server is authoritative for the zone. Permitting resolution
+permits that channel. It is in scope for the workloads this design
+trusts and stated here so it is a decision rather than an omission.
 
 ## Accepted exposure
 

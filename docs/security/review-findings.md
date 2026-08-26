@@ -9,9 +9,8 @@ answers. This file records what came back.
 
 ## State
 
-No external review has been conducted. The register is empty, and the release
-authorization gate is closed on that basis rather than on an absence of
-findings.
+One external review has been conducted, against `c8ac420`. It reported no
+finding that blocks the release boundary, and one finding recorded below.
 
 ## Recording a finding
 
@@ -42,4 +41,31 @@ outcome reads as unexamined.
 
 ## Findings
 
-None recorded.
+### RP-SEC-001 — a forged account was overruled on only one of the two
+paths that end a serving
+
+- **Reported** — 2026-08-26, external security review of `c8ac420`.
+- **Surface** — the capsule envelope, reaching attempt disposition.
+- **Claim** — the threat model states that a refusal naming a runner as still
+  busy outranks the capsule's own word that it never started, so a forged
+  refusal-to-start cannot return an assignment to the queue while the provider
+  considers it in flight. That gate ran on the serving loop's failure path. The
+  recovery that resumes an interrupted release called the finalizing
+  transaction directly, and a forged `created` observation there mapped
+  straight to a requeue without the provider being asked.
+- **Assessment** — reproduces against `c8ac420`. A job can write the state
+file: it is a tmpfs the job's own privileged daemon can bind-mount. Reaching
+  the
+  path additionally requires the controller to die between moving the lease to
+  cleaning and finalizing it. The impact is bounded — a completed job cannot be
+  turned into a requeue at all, because completion settles from the container
+  exit code rather than the state file; and a requeue cannot re-run work,
+  because nothing is stored to replay and the provider arbitrates one runner per
+  job. The reviewer rated it low and did not consider it release-blocking.
+- **Disposition** — `resolved`. The overrule is a function called by both paths
+  as of this branch, and `TestAForgedAccountLosesToTheProviderOnEveryPath`
+  fails without it, naming the attempt returned to the queue.
+
+  Resolved rather than accepted deliberately. The promise is the one protection
+  the design states against the one surface it admits a job can forge; narrowing
+  the sentence to fit the code was the cheaper repair and the worse one.
