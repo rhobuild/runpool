@@ -117,7 +117,25 @@ jobs:
           repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           package=$(printf '%s/runpool-e2e' "${repository#*/}" | sed 's|/|%2F|g')
           endpoint="https://api.github.com/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}/versions"
-          versions=$(curl -sSf -H "Authorization: Bearer $GHCR_TOKEN"             -H "Accept: application/vnd.github+json" "${endpoint}?per_page=100")
+          # The body, not just the status. -sSf prints "error: 400" and
+          # discards the sentence naming which of the endpoint, the
+          # package name or the token GitHub objected to -- and this step
+          # runs inside the capsule, at the end of the one gate that
+          # proves a real workload ran, where a bare status number costs
+          # a whole re-run to diagnose.
+          api() {
+            local out status
+            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GHCR_TOKEN" \
+              -H "Accept: application/vnd.github+json" "$@")
+            status=${out##*$'\n'}
+            out=${out%$'\n'*}
+            if [ "$status" -ge 400 ]; then
+              echo "GitHub answered $status for $*: $out" >&2
+              return 1
+            fi
+            printf '%s' "$out"
+          }
+          versions=$(api "${endpoint}?per_page=100")
           id=$(printf '%s' "$versions" | jq -r --arg tag "$RUN_ID"             '[.[] | select(.metadata.container.tags | index($tag))][0].id // empty')
           if [ -z "$id" ]; then
             if [ "$PUSH_OUTCOME" = "success" ]; then
@@ -127,15 +145,15 @@ jobs:
             echo "nothing pushed, nothing to remove"
             exit 0
           fi
-          curl -sSf -X DELETE -H "Authorization: Bearer $GHCR_TOKEN"             -H "Accept: application/vnd.github+json" "${endpoint}/${id}"
+          api -X DELETE "${endpoint}/${id}" >/dev/null
           echo "removed version ${id} (tag ${RUN_ID})"
           # The push publishes an index; deleting the tag removes the
           # index and strands its untagged child manifests. This package
           # exists for this test alone and its runs are serialized, so
           # every untagged version is residue by definition.
-          curl -sSf -H "Authorization: Bearer $GHCR_TOKEN" -H "Accept: application/vnd.github+json" "${endpoint}?per_page=100" |
+          api "${endpoint}?per_page=100" |
             jq -r '.[] | select(.metadata.container.tags == []) | .id' |
             while read -r orphan; do
-              curl -sSf -X DELETE -H "Authorization: Bearer $GHCR_TOKEN" -H "Accept: application/vnd.github+json" "${endpoint}/${orphan}"
+              api -X DELETE "${endpoint}/${orphan}" >/dev/null
               echo "removed untagged version ${orphan}"
             done
