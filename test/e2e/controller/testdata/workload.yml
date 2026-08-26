@@ -116,7 +116,14 @@ jobs:
           set -euo pipefail
           repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           package=$(printf '%s/runpool-e2e' "${repository#*/}" | sed 's|/|%2F|g')
-          endpoint="https://api.github.com/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}/versions"
+          # /users/, not /orgs/, and the owner is an organization. The
+          # org-scoped packages routes answer a workflow token with 400
+          # "Invalid argument" -- the granular-permission carve-out that
+          # lets this token manage a package it published is wired to the
+          # user route, which resolves an organization owner too. GitHub's
+          # own delete-package-versions action sends org owners through it
+          # for the same reason.
+          endpoint="https://api.github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package}/versions"
           # The body, not just the status. -sSf prints "error: 400" and
           # discards the sentence naming which of the endpoint, the
           # package name or the token GitHub objected to -- and this step
@@ -125,8 +132,16 @@ jobs:
           # a whole re-run to diagnose.
           api() {
             local out status
-            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GHCR_TOKEN" \
-              -H "Accept: application/vnd.github+json" "$@")
+            # curl's own status first: a transport failure -- DNS, TLS,
+            # a refused connection -- still writes the -w line, as 000,
+            # which is not >= 400 and would have read as success. This
+            # runs in a command substitution, where bash clears errexit,
+            # so nothing else would have caught it.
+            if ! out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $GHCR_TOKEN" \
+              -H "Accept: application/vnd.github+json" "$@"); then
+              echo "curl could not reach GitHub for $*" >&2
+              return 1
+            fi
             status=${out##*$'\n'}
             out=${out%$'\n'*}
             if [ "$status" -ge 400 ]; then
