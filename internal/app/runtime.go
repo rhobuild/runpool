@@ -449,15 +449,7 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 		log.Error("failure transition failed", "error", err)
 		return err
 	}
-	// A retry of this recovery arrives with nothing measured, because the
-	// pass that measured it is the one that failed. Reading it back here
-	// rather than at the disposition puts it in front of the provider
-	// question below, which is the one thing entitled to overrule it.
-	if !startObs.Establishes() && was.StartObservation.Establishes() {
-		startObs = was.StartObservation
-	}
-
-	startObs = s.deregisterAndOverrule(ctx, b, was.AttemptID, startObs, log)
+	startObs = s.deregisterAndOverrule(ctx, b, was, startObs, log)
 
 	// Before the first destructive step, and after every refinement above
 	// that can overrule it. A recovery that cannot record what it saw must
@@ -572,8 +564,20 @@ func (s *Controller) inspectExecution(ctx context.Context,
 // job can forge, and it is worth making true everywhere rather than
 // narrowing.
 func (s *Controller) deregisterAndOverrule(ctx context.Context, b *binding,
-	attemptID assignment.AttemptID, obs assignment.ExecutionObservation,
+	lease store.Lease, obs assignment.ExecutionObservation,
 	log *slog.Logger) assignment.ExecutionObservation {
+
+	// The read-back is inside, ahead of the question, and not left to
+	// each caller to remember. A retry of a recovery arrives with nothing
+	// measured, because the pass that measured it is the one that failed
+	// -- so the observation this asks the provider about must already be
+	// the recorded one, or the provider is asked about an absence and its
+	// answer is discarded for not matching. Done in the callers, one of
+	// them had it and one did not, and the one that did not heard a
+	// refusal and requeued anyway.
+	if !obs.Establishes() && lease.StartObservation.Establishes() {
+		obs = lease.StartObservation
+	}
 
 	// The runner id lives in the adapter's metadata for the attempt this
 	// lease serves; a binding of another provider has none, and zero
@@ -583,7 +587,7 @@ func (s *Controller) deregisterAndOverrule(ctx context.Context, b *binding,
 	var runnerGitHubID int64
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		runnerGitHubID, err = tx.GitHubRunnerID(attemptID)
+		runnerGitHubID, err = tx.GitHubRunnerID(lease.AttemptID)
 		return err
 	}); err != nil {
 		log.Warn("cannot read the registered runner id; skipping deregistration", "error", err)

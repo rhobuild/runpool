@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -334,5 +335,46 @@ func TestAForgedAccountLosesToTheProviderOnEveryPath(t *testing.T) {
 	if got.State != store.AttemptSettled || got.Resolution != assignment.ResolutionStartedObserved {
 		t.Errorf("attempt = %s/%q; the provider's account is what settles this",
 			got.State, got.Resolution)
+	}
+}
+
+// TestARecordedForgeryLosesToTheProviderToo is the narrower interleaving
+// of the same attack, and the one a first fix would have left open.
+//
+// A recovery that fails records what it measured before destroying the
+// container that proves it, so its retry arrives with nothing to measure
+// and reads that record back. Ask the provider before the read-back and
+// the question is about an absence: the refusal comes in, does not match
+// the observation it was asked about, is discarded — and the recorded
+// forgery then decides the disposition. The refusal was heard and
+// thrown away.
+func TestARecordedForgeryLosesToTheProviderToo(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-recorded", "app", 8)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-recorded")
+	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	// What the failed pass wrote down: the capsule's own account.
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		if err := tx.RecordGitHubRunnerID(attemptID, 4242); err != nil {
+			return err
+		}
+		return tx.RecordLeaseStartObservation(lease.ID, assignment.ObservedCreated)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// This pass measures nothing: the container is gone.
+	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
+	h.srv.resolveInterrupted(t.Context(), h.bind, reloadLease(t, h, lease.ID),
+		engine.OwnedContainer{}, false)
+
+	if got := attemptState(t, h, attemptID); got.State == store.AttemptReady {
+		t.Errorf("the recorded forgery returned the attempt to the queue while the provider, "+
+			"asked in this very pass, said the runner was busy; state=%s", got.State)
 	}
 }

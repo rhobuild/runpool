@@ -115,9 +115,10 @@ refusal-to-start cannot return an assignment to the queue while the
 provider still considers it in flight. It does nothing for a forgery
 made after the provider has released the runner, and it does not fire
 when the deregistration cannot be attempted — a deconfigured target, no
-recorded runner id, or any other failure answering.
+recorded runner id, or any other failure answering. In those cases the
+capsule's account is still what settles the attempt.
 
-Both paths that end a serving ask it. They did not always: the recovery
+Every path that ends a serving asks it. They did not always: the recovery
 that resumes a release an earlier process began went straight to the
 finalizing transaction, so a forgery made before a crash was believed
 there while the same forgery on the live path was overruled. A promise

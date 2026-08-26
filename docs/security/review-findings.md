@@ -41,8 +41,7 @@ outcome reads as unexamined.
 
 ## Findings
 
-### RP-SEC-001 — a forged account was overruled on only one of the two
-paths that end a serving
+### RP-SEC-001 — a forged account was overruled on one path only
 
 - **Reported** — 2026-08-26, external security review of `c8ac420`.
 - **Surface** — the capsule envelope, reaching attempt disposition.
@@ -58,8 +57,10 @@ file: it is a tmpfs the job's own privileged daemon can bind-mount. Reaching
   the
   path additionally requires the controller to die between moving the lease to
   cleaning and finalizing it. The impact is bounded — a completed job cannot be
-  turned into a requeue at all, because completion settles from the container
-  exit code rather than the state file; and a requeue cannot re-run work,
+  turned into a requeue on the state file alone, because completion settles
+  from the container exit code -- itself a surface the threat model names as
+  forgeable, which is why the bound that matters is the next one; a requeue
+  cannot re-run work,
   because nothing is stored to replay and the provider arbitrates one runner per
   job. The reviewer rated it low and did not consider it release-blocking.
 - **Disposition** — `resolved`. The overrule is a function called by both paths
