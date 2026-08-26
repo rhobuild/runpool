@@ -241,7 +241,7 @@ func TestGitHubRequestPreservesEscapedPathAndQuery(t *testing.T) {
 		baseURL: "https://api.github.test", token: "test",
 		http: &http.Client{Transport: transport},
 	}
-	endpoint := fmt.Sprintf("/orgs/acme/packages/container/%s/versions?per_page=100",
+	endpoint := fmt.Sprintf("/users/acme/packages/container/%s/versions?per_page=100",
 		url.PathEscape("repository/runpool-e2e"))
 	var response []any
 	if err := client.request(t.Context(), http.MethodGet, endpoint, nil, &response); err != nil {
