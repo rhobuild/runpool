@@ -53,19 +53,23 @@ outcome reads as unexamined.
   transaction directly, and a forged `created` observation there mapped
   straight to a requeue without the provider being asked.
 - **Assessment** — reproduces against `c8ac420`. A job can write the state
-file: it is a tmpfs the job's own privileged daemon can bind-mount. Reaching
-  the
-  path additionally requires the controller to die between moving the lease to
-  cleaning and finalizing it. The impact is bounded — a completed job cannot be
-  turned into a requeue on the state file alone, because completion settles
-  from the container exit code -- itself a surface the threat model names as
-  forgeable, which is why the bound that matters is the next one; a requeue
-  cannot re-run work,
-  because nothing is stored to replay and the provider arbitrates one runner per
-  job. The reviewer rated it low and did not consider it release-blocking.
-- **Disposition** — `resolved`. The overrule is a function called by both paths
-  as of this branch, and `TestAForgedAccountLosesToTheProviderOnEveryPath`
-  fails without it, naming the attempt returned to the queue.
+  file: it is a tmpfs the job's own privileged daemon can bind-mount.
+  Reaching the path additionally requires the controller to die between
+  moving the lease to cleaning and finalizing it. The impact is bounded — a
+  requeue cannot re-run work, because nothing is stored to replay and the
+  provider arbitrates one runner per job. The reviewer rated it low and did
+  not consider it release-blocking.
+
+- **Disposition** — `resolved` in
+  [#122](https://github.com/rhobuild/runpool/pull/122). The overrule is one
+  function, and the read-back it rules on happens inside it rather than in
+  each caller — asked in the wrong order, the provider answers about an
+  absence and its refusal is discarded. Every path that ends a serving calls
+  it: the failure handler, the resumed release, and the invariant sweep.
+  Three tests fail without it, each naming the attempt returned to the queue:
+  `TestAForgedAccountLosesToTheProviderOnEveryPath`,
+  `TestARecordedForgeryLosesToTheProviderToo` and
+  `TestAStrandedAttemptAsksTheProviderToo`.
 
   Resolved rather than accepted deliberately. The promise is the one protection
   the design states against the one surface it admits a job can forge; narrowing

@@ -378,3 +378,49 @@ func TestARecordedForgeryLosesToTheProviderToo(t *testing.T) {
 			"asked in this very pass, said the runner was busy; state=%s", got.State)
 	}
 }
+
+// TestAStrandedAttemptAsksTheProviderToo: the third path that ends a
+// serving. The invariant sweep disposes of an attempt whose lease is
+// already released — a state release-and-disposition committing together
+// makes unreachable, which is exactly why the sweep exists — and it
+// rules on the same forgeable observation the other two do.
+//
+// Left out, the one place reached only by an invariant already broken
+// would be the one place a forged account is still believed. Its two
+// siblings had tests and this did not: reverting only this call left the
+// whole suite green.
+func TestAStrandedAttemptAsksTheProviderToo(t *testing.T) {
+	h := newHarness(t, 1)
+	if err := h.deliver(demand("job-stranded-forged", "app", 9)); err != nil {
+		t.Fatal(err)
+	}
+	lease, attemptID := leaseFor(t, h, "job-stranded-forged")
+	driveLeaseTo(t, h, lease.ID, store.LeaseReleased)
+	h.recordEvidence(lease.ID, store.EvidenceRunningObserved)
+
+	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.RecordGitHubRunnerID(attemptID, 4242)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
+
+	// The released lease with an open attempt is what the sweep finds.
+	var stranded int
+	h.inStore(func(tx *store.Tx) error {
+		found, err := tx.StrandedAttempts()
+		stranded = len(found)
+		return err
+	})
+	if stranded != 1 {
+		t.Fatalf("the sweep found %d stranded attempts; this test is about the path that "+
+			"handles one", stranded)
+	}
+
+	h.resolveWithRuntime(t.Context(), reloadLease(t, h, lease.ID), assignment.ObservedCreated)
+
+	if got := attemptState(t, h, attemptID); got.State == store.AttemptReady {
+		t.Errorf("the sweep returned the attempt to the queue on the capsule's own word "+
+			"while the provider held its runner busy; state=%s", got.State)
+	}
+}

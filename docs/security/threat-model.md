@@ -122,8 +122,7 @@ Every path that ends a serving asks it. They did not always: the recovery
 that resumes a release an earlier process began went straight to the
 finalizing transaction, so a forgery made before a crash was believed
 there while the same forgery on the live path was overruled. A promise
-that names no path has to hold on all of them. In those cases the
-capsule's account is still what settles the attempt.
+that names no path has to hold on all of them.
 
 The exit code is the same surface, and worth naming separately because
 no adversary is required to reach it. Only one status proves the runner
