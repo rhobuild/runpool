@@ -222,7 +222,7 @@ func wait(ctx context.Context, duration time.Duration) error {
 }
 
 func TestGitHubRequestPreservesEscapedPathAndQuery(t *testing.T) {
-	wantPath := "/orgs/acme/packages/container/repository%2Frunpool-e2e/versions"
+	wantPath := "/users/acme/packages/container/repository%2Frunpool-e2e/versions"
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if got := r.URL.EscapedPath(); got != wantPath {
 			t.Errorf("escaped path = %q; want %q", got, wantPath)
