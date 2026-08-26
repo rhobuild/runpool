@@ -43,7 +43,17 @@ compose=$(docker compose version --short 2>/dev/null || true)
 # said here so the next reader does not mistake this for a probe of the
 # image store.
 docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
-backing=$(findmnt -no FSTYPE --target "$docker_root" 2>/dev/null || true)
+# A tool that is not here is not a filesystem that is not there. Swallowed,
+# the absence produced an empty value: the freeze then refused the record as
+# incomplete, and a qualification run reported the host's filesystem as ""
+# against the reference's ext4 -- a mismatch an operator reads as the wrong
+# disk rather than as a missing package. findmnt is util-linux, which every
+# glibc distribution installs by default and busybox ones do not.
+if ! command -v findmnt >/dev/null 2>&1; then
+  echo "platform-facts: findmnt not found; install util-linux to collect the backing filesystem" >&2
+  exit 1
+fi
+backing=$(findmnt -no FSTYPE --target "$docker_root")
 iptables_version=$(iptables --version 2>/dev/null || true)
 nft_version=$(nft --version 2>/dev/null || true)
 
