@@ -30,7 +30,7 @@
         "reviewed": "2026-08-16",
         "freeze_point": "before-release-candidate"
       },
-      "recorded": "2026-08-26T18:53:33Z",
+      "recorded": "2026-08-26T19:08:42Z",
       "platform": {
         "os": "debian",
         "os_version": "13",
@@ -42,7 +42,7 @@
         "cgroup_version": "2",
         "cgroup_driver": "systemd",
         "storage_driver": "overlayfs",
-        "backing_filesystem": "ext2/ext3",
+        "backing_filesystem": "ext4",
         "rootless": false,
         "containerd": "aad11006b869517fcd3009450b6f82da282e1a9b",
         "runc": "v1.4.3-0-gbb14dabe",

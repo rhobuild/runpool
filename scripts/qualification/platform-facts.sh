@@ -29,7 +29,14 @@ case "$security" in *rootless*) rootless=true ;; esac
 
 buildx=$(docker buildx version 2>/dev/null | awk '{print $2}' || true)
 compose=$(docker compose version --short 2>/dev/null || true)
-backing=$(stat -f -c %T /var/lib/docker 2>/dev/null || true)
+# The daemon says where its root is, and findmnt names the filesystem
+# rather than its magic number: stat -f prints "ext2/ext3" for ext4,
+# because the three share one magic, and this value is frozen into a
+# document whose whole purpose is to be read literally. A hardcoded
+# /var/lib/docker would also aim at the graphdriver root, which is not
+# where layers live once the containerd image store is the driver.
+docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+backing=$(findmnt -no FSTYPE --target "$docker_root" 2>/dev/null || true)
 iptables_version=$(iptables --version 2>/dev/null || true)
 nft_version=$(nft --version 2>/dev/null || true)
 

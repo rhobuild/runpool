@@ -131,6 +131,10 @@ func TestAnEntryFrozenFromAnotherPlatformIsRefused(t *testing.T) {
 		"os":          func(q *Qualified) { q.Platform.OS = "ubuntu" },
 		"os_version":  func(q *Qualified) { q.Platform.OSVersion = "24.04" },
 		"os_codename": func(q *Qualified) { q.Platform.OSCodename = "noble" },
+		// The engine is the same rule and was missing from it: an entry
+		// frozen from an engine its own policy did not select qualifies
+		// hosts against a version nobody reviewed.
+		"engine": func(q *Qualified) { q.Platform.Engine = "29.7.1" },
 	} {
 		q := frozenQualified()
 		break_(&q)
@@ -407,5 +411,30 @@ func TestEveryDockerFactIsCompared(t *testing.T) {
 				t.Errorf("drifting %s produced %v; want exactly that one mismatch", property, got)
 			}
 		})
+	}
+}
+
+// TestTheRefusalsAValidatorOwesAreItsOwn covers the two branches nothing
+// reached. A pending entry carrying frozen facts is a record claiming
+// review that never happened, and a status word outside the vocabulary
+// is what this type's own doc warns about: compared against the wrong
+// word, a reference nobody reviewed reports as reviewed.
+func TestTheRefusalsAValidatorOwesAreItsOwn(t *testing.T) {
+	facts := Facts{
+		OS: "debian", OSVersion: "13", OSCodename: "trixie", Arch: "amd64",
+		Kernel: "k", Engine: "29.7.2", API: "1.55", CgroupVersion: "2",
+		CgroupDriver: "systemd", StorageDriver: "overlayfs", BackingFilesystem: "ext4",
+		Rootless: boolFact(false), Containerd: "c", Runc: "r", Buildx: "b",
+		Compose: "co", IPTables: "ipt", NFTables: "nft",
+	}
+	pending := Qualified{Status: ReferenceStatusPending, Policy: testPolicy(),
+		Recorded: "2026-08-26", Platform: facts}
+	if err := pending.validate(); err == nil {
+		t.Error("a pending entry carrying frozen facts validated; it claims a review nobody did")
+	}
+	unknown := Qualified{Status: "reviewed", Policy: testPolicy()}
+	if err := unknown.validate(); err == nil {
+		t.Error("a status outside the vocabulary validated; the wrong word reports an " +
+			"unreviewed reference as reviewed")
 	}
 }
