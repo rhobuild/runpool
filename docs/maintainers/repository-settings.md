@@ -79,8 +79,11 @@ it.
   on that repository with Actions and Administration write, Contents read, and
   Packages write. The workflow mints a short-lived installation token; do not
   store a personal access token. The fixture workflow removes the image
-  version it pushed as its final step, with its own run token — the packages
-  API refuses App installation tokens, so the harness cannot do it. A run
+  version it pushed as its final step, with its own run token: a repository's
+  token may manage a package that repository published, through the
+  user-scoped route. The harness cannot do it — the App installation token it
+  holds is refused by the packages API — which is why the deletion lives in
+  the workload rather than beside the evidence. A run
   that never completes may leave its version behind; the evidence names the
   tag, and the maintainer removes it with a classic personal token holding
   `read:packages` and `delete:packages`.

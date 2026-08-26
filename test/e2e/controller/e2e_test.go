@@ -97,8 +97,10 @@ func TestControllerEndToEnd(t *testing.T) {
 			if getErr == nil && current.Status == "completed" {
 				// A completed run removed its own image: the workflow's
 				// final step deletes the version it pushed with the run's
-				// own token, which is the one credential class the
-				// packages API accepts here. The run's log is the proof.
+				// own token. That works on the user-scoped packages route
+				// and only there -- the org-scoped one answers a workflow
+				// token with 400 -- which is why the workflow spells the
+				// endpoint the way it does. The run's log is the proof.
 				continue
 			}
 			if getErr == nil {
