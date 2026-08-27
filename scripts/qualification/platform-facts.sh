@@ -68,18 +68,25 @@ backing=$(findmnt -no FSTYPE --target "$docker_root")
 # build ships, which installs its own. They record the netfilter
 # userspace the evidence was gathered under.
 #
-# Looked for where they live, not only on PATH. Both are sbin tools, and
-# a service account does not carry sbin: the runner executing the
-# qualification has /usr/local/bin:/usr/bin:/bin and nothing more, while
-# the freeze was collected over a root shell that does. A PATH-only probe
-# therefore reported no netfilter userspace on a host holding both, and
-# the comparison read one host as two -- as the wrong host, rather than
-# as the wrong PATH. What remains after looking is the fact the swallowing
-# above is for.
+# Looked for where they live, not only on PATH. Both install into sbin,
+# which a service account's PATH commonly omits and a root shell's
+# carries, so a PATH-only probe reports no netfilter userspace on a host
+# that has both -- and the comparison reads one host as two, as the wrong
+# host rather than as the wrong PATH. The directories are searched in the
+# order a root PATH lists them, so a host carrying different binaries in
+# two of them answers the same whichever account asks. What remains after
+# looking is the fact the swallowing above is for.
 netfilter_version() {
-  for candidate in "$1" "/usr/sbin/$1" "/sbin/$1" "/usr/local/sbin/$1"; do
+  local candidate version
+  for candidate in "$1" "/usr/local/sbin/$1" "/usr/sbin/$1" "/sbin/$1"; do
     command -v "$candidate" >/dev/null 2>&1 || continue
-    "$candidate" --version 2>/dev/null && return 0
+    # Per candidate, and emitted only once one answers: a wrapper that
+    # prints and then fails would otherwise have its half-line captured
+    # alongside the next candidate's whole one, and the two arrive in the
+    # record as one value with a newline through it.
+    version=$("$candidate" --version 2>/dev/null) || continue
+    printf '%s' "$version"
+    return 0
   done
   return 0
 }
