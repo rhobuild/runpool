@@ -1,6 +1,9 @@
 package consistency
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,7 +67,7 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 		}
 	}
 
-	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.yml"))
+	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.y*ml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,11 +100,11 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 		}
 	}
 
-	// The fourth ecosystem is prose, and it drifted furthest: the landing
-	// page's own badge, the line beneath it naming the prerequisite, and
-	// the contributing guide citing go.mod by name all said 1.26.6 while
-	// go.mod said 1.26.7. A contributor installs what the page tells
-	// them to and meets a toolchain error the page cannot explain.
+	// The fourth ecosystem is prose, and nothing above reads it: the
+	// landing page's badge, the prerequisite line beneath it and the
+	// contributing guide each name a version, and the guide names go.mod
+	// while doing it. A contributor installs what the page tells them to
+	// and meets a toolchain error the page cannot explain.
 	told := 0
 	for _, file := range tracked(t, "*.md") {
 		body, err := os.ReadFile(repoPath(file))
@@ -131,23 +134,29 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 	// file the arm exists for is the fixture, and a silent skip would
 	// remove exactly it the first time a stray tab or a templating
 	// expression made it unparseable.
-	yamls := tracked(t, "*.yml", "*.yaml")
-	if len(yamls) == 0 {
-		t.Fatal("the tree holds no YAML, so this proves nothing")
-	}
-	for _, file := range yamls {
+	for _, file := range tracked(t, "*.yml", "*.yaml") {
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var document yaml.Node
-		if err := yaml.Unmarshal(body, &document); err != nil {
-			t.Errorf("parse %s: %v", file, err)
-			continue
-		}
-		for _, got := range valuesOf(&document, "go-version") {
-			if got != want {
-				t.Errorf("%s pins go-version %s; go.mod declares %s", file, got, want)
+		// Every document. Unmarshal into a Node decodes the first and
+		// returns no error for whatever follows a `---`, so a version
+		// pinned in a later one would never be read.
+		decoder := yaml.NewDecoder(bytes.NewReader(body))
+		for {
+			var document yaml.Node
+			err := decoder.Decode(&document)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Errorf("parse %s: %v", file, err)
+				break
+			}
+			for _, got := range valuesOf(&document, "go-version") {
+				if got != want {
+					t.Errorf("%s pins go-version %s; go.mod declares %s", file, got, want)
+				}
 			}
 		}
 	}
@@ -178,8 +187,20 @@ func valuesOf(node *yaml.Node, key string) []string {
 	var found []string
 	if node.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			if node.Content[i].Value == key && node.Content[i+1].Kind == yaml.ScalarNode {
-				found = append(found, node.Content[i+1].Value)
+			if node.Content[i].Value != key {
+				continue
+			}
+			// A sequence is how a matrix names several, and reading
+			// only scalars would pass every one of them.
+			switch value := node.Content[i+1]; value.Kind {
+			case yaml.ScalarNode:
+				found = append(found, value.Value)
+			case yaml.SequenceNode:
+				for _, item := range value.Content {
+					if item.Kind == yaml.ScalarNode {
+						found = append(found, item.Value)
+					}
+				}
 			}
 		}
 	}

@@ -92,8 +92,8 @@ jobs:
           # own stamp and cannot read the tree; the consistency suite
           # reads the tree and never sees a tag. Between the two, a
           # release whose newest section still reads "Unreleased"
-          # publishes, at its own tag, a document saying nothing has
-          # been released.
+          # publishes, at its own tag, a document denying the release
+          # a reader reached it from.
           # || true, because the job's shell carries -e: a changelog with
           # no section heading at all makes grep exit 1, which kills the
           # step before the diagnostic below runs and leaves the operator
