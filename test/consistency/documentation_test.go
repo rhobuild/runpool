@@ -216,8 +216,9 @@ func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
 
 // wrapMarker is what a wrapped claim carries between its words at a line
 // boundary: a comment's continuation prefix in Go, YAML, shell and SQL, a
-// Markdown blockquote's bar, and the quotes and comma that separate two
-// entries of a JSON string array.
+// Markdown blockquote's bar, the quotes and comma that separate two
+// entries of a JSON string array, and the quote and plus that join two
+// halves of one Go string literal.
 var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \t]*$|"[ \t]*\+[ \t]*$`)
 
 // flatten is the text with its line breaks and comment markers blanked,
