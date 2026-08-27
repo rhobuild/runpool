@@ -12,6 +12,11 @@ answers. This file records what came back.
 One external review has been conducted, against `c8ac420`. It reported no
 finding that blocks the release boundary, and one finding recorded below.
 
+That finding was resolved after the review ended, and the resolution is held
+by the regression tests its entry names rather than re-confirmed by the
+reviewer. A review covers the commit it read: a later tree is covered only to
+the extent it has not moved.
+
 ## Recording a finding
 
 One entry per finding, appended in the order received, identified `RP-SEC-NNN`
