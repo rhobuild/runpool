@@ -67,7 +67,7 @@ func TestSchemaShipsAsOneReviewedBaseline(t *testing.T) {
 	}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".sql" && !isUpScript(e.Name()) {
-			t.Errorf("%s: down scripts were removed; restoring the pre-migration backup is the rollback", e.Name())
+			t.Errorf("%s: there are no down scripts; restoring the pre-migration backup is the rollback", e.Name())
 		}
 	}
 }

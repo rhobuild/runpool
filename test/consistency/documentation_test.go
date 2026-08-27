@@ -87,15 +87,14 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	}
 }
 
-// denials are the claims this repository made, one pattern per shape it
-// used. It is a list and not a parser, and the reason to prefer that to
-// something cleverer is what the cleverer thing did: a single pattern
-// for "Runpool is pre-release" passed green over six documents saying a
-// release does not exist six other ways, two of them in files the same
-// change had just edited. A new way to say it has to be added here,
-// which is the point.
+// denials are the shapes a claim that no release exists takes here, one
+// pattern each. It is a list and not a parser because the alternative is
+// worse: a document is free to discuss SemVer pre-release identifiers,
+// an unreleased lease, or a gateway that does not exist yet, and a
+// matcher general enough to catch every phrasing catches those too. The
+// cost is that a new phrasing has to be added here by hand.
 var denials = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)runpool is\b[^.]{0,60}\b(pre-release|unreleased)\b`),
+	regexp.MustCompile(`(?i)runpool is\b[^.,]{0,60}\b(pre-release|unreleased)\b`),
 	regexp.MustCompile(`(?i)\bhas not released\b`),
 	regexp.MustCompile(`(?i)\bremains unreleased\b`),
 	regexp.MustCompile(`(?i)there (is|are) no (release|tag|published)`),
@@ -103,11 +102,14 @@ var denials = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\buntil a release exists\b`),
 	regexp.MustCompile(`(?i)\bnothing\b[^.]{0,60}\brelease-qualified\b`),
 	regexp.MustCompile(`(?i)\bnot yet (release-)?qualified\b`),
-	regexp.MustCompile(`(?i)\bbefore V1\b`),
-	regexp.MustCompile(`(?i)\b(is|are) blocked (until|on)\b`),
+	regexp.MustCompile(`(?i)\bbefore V1([^.0-9]|$)`),
+	regexp.MustCompile(`(?i)\b(qualification|release|project|publication) is blocked\b`),
 	regexp.MustCompile(`(?i)\bpre-release,`),
-	regexp.MustCompile(`(?i)\bbefore the first release\b`),
+	regexp.MustCompile(`(?i)\b(until|once|after|before) the first release\b`),
 	regexp.MustCompile(`(?i)\bnothing has been released\b`),
+	regexp.MustCompile(`(?i)\buntil\b[^.]{0,60}\bis release-qualified\b`),
+	regexp.MustCompile(`(?i)\brelease qualification pending\b`),
+	regexp.MustCompile(`(?i)\bremains unqualified\b`),
 	regexp.MustCompile(`(?i)\b(is|are|but|and) not release-qualified\b`),
 	regexp.MustCompile(`(?i)\bbaseline is still (edited in place|mutable)\b`),
 	regexp.MustCompile(`status-pre--release`),
@@ -131,11 +133,10 @@ var denials = []*regexp.Regexp{
 // and "pre-release" is the same claim; the substitution is byte for
 // byte so the reported line still names where it starts.
 //
-// Every tracked file, not the Markdown: three passes over the
-// documentation left the denial standing in a drill script, two Go
-// comments, a workflow fixture and the platform lock's own preamble,
-// each of which a reader reaches. This file is the exception, because it
-// holds the list.
+// Every tracked file, not the Markdown alone: the claim also lives in a
+// drill script's step banner, in Go comments, in a workflow fixture and
+// in the platform lock's own preamble, each of which a reader reaches.
+// This file is the exception, because it holds the list.
 func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
 	self := "test/consistency/documentation_test.go"
 	for _, file := range tracked(t, ".") {

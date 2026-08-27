@@ -125,15 +125,25 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 	// A `go-version:` scalar is a toolchain chosen by hand, wherever it
 	// is: the workflows here all say `go-version-file: go.mod` and are
 	// covered above, but the end-to-end fixture pins a version literally,
-	// and it was the last 1.26.6 in the tree with nothing reading it.
-	for _, file := range tracked(t, "*.yml", "*.yaml") {
+	// and nothing above reads it.
+	//
+	// A file this cannot parse is reported rather than skipped. The one
+	// file the arm exists for is the fixture, and a silent skip would
+	// remove exactly it the first time a stray tab or a templating
+	// expression made it unparseable.
+	yamls := tracked(t, "*.yml", "*.yaml")
+	if len(yamls) == 0 {
+		t.Fatal("the tree holds no YAML, so this proves nothing")
+	}
+	for _, file := range yamls {
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
 		}
 		var document yaml.Node
 		if err := yaml.Unmarshal(body, &document); err != nil {
-			continue // not every tracked YAML is a document this parses
+			t.Errorf("parse %s: %v", file, err)
+			continue
 		}
 		for _, got := range valuesOf(&document, "go-version") {
 			if got != want {
