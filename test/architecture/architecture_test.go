@@ -67,7 +67,9 @@ var corePackages = []string{
 // where transitive weight is the point.
 var narrowDeps = map[string][]string{
 	// The four packages every other one stands on, pinned at what they
-	// hold today. They are not narrow because an edge was removed: they
+	// hold today: the shared vocabulary, the capsule wire format, the
+	// atomic write, and the egress policy both the validator and the
+	// enforcer read. They are not narrow because an edge was removed: they
 	// are narrow because nothing has been added, and nothing states that.
 	// An edge from any of them compiles, creates no cycle, and trips no
 	// other rule here -- so the vocabulary every layer shares would learn
@@ -76,6 +78,25 @@ var narrowDeps = map[string][]string{
 	module + "/internal/assignment":          {},
 	module + "/internal/capsule/protocol":    {},
 	module + "/internal/platform/atomicfile": {},
+	module + "/internal/egress":              {},
+	// The capsule supervisor is PID 1 beside the job, and the gateway it
+	// starts is the process that decides what that job reaches. What it
+	// links is what an escape finds already loaded: the engine adapter
+	// would put the host's Docker socket vocabulary there, the store its
+	// persistence, the provider adapter the credential paths. None of
+	// that is needed to boot a runner and report its state, and none of
+	// it trips another rule here -- the rosters below cover internal
+	// packages, and a command is not one.
+	//
+	// The controller is the other half and is pinned by the release
+	// instead: it carries the capsule's digest stamped into it and
+	// refuses any other, which is a pairing a single binary could not
+	// express.
+	module + "/cmd/capsule-supervisor": {
+		module + "/internal/capsule/protocol",
+		module + "/internal/gateway",
+		module + "/internal/platform/atomicfile",
+	},
 	// The port names what a container engine does and holds no client.
 	module + "/internal/engine": {module + "/internal/assignment"},
 	// And its adapter translates; an adapter that learned the store would
