@@ -85,13 +85,13 @@ func TestTheLockBuildsForEveryPlatformAReleaseCan(t *testing.T) {
 	// published, that list is where it would show.
 }
 
+const sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 // TestPinnedStripsTagKeepsRegistryPort holds the rule the whole package
 // exists to have stated once: a reference is cut at the tag, and the
 // colon in a registry's port is not one. Cutting at the leftmost colon
 // turns "registry.example:5000/team/img:1.2.3" into "registry.example",
 // which resolves to nothing or to somebody else's bytes.
-const sha = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 func TestPinnedStripsTagKeepsRegistryPort(t *testing.T) {
 	lock := Lock{Images: map[string]Image{
 		"a": {Ref: "registry.example:5000/team/img:1.2.3", Digest: sha},

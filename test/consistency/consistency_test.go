@@ -281,7 +281,7 @@ func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
 				return filepath.SkipDir
 			}
 			return nil
-		case !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
+		case !strings.HasSuffix(path, ".go"):
 			return nil
 		}
 		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)

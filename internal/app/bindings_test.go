@@ -426,16 +426,6 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 	}
 }
 
-// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser: a binding's
-// durable identity is what an operator configured, not a parsed form of
-// the address they wrote.
-//
-// The key was built from the parsed scope and the canonical URL, so a
-// change to how a URL is read moves the key of a deployment that changed
-// nothing: the next start inserts a second binding beside the first, and
-// the original is left in `status` for good with no command that removes
-// it. Every delivery, attempt and lease hangs off that row, so the
-// history goes with it.
 // TestTheBindingKeyIsVersionedAndPinned: the durable binding key is a
 // literal here, not a comparison against itself.
 //
@@ -459,6 +449,16 @@ func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
 	}
 }
 
+// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser: a binding's
+// durable identity is what an operator configured, not a parsed form of
+// the address they wrote.
+//
+// The key was built from the parsed scope and the canonical URL, so a
+// change to how a URL is read moves the key of a deployment that changed
+// nothing: the next start inserts a second binding beside the first, and
+// the original is left in `status` for good with no command that removes
+// it. Every delivery, attempt and lease hangs off that row, so the
+// history goes with it.
 func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	base := config.Target{ID: "app", RunnerGroup: "default"}
 	want := sourceBindingKey(base, "runpool-standard")
