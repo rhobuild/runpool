@@ -319,7 +319,7 @@ func TestTheSelectionPolicyIsAChoiceNotARule(t *testing.T) {
 // hold a qualification for every platform a release can produce.
 //
 // Only one is recorded today, so nothing else exercises the entries the
-// file does not yet contain — and a check narrowed back to the one that
+// file does not contain — and a check narrowed back to the one that
 // is there would look correct against this file for as long as it stays
 // the only one.
 func TestAnyBuildablePlatformCanBeRecorded(t *testing.T) {

@@ -7,10 +7,11 @@ a version speaks for are listed in
 
 ## v1.0.0 — 2026-08-27
 
-The first release. It publishes only what the qualification run on the
-reference host proved for this exact commit and these exact image
-digests; the gates it must clear, and the evidence each one leaves, are
-in [release readiness](docs/release-readiness.md).
+The first release. It publishes only what its qualification proved for this
+exact commit and these exact image digests: the live and end-to-end suites on
+the reference host, the upstream provider contracts against real fixtures, and
+the artifact checksums. The gates it must clear, and the evidence each one
+leaves, are in [release readiness](docs/release-readiness.md).
 
 This section records the product delivered by the first release, grouped
 by its public and operational effects.
