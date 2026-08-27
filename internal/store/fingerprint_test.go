@@ -9,8 +9,8 @@ import (
 )
 
 // TestSchemaIdentifiedByContentsNotCount is the regression test for a
-// database this build cannot account for while the baseline is still
-// mutable.
+// database this build cannot account for because a migration was edited
+// rather than added.
 //
 // PRAGMA user_version counts migrations, so editing the single reviewed
 // baseline in place leaves an older database reporting the current

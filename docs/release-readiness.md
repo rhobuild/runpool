@@ -12,7 +12,7 @@ first release qualification. The exact platform reference in
 [`build/platform.lock.json`](../build/platform.lock.json) is `frozen`: the
 production-class host's kernel, API, runtime, cgroup, storage, firewall,
 Buildx and Compose facts were captured on 2026-08-26 and reviewed before
-any candidate tag exists, which is the point of freezing them there.
+any candidate tag existed, which is the point of freezing them there.
 Updating Docker after this freeze requires a new reviewed lock and a
 complete no-skip qualification run.
 

@@ -178,7 +178,7 @@ not a second adapter, and this matrix does not pretend otherwise.
 | IPv6 for capsules | Not implemented. The sandbox denies it and the validator refuses a configuration claiming otherwise |
 | Metrics endpoint | Not implemented. `runpool status` and the structured log are the interface |
 | Standby / handover for a second controller | Not implemented. A second controller gets the lock error and stops |
-| Shared Docker daemon | Implemented with explicit reserves, restricted egress, ownership-verified cleanup and per-launch uplink recovery; controller E2E qualification remains required |
+| Shared Docker daemon | Implemented with explicit reserves, restricted egress, ownership-verified cleanup and per-launch uplink recovery, covered by the shared controller E2E on the reference host |
 | Dedicated Docker daemon | Implemented and recommended when the shared compromise domain is unacceptable |
 | Enterprise-scoped scale sets | Accepted, unqualified — see Provider support above |
 | Operator-supplied capsule image | `tiers[].capsuleImage`, digest-qualified, built from the published capsule. A tier that names one is outside the configuration the gates observed, and `runpool status` reports what each tier runs |
