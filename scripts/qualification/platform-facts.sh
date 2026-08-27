@@ -67,8 +67,31 @@ backing=$(findmnt -no FSTYPE --target "$docker_root")
 # iptables-restore inside the gateway container, from the image this
 # build ships, which installs its own. They record the netfilter
 # userspace the evidence was gathered under.
-iptables_version=$(iptables --version 2>/dev/null || true)
-nft_version=$(nft --version 2>/dev/null || true)
+#
+# Looked for where they live, not only on PATH. Both install into sbin,
+# which a service account's PATH commonly omits and a root shell's
+# carries, so a PATH-only probe reports no netfilter userspace on a host
+# that has both -- and the comparison reads one host as two, as the wrong
+# host rather than as the wrong PATH. The directories are searched in the
+# order a root PATH lists them, so a host carrying different binaries in
+# two of them answers the same whichever account asks. What remains after
+# looking is the fact the swallowing above is for.
+netfilter_version() {
+  local candidate version
+  for candidate in "$1" "/usr/local/sbin/$1" "/usr/sbin/$1" "/sbin/$1"; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    # Per candidate, and emitted only once one answers: a wrapper that
+    # prints and then fails would otherwise have its half-line captured
+    # alongside the next candidate's whole one, and the two arrive in the
+    # record as one value with a newline through it.
+    version=$("$candidate" --version 2>/dev/null) || continue
+    printf '%s' "$version"
+    return 0
+  done
+  return 0
+}
+iptables_version=$(netfilter_version iptables)
+nft_version=$(netfilter_version nft)
 
 case "$(uname -m)" in
   x86_64) arch=amd64 ;;
