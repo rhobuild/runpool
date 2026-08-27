@@ -172,7 +172,7 @@ not a second adapter, and this matrix does not pretend otherwise.
 | --- | --- |
 | Repository-scoped scale sets | Implemented, tested live |
 | Organization-scoped scale sets | Implemented, tested live |
-| Persistent cache lanes | Implemented; manager and named-volume reuse pass live contracts. **Repository-scoped only** and off by default until controller end-to-end reuse is release-qualified |
+| Persistent cache lanes | Implemented; manager and named-volume reuse pass live contracts. **Repository-scoped only** and off by default, because a lane is durable state an operator opts into |
 | Restricted egress (`public-internet-only`) | Implemented and tested live; direct egress denied, proxy HTTP and CONNECT limited to allowed addresses on ports 80/443 |
 | Open egress (`unsafe-open-egress`) | Implemented; the name is the warning, and it is logged loudly at startup |
 | IPv6 for capsules | Not implemented. The sandbox denies it and the validator refuses a configuration claiming otherwise |

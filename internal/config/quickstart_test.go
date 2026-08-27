@@ -20,11 +20,10 @@ func TestQuickStartMinimal(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := c.Targets[0]
-	// Quick Start leaves the cache off until reuse across jobs is
-	// release-qualified: a default that enables an unqualified feature ships a
-	// promise the runtime has not kept.
+	// Quick Start leaves the cache off: a lane is durable state shared by
+	// every later job for its repository, which an operator opts into.
 	if target.Cache.Enabled {
-		t.Error("Quick Start enabled the cache before its reuse was release-qualified")
+		t.Error("Quick Start enabled a cache lane the operator did not ask for")
 	}
 	if got := target.Tiers[0].ScaleSetName; got != "runpool-standard" {
 		t.Errorf("scaleSetName = %q; want runpool-standard", got)

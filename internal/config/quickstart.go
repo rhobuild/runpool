@@ -95,9 +95,10 @@ func FromEnvironment(environ func(string) string) (*Config, error) {
 			ID:           "default",
 			URL:          ref.CanonicalURL,
 			CredentialID: credential.ID,
-			// Cache stays off in Quick Start until reuse across jobs is
-			// release-qualified on the reference deployment: a default must not
-			// promise what the runtime has not demonstrated. A repository
+			// Cache stays off in Quick Start: a lane is durable state that
+			// outlives the job that filled it and is shared by every later
+			// job for its repository, which is a decision an operator
+			// makes rather than one a default makes for them. A repository
 			// target can still enable it explicitly in the advanced
 			// configuration; an organization target never can, because
 			// its runners are not bound to the repository whose cache
