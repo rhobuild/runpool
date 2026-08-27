@@ -2523,3 +2523,84 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 			"observation is one fact, not two", after-before)
 	}
 }
+
+// TestAnAttemptIsServedByOneLeaseAtATime: the index is the only thing
+// that makes a second serving impossible, and nothing exercised it.
+//
+// A lease disposes its attempt when it finalizes, judging by the
+// attempt's state and never asking which lease serves it now. That is
+// safe only because a second lease cannot exist while the first is
+// unreleased. An operator may return a held attempt to `ready` while the
+// lease that served it is still cleaning -- deliberately, so work is not
+// hostage to a cleanup nobody can finish -- and in that window the
+// attempt is ready and its lease is alive. Without the index the
+// scheduler claims it, and the first lease's finalize, arriving whenever
+// its obstruction clears, rules on its own stale observation against the
+// live serving. One attempt, two capsules.
+//
+// The index carries that in the schema rather than in the code, so no
+// path can go around it. Relaxing it in a later migration compiles, and
+// this is what says no.
+//
+// Reaching `ready` is the whole setup: leasing an attempt in any other
+// state is refused by ClaimReadyAttempt long before the index is asked,
+// which is a different rule and proves nothing about this one.
+func TestAnAttemptIsServedByOneLeaseAtATime(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	attemptID := seedAttempt(t, s, binding, "msg-1", "job-1")
+
+	var first Lease
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		first, err = tx.LeaseAttempt(attemptID, assignment.BindingID(binding), "standard")
+		return err
+	})
+	for _, step := range [][2]LeaseState{
+		{LeaseReserved, LeaseProvisioning},
+		{LeaseProvisioning, LeaseFailed},
+		{LeaseFailed, LeaseCleaning},
+	} {
+		inTx(t, s, func(tx *Tx) error { return tx.TransitionLease(first.ID, step[0], step[1]) })
+	}
+	inTx(t, s, func(tx *Tx) error {
+		if err := tx.HoldForReview(attemptID, ReviewReasonRetryBudgetExhausted); err != nil {
+			return err
+		}
+		return tx.ResolveReviewToReady(attemptID, "checked the provider", "alice")
+	})
+
+	// Ready, and its lease still cleaning: the window the index closes.
+	err := s.Tx(t.Context(), func(tx *Tx) error {
+		_, err := tx.LeaseAttempt(attemptID, assignment.BindingID(binding), "standard")
+		return err
+	})
+	if err == nil {
+		t.Fatal("a second lease was created while the first was still cleaning; " +
+			"the attempt is servable twice and the first lease's finalize will rule on the second's serving")
+	}
+
+	// Quarantined outlives a restart, so it has to close the window too.
+	inTx(t, s, func(tx *Tx) error {
+		return tx.TransitionLease(first.ID, LeaseCleaning, LeaseQuarantined)
+	})
+	err = s.Tx(t.Context(), func(tx *Tx) error {
+		_, err := tx.LeaseAttempt(attemptID, assignment.BindingID(binding), "standard")
+		return err
+	})
+	if err == nil {
+		t.Fatal("a second lease was created while the first was quarantined")
+	}
+
+	// Released is what opens it, and the retry path depends on that.
+	inTx(t, s, func(tx *Tx) error {
+		return tx.TransitionLease(first.ID, LeaseQuarantined, LeaseCleaning)
+	})
+	inTx(t, s, func(tx *Tx) error {
+		return tx.TransitionLease(first.ID, LeaseCleaning, LeaseReleased)
+	})
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.LeaseAttempt(attemptID, assignment.BindingID(binding), "standard")
+		return err
+	})
+}
