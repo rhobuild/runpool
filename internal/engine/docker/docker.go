@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,6 +29,8 @@ type Client struct {
 	// leaked helper is; the default is silent because the ownership
 	// labels guarantee a later sweep finds it.
 	onCleanupError func(name string, err error)
+	// pullPause shortens the wait between pull attempts for a test.
+	pullPause time.Duration
 }
 
 // OnCleanupError registers an observer for helper removals that failed.
@@ -134,7 +137,61 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 	return err
 }
 
+// pullAttempts is how many times a pull is tried when the registry
+// answered in a way it may not answer again.
+//
+// A pull is the one step in a launch that depends on a third party being
+// reachable, and a failed one is not free: it fails the create, which
+// spends the attempt's retry budget, and an attempt that spends all of it
+// is held for a person. So minutes of registry trouble became an operator
+// resolving attempts by hand -- which until this release meant stopping
+// the controller.
+//
+// Three, and no more: the budget above this is what covers a registry
+// that is properly down, and a launch that waits longer holds a lease
+// while it does.
+const pullAttempts = 3
+
+// pullRetryPause is held on the client so a test can exercise the retry
+// without waiting out real seconds.
+func (c *Client) pullRetryPause() time.Duration {
+	if c.pullPause > 0 {
+		return c.pullPause
+	}
+	return 2 * time.Second
+}
+
 func (c *Client) pull(ctx context.Context, ref string) error {
+	return pullWithRetry(ctx, ref, c.pullRetryPause(), c.pullOnce)
+}
+
+// pullWithRetry is the retry policy, separated from the wire so it is
+// provable without a registry: the adapter's own behaviour is shown
+// live, and how many times it tries is not something a live suite can
+// demonstrate without an outage to demonstrate it in.
+func pullWithRetry(ctx context.Context, ref string, pause time.Duration,
+	once func(context.Context, string) error) error {
+
+	for attempt := 1; ; attempt++ {
+		err := once(ctx, ref)
+		if err == nil || attempt == pullAttempts || !worthPullingAgain(err) {
+			return err
+		}
+		// Asked before the pause, not inside it: a select between a
+		// cancelled context and an elapsed timer picks either one, so a
+		// launch already abandoned could pull again on its way out.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("pull %s: %w", ref, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("pull %s: %w", ref, ctx.Err())
+		case <-time.After(pause):
+		}
+	}
+}
+
+func (c *Client) pullOnce(ctx context.Context, ref string) error {
 	resp, err := c.cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull %s: %w", ref, err)
@@ -146,6 +203,27 @@ func (c *Client) pull(ctx context.Context, ref string) error {
 		return fmt.Errorf("pull %s: %w", ref, err)
 	}
 	return nil
+}
+
+// worthPullingAgain reports whether the registry might answer differently.
+//
+// Named the other way round -- the answers that will not change -- because
+// that list is the one this package can state. A reference nobody
+// published, a credential that does not carry, a malformed reference: no
+// pause makes any of them true. Everything else, including an error the
+// daemon reported inside the progress stream and did not type, is tried
+// again, because a transport failure arrives untyped and is the case this
+// exists for.
+func worthPullingAgain(err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return false
+	case cerrdefs.IsNotFound(err), cerrdefs.IsUnauthorized(err),
+		cerrdefs.IsPermissionDenied(err), cerrdefs.IsInvalidArgument(err),
+		cerrdefs.IsNotImplemented(err):
+		return false
+	}
+	return true
 }
 
 // RunTask creates, starts and awaits a short-lived container (a chown or
