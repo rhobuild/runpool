@@ -210,7 +210,9 @@ These are consequences of the design, not oversights:
   behaviour, contention, kill-recovery rounds, disk-full on a capped
   filesystem — that runs against a Linux named volume. The
   release-qualification record for a version is produced by the protected
-  release workflow, from the evidence its suites emit on the reference host.
+  release workflow, from the evidence its gates emit: the live and
+  end-to-end suites on the reference host, the upstream provider contracts
+  against real fixtures, and the artifact checksums.
 
 ## What an auditor should attack first
 

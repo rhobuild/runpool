@@ -723,7 +723,9 @@ by its public and operational effects.
   candidate existed. Contract suites fail closed while a lock is pending, and
   compare the host against the manifest once it is frozen.
 - Release qualification runs its live suites **on the reference host** and
-  builds its record from evidence emitted there.
+  builds its record from the evidence its gates emit: those suites, the
+  upstream provider contracts against real fixtures, and the artifact
+  checksums.
 - No contract may be skipped in release-qualification mode.
 - The controller E2E drives three real assignments through the exact image
   candidates: restart recovery, cache reuse, generation isolation, restricted
