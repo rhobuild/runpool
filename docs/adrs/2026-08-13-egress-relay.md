@@ -1,13 +1,12 @@
 # Capsule egress is a relay, not a route
 
-**Status:** accepted and implemented; release qualification pending
+**Status:** accepted and implemented
 **Date:** 2026-08-13
 **Supersedes:** the routed-gateway topology
 
 The restricted profile provides no route out and a policy-enforcing relay
-for permitted destinations. The implementation has passed its live contract
-suite, but remains unqualified until the complete release workflow succeeds
-on the locked platform.
+for permitted destinations. The implementation is covered by a live contract
+suite, which the release workflow runs without skips on the locked platform.
 
 > This record is the implementation decision. The constraint it rests on
 > was already measured and written down two days earlier in
