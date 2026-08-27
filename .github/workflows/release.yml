@@ -94,7 +94,12 @@ jobs:
           # release whose newest section still reads "Unreleased"
           # publishes, at its own tag, a document saying nothing has
           # been released.
-          heading=$(grep -m1 '^## ' CHANGELOG.md)
+          # || true, because the job's shell carries -e: a changelog with
+          # no section heading at all makes grep exit 1, which kills the
+          # step before the diagnostic below runs and leaves the operator
+          # a bare "exit code 1" that reads as a broken script rather
+          # than a broken changelog. Empty falls through to the case.
+          heading=$(grep -m1 '^## ' CHANGELOG.md || true)
           case "$heading" in
             "## ${VERSION}"|"## ${VERSION} "*) ;;
             *)
