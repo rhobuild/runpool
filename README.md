@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rhobuild/runpool/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rhobuild/runpool/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/rhobuild/runpool/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/rhobuild/runpool/actions/workflows/codeql.yml)
-[![Go](https://img.shields.io/badge/Go-1.26.7-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.0%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docker Engine](https://img.shields.io/badge/Docker_Engine-%E2%89%A528.0-2496ED?logo=docker&logoColor=white)](docs/reference/support-matrix.md)
 [![SQLite](https://img.shields.io/badge/SQLite-durable_state-003B57?logo=sqlite&logoColor=white)](docs/architecture.md)
 [![License](https://img.shields.io/github/license/rhobuild/runpool)](LICENSE)
@@ -84,7 +84,8 @@ non-DNS UDP, IPv6, and other ports fail closed. Read the complete
 
 ## Evaluate locally
 
-Prerequisites are Go 1.26.7 and a Linux host with rootful Docker Engine 28.
+Prerequisites are Go 1.26.0 or newer and a Linux host with rootful Docker
+Engine 28.
 The selected release-qualification target is documented in the
 [support matrix](docs/reference/support-matrix.md).
 

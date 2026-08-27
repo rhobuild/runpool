@@ -709,8 +709,11 @@ by its public and operational effects.
   make — a platform nobody qualified, an entry still pending, an end-to-end run
   of other images.
 - Every workflow states the Go toolchain it builds with, held equal to the
-  version `go.mod` declares by the same check that holds the builder images to
-  it, so the binary a release ships is compiled by the toolchain its gates ran.
+  `toolchain` directive `go.mod` names by the same check that holds the builder
+  images to it, so the binary a release ships is compiled by the toolchain its
+  gates ran. The `go` directive is separate and lower: it is the oldest Go that
+  may build this module, which is what the dependency graph requires rather
+  than what a maintainer happens to run.
   Every job carries a deadline, and every script in the tree is linted.
 - The job that builds the candidate images runs under its own protected
   environment: it writes to the registry before anything has been qualified.

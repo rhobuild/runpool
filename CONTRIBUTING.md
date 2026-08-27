@@ -6,7 +6,9 @@ reproducible, and supported by evidence proportionate to their risk.
 
 ## Development prerequisites
 
-- Go 1.26.7, as pinned by `go.mod`;
+- Go 1.26.0 or newer, which is what `go.mod` requires; its `toolchain`
+  directive names the one the gates and the release build with, and the Go
+  command fetches that on its own;
 - Git;
 - Linux with rootful Docker Engine for live container contracts;
 - `shellcheck` for shell changes.

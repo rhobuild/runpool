@@ -40,7 +40,7 @@ var goClaim = regexp.MustCompile(`(?:Go[- ])([0-9]+\.[0-9]+\.[0-9]+)`)
 // is configured to propose only patch bumps for the builder, so this is
 // the check behind that policy rather than a substitute for it.
 func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
-	want := declaredGo(t)
+	want := declaredToolchain(t)
 
 	builders, err := filepath.Glob(repoPath("build", "*", "Dockerfile"))
 	if err != nil {
@@ -105,6 +105,11 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 	// contributing guide each name a version, and the guide names go.mod
 	// while doing it. A contributor installs what the page tells them to
 	// and meets a toolchain error the page cannot explain.
+	//
+	// Prose states the requirement, not the toolchain: a reader wants to
+	// know whether the Go they have will build this, and the answer is
+	// the `go` directive.
+	minimum := declaredGo(t)
 	told := 0
 	for _, file := range tracked(t, "*.md") {
 		body, err := os.ReadFile(repoPath(file))
@@ -114,9 +119,9 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 		for number, line := range strings.Split(string(body), "\n") {
 			for _, match := range goClaim.FindAllStringSubmatch(line, -1) {
 				told++
-				if match[1] != want {
-					t.Errorf("%s:%d names Go %s; go.mod declares %s",
-						file, number+1, match[1], want)
+				if match[1] != minimum {
+					t.Errorf("%s:%d names Go %s; go.mod requires %s",
+						file, number+1, match[1], minimum)
 				}
 			}
 		}
@@ -162,8 +167,12 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 	}
 }
 
-// declaredGo is the version go.mod's own directive names, read with the
-// parser the Go toolchain uses for it.
+// declaredGo is the lowest Go a build of this module may use: the `go`
+// directive, which is the highest any module in the graph requires.
+//
+// It is not the toolchain the gates run. Fusing the two published our
+// own desk as a requirement, refusing anyone whose patch release
+// differed from ours for no reason the code could name.
 func declaredGo(t *testing.T) string {
 	t.Helper()
 	path := repoPath("go.mod")
@@ -179,6 +188,25 @@ func declaredGo(t *testing.T) string {
 		t.Fatal("go.mod declares no Go version")
 	}
 	return parsed.Go.Version
+}
+
+// declaredToolchain is the toolchain go.mod names, without its "go"
+// prefix: the one the builders, the gates and the release compile with.
+func declaredToolchain(t *testing.T) string {
+	t.Helper()
+	path := repoPath("go.mod")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := modfile.Parse(path, body, nil)
+	if err != nil {
+		t.Fatalf("parse go.mod: %v", err)
+	}
+	if parsed.Toolchain == nil || parsed.Toolchain.Name == "" {
+		t.Fatal("go.mod names no toolchain, so a builder is held to nothing")
+	}
+	return strings.TrimPrefix(parsed.Toolchain.Name, "go")
 }
 
 // valuesOf collects every scalar a mapping key holds anywhere in a
