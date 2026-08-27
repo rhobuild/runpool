@@ -114,9 +114,9 @@ while only the exec around it needs a container.
 - Errors include the failed operation and enough observed context to act.
 - Destructive operations preview by default and prove ownership before
   changing Docker or durable state.
-- Schema changes update the baseline migration, schema snapshot, sqlc
-  queries, generated code, and tests together. After the first release,
-  migrations become immutable and forward-only.
+- A schema change adds a forward-only migration and updates the schema
+  snapshot, sqlc queries, generated code, and tests together. A migration
+  that shipped is immutable.
 
 Dependencies are evaluated on maintenance, security history, release cadence,
 API stability, transitive cost, and the amount of bespoke code they replace.

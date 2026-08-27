@@ -131,8 +131,8 @@ a job gets: its own Docker daemon, and egress through the relay.
 shapes exist, what a runner group has to grant, and which credential to
 use — and the [runbook](docs/runbook.md) covers operating it.
 
-The reference Compose deployment is version-pinned to a released digest;
-the images above are how a source checkout runs.
+The reference Compose deployment requires a released digest and refuses to
+start without one; the images above are how a source checkout runs.
 Do not use a production credential for local experimentation.
 
 ## Deployment
@@ -143,7 +143,7 @@ controller: no domain, reverse-proxy route, or public port is required.
 | Platform | Entry point |
 | --- | --- |
 | Docker Compose | [`deploy/compose/compose.yaml`](deploy/compose/compose.yaml) |
-| A Compose platform | Deploy the canonical Compose file now; a One-Click catalog entry, where the platform has one, follows the first qualified release |
+| A Compose platform | Deploy the canonical Compose file; a platform catalog entry, where the platform has one, derives its template from that same contract |
 
 Read the [deployment guide](docs/deployment.md) before installing. The
 Compose contract reads an operator-managed
@@ -165,7 +165,7 @@ colocated services. Measure that reserve before deployment. Choose
 | [Runbook](docs/runbook.md) | Operations, recovery, backup, GC, and uninstall |
 | [Threat model](docs/security/threat-model.md) | Trust boundary, defences, one known weakness, and accepted exposure |
 | [ADRs](docs/adrs/README.md) | Architectural decisions and measured constraints |
-| [Release readiness](docs/release-readiness.md) | Objective gates for the first release |
+| [Release readiness](docs/release-readiness.md) | The objective gates a release must satisfy |
 
 ## Contributing and security
 

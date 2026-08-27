@@ -23,18 +23,22 @@ tested or supported platform until it passes the relevant live matrix.
 
 ## Required gates
 
-| Gate | Current state | Completion evidence |
-| --- | --- | --- |
-| Hermetic CI | Implemented | `ci.yml` passes formatting, vet, staticcheck, race, coverage, sqlc parity, builds, link checks, vulnerability scan, and image build |
-| Live Docker contracts | Implemented; qualification not executed | Docker, capsule, egress, cache, SQLite, and lifecycle suites pass without skips on the reference host |
-| Upstream provider contracts | Implemented; protected fixtures required | Live GitHub Actions contracts pass without skips using short-lived GitHub App installation tokens |
-| Controller end-to-end workload | Implemented; qualification not executed | The exact controller runs in `shared-daemon`, receives real fixture assignments, launches the exact capsule candidate under restricted egress, completes checkout, dependency download, Docker build and registry push, proves cache reuse and generation isolation, survives controller restart, removes owned resources, and preserves unrelated container, network and volume sentinels by exact id |
-| Host topology contracts | Implemented; qualification not executed | Shared mode enforces positive reserves, restricted egress, organization runner-group isolation, ownership-verified cleanup and idle-uplink recovery; the shared controller E2E and common Docker contracts pass on the reference host |
-| Scheduling and swap envelope | Implemented; live qualification not executed | Global and tier parallelism constrain provider announcements and local admission through restart and quarantine; preflight proves the worst admitted CPU, memory, and swap set plus host reserve fits; configured swap is enforced in a real capsule on the reference host |
-| Immutable release candidates | Implemented; qualification not executed | Controller and capsule images are built before qualification and identified by digest; the standalone binary and completions are retained by checksum; publication promotes or downloads those exact bytes without rebuilding |
-| Exact platform match | **Met** — Engine 29.7.2 frozen from the reference host | The reviewed lock is frozen before the candidate; every observed fact matches and missing facts fail the gate |
-| External security review | **Met** — one review against `c8ac420`, no blocking finding | Findings affecting the release boundary are [resolved or explicitly accepted](security/review-findings.md) before release approval |
-| Release authorization | Outstanding | The protected `release` environment approves publication only after all prior gates pass |
+Whether a given version cleared them is not recorded here. It is in the
+`release-qualification.json` that ships with that version's release, bound to
+the commit and the image digests it was produced from.
+
+| Gate | Completion evidence |
+| --- | --- |
+| Hermetic CI | `ci.yml` passes formatting, vet, staticcheck, race, coverage, sqlc parity, builds, link checks, vulnerability scan, and image build |
+| Live Docker contracts | Docker, capsule, egress, cache, SQLite, and lifecycle suites pass without skips on the reference host |
+| Upstream provider contracts | Live GitHub Actions contracts pass without skips using short-lived GitHub App installation tokens |
+| Controller end-to-end workload | The exact controller runs in `shared-daemon`, receives real fixture assignments, launches the exact capsule candidate under restricted egress, completes checkout, dependency download, Docker build and registry push, proves cache reuse and generation isolation, survives controller restart, removes owned resources, and preserves unrelated container, network and volume sentinels by exact id |
+| Host topology contracts | Shared mode enforces positive reserves, restricted egress, organization runner-group isolation, ownership-verified cleanup and idle-uplink recovery; the shared controller E2E and common Docker contracts pass on the reference host |
+| Scheduling and swap envelope | Global and tier parallelism constrain provider announcements and local admission through restart and quarantine; preflight proves the worst admitted CPU, memory, and swap set plus host reserve fits; configured swap is enforced in a real capsule on the reference host |
+| Immutable release candidates | Controller and capsule images are built before qualification and identified by digest; the standalone binary and completions are retained by checksum; publication promotes or downloads those exact bytes without rebuilding |
+| Exact platform match | The reviewed lock is frozen before the candidate; every observed fact matches and missing facts fail the gate |
+| External security review | Findings affecting the release boundary are [resolved or explicitly accepted](security/review-findings.md) before release approval |
+| Release authorization | The protected `release` environment approves publication only after all prior gates pass |
 
 The release-qualification host also needs GitHub Actions Runner 2.327.1 or
 newer and access to protected upstream and end-to-end fixtures. These are

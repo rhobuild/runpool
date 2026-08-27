@@ -88,10 +88,10 @@ const schemaKey = "schema_fingerprint"
 // many files say it.
 //
 // PRAGMA user_version counts migrations, which is the right identity for a
-// schema that only ever grows by adding one. It is the wrong identity
-// before the first release, when the single reviewed baseline is still
-// edited in place: the count does not move, so a database written by an
-// earlier build reports the same version while holding different tables.
+// schema that only ever grows by adding one. It is the wrong identity for
+// a baseline edited in place: the count does not move, so a database
+// written by an earlier build reports the same version while holding
+// different tables.
 // Both guards below then pass it, and the first query fails with the raw
 // SQLite error they exist to replace.
 //
@@ -124,10 +124,9 @@ func newerSchemaError(current, known int, dir string) error {
 }
 
 // alteredSchemaError refuses a database whose schema is this build's
-// version but not this build's schema. It is reachable only while the
-// baseline is still mutable, which is before the first release; a
-// released schema grows by adding a migration, which moves the version
-// and takes the other path.
+// version but not this build's schema. It is reachable when a migration
+// is edited rather than added: a schema that grows by adding one moves
+// the version and takes the other path.
 func alteredSchemaError(dir string) error {
 	return fmt.Errorf(
 		"state schema is version-compatible with this build but was written from different migrations.\n"+

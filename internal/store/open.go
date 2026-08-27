@@ -133,8 +133,8 @@ func OpenReadOnly(dir string) (*Store, error) {
 // produces a raw "no such table" from the first query that meets it: a
 // newer schema after a downgrade, an older one in the window between
 // installing a build and restarting the controller that would migrate it,
-// and — while the baseline is still mutable — one whose version matches
-// and whose contents do not.
+// and — where a migration was edited rather than added — one whose
+// version matches and whose contents do not.
 func (s *Store) checkSchemaReadable() error {
 	migrations, err := loadMigrations()
 	if err != nil {

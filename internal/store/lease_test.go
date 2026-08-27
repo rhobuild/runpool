@@ -48,8 +48,8 @@ func TestOpenCreatesSchemaAndStableIdentity(t *testing.T) {
 	}
 }
 
-// The unreleased schema ships as one reviewed baseline. New forward-only
-// migrations begin after the first release.
+// The schema ships as one reviewed baseline, and a migration added to it
+// is forward-only.
 func TestSchemaShipsAsOneReviewedBaseline(t *testing.T) {
 	migrations, err := embeddedMigrations()
 	if err != nil {

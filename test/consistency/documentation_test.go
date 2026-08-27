@@ -1,6 +1,7 @@
 package consistency
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -103,8 +104,12 @@ var denials = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bnothing\b[^.]{0,60}\brelease-qualified\b`),
 	regexp.MustCompile(`(?i)\bnot yet (release-)?qualified\b`),
 	regexp.MustCompile(`(?i)\bbefore V1\b`),
-	regexp.MustCompile(`(?i)the project is blocked`),
+	regexp.MustCompile(`(?i)\b(is|are) blocked (until|on)\b`),
+	regexp.MustCompile(`(?i)\bpre-release,`),
 	regexp.MustCompile(`(?i)\bbefore the first release\b`),
+	regexp.MustCompile(`(?i)\bnothing has been released\b`),
+	regexp.MustCompile(`(?i)\b(is|are|but|and) not release-qualified\b`),
+	regexp.MustCompile(`(?i)\bbaseline is still (edited in place|mutable)\b`),
 	regexp.MustCompile(`status-pre--release`),
 }
 
@@ -125,12 +130,26 @@ var denials = []*regexp.Regexp{
 // Newlines are spaces here because a claim wrapped between "Runpool is"
 // and "pre-release" is the same claim; the substitution is byte for
 // byte so the reported line still names where it starts.
+//
+// Every tracked file, not the Markdown: three passes over the
+// documentation left the denial standing in a drill script, two Go
+// comments, a workflow fixture and the platform lock's own preamble,
+// each of which a reader reaches. This file is the exception, because it
+// holds the list.
 func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
-	files := tracked(t, "*.md", "deploy/*")
-	for _, file := range files {
+	self := "test/consistency/documentation_test.go"
+	for _, file := range tracked(t, ".") {
+		if file == self {
+			continue
+		}
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
+		}
+		// Binary content holds no sentences, and go.sum holds hashes
+		// that a substring match reads as words.
+		if bytes.IndexByte(body, 0) >= 0 || file == "go.sum" {
+			continue
 		}
 		flat := strings.ReplaceAll(string(body), "\n", " ")
 		for _, denial := range denials {

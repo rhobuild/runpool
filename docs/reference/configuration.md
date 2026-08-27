@@ -53,9 +53,10 @@ mounts the state volume — so a command run outside that container reports
 an instance that has not run yet until it is pointed at the real
 directory.
 
-Quick Start leaves the cache **off**. Reuse across jobs is implemented
-but not release-qualified, and a default that enables an unqualified feature
-ships a promise the runtime has not kept.
+Quick Start leaves the cache **off**. A lane is durable state that outlives
+the job that filled it and is shared by every later job for its repository,
+which is a decision an operator makes rather than one a default makes for
+them.
 
 ## The document
 

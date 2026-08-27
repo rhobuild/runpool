@@ -88,11 +88,11 @@ printf '%s\n' "$status_report" | head -3
 echo "restore: instance identity and audit marker survived"
 
 echo "== drill: upgrade (migration) and integrity =="
-# Pre-release, 'upgrade' is: the new binary opens existing state and
-# migrates forward; the seed helper (built from this same tree) does
-# exactly that on open, and verify proves the data survived migration.
-# Rollback for a failed upgrade is the restore above — down-migrations
-# exist, but restoring the pre-upgrade backup is the documented path.
+# 'upgrade' here is: the new binary opens existing state and migrates
+# forward; the seed helper (built from this same tree) does exactly that
+# on open, and verify proves the data survived migration. Rollback for a
+# failed upgrade is the restore above: there are no down scripts, so the
+# backup taken before the migration is the only way back.
 docker run --rm -v "$vol":/state -v "$dir/drill-seed":/drill-seed:ro "$bb" /drill-seed verify /state >/dev/null
 echo "upgrade: current schema opens the restored state and the marker survives"
 

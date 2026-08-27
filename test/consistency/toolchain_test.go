@@ -121,6 +121,26 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 	if told == 0 {
 		t.Fatal("no document names a Go version, so this proves nothing")
 	}
+
+	// A `go-version:` scalar is a toolchain chosen by hand, wherever it
+	// is: the workflows here all say `go-version-file: go.mod` and are
+	// covered above, but the end-to-end fixture pins a version literally,
+	// and it was the last 1.26.6 in the tree with nothing reading it.
+	for _, file := range tracked(t, "*.yml", "*.yaml") {
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document yaml.Node
+		if err := yaml.Unmarshal(body, &document); err != nil {
+			continue // not every tracked YAML is a document this parses
+		}
+		for _, got := range valuesOf(&document, "go-version") {
+			if got != want {
+				t.Errorf("%s pins go-version %s; go.mod declares %s", file, got, want)
+			}
+		}
+	}
 }
 
 // declaredGo is the version go.mod's own directive names, read with the

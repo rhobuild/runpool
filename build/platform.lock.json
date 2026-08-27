@@ -1,8 +1,8 @@
 {
   "_comment": [
-    "Release qualification is blocked until the production-class Linux host",
-    "has installed Docker from the official stable Debian channel and its exact",
-    "facts have been reviewed and frozen here before a release-candidate tag.",
+    "Release qualification requires the production-class Linux host to have",
+    "installed Docker from the official stable Debian channel, with its exact",
+    "facts reviewed and frozen here before a release-candidate tag.",
     "",
     "The qualification job must compare the observed host with those frozen",
     "facts. It must never derive its expected values from the host under test.",

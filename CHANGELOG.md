@@ -227,8 +227,8 @@ by its public and operational effects.
   coexistence with positive host reserves, restricted egress, runner-group
   isolation, ownership-verified destructive intents, and idle-uplink recovery;
   **`dedicated-daemon`** remains the smaller-blast-radius option.
-- The schema ships as **one reviewed baseline**. After the first release,
-  migrations are forward-only and immutable.
+- The schema ships as **one reviewed baseline**; a migration added to it is
+  forward-only and immutable.
 - **The attempt owns execution evidence and disposition**; a
   `capsule_lease` owns only the host resources it consumes, and carries
   no provider identifier. GitHub's scale sets, runner ids and workflow
@@ -245,7 +245,7 @@ by its public and operational effects.
 - **A schema is identified by its contents.** The applied migrations'
   fingerprint is recorded with the schema, in the same transaction, and
   checked on every open. A version counter cannot tell two schemas apart
-  while the reviewed baseline is still edited in place, which is exactly
+  when a baseline is edited in place, which is exactly
   when a database written by an earlier build would otherwise be accepted
   and then fail on a missing table.
 - **A diagnosis answers when the daemon does not.** `runpool doctor`
