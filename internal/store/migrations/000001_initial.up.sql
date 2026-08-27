@@ -1,8 +1,10 @@
 -- Runpool's durable state.
 --
--- This baseline defines schema version 1. Once the first release is
--- published it becomes immutable; subsequent changes use new forward-only
--- migrations. Restoring the pre-migration backup is the rollback path.
+-- This baseline defines schema version 1. It is immutable: a schema change
+-- adds a forward-only migration rather than editing this file, because a
+-- database records the fingerprint of the migrations it was written from
+-- and an edit here refuses every database written before it. Restoring the
+-- pre-migration backup is the rollback path.
 --
 -- Two vocabularies live here and never mix. The core tables speak
 -- binding, delivery, workload, attempt, lease and runtime. Provider
