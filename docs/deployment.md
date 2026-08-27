@@ -4,9 +4,8 @@ Runpool ships one Compose contract. Every installation is headless: the
 controller has no inbound application endpoint, so it needs no domain,
 reverse-proxy route, or published port.
 
-Runpool is pre-release. The manifests require an explicit image reference and
-there is no released digest yet. A deployment becomes supported only after its
-exact image and host platform have passed the gates in
+The manifests require an explicit image reference: a deployment becomes
+supported only after its exact image and host platform have passed the gates in
 [release readiness](release-readiness.md).
 
 ## Deployment surface

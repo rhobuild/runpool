@@ -1,8 +1,9 @@
 # Support
 
-Runpool is pre-release and unreleased. There are no published binaries,
-no version support window, and no service commitment. What follows is
-where to ask, and what the project can currently answer for.
+Runpool is open-source software with no service commitment. A version is
+supported once it has passed release qualification, and the
+[support matrix](docs/reference/support-matrix.md) states what that covers.
+What follows is where to ask, and what the project can answer for.
 
 ## Where to ask
 

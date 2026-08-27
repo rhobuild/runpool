@@ -86,6 +86,48 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	}
 }
 
+// TestNoDocumentCallsRunpoolUnreleased: the tag freezes every document at
+// once, so one of them saying a release exists while another denies it is
+// a contradiction no later commit can reach.
+//
+// Cutting the changelog's heading is the visible half of a release, and
+// it was done alone: the tree carried "## v1.0.0" beside a landing page
+// reading "Runpool is pre-release. No version is supported or
+// release-qualified yet", a support document offering no published
+// binaries, and a deployment guide with no released digest. What a
+// reader observes is the banner, not the changelog — they open the
+// repository at the tag they just downloaded and the first thing on the
+// page says that tag is not supported.
+//
+// The release workflow cannot catch this. It holds the tag against the
+// changelog because only it sees a tag, and that leaves the tree's
+// agreement with itself unheld, which needs no tag at all.
+//
+// It matches a claim about Runpool's own status, not the words: a
+// document is free to discuss pre-release version identifiers, and the
+// support matrix has to be able to name one.
+func TestNoDocumentCallsRunpoolUnreleased(t *testing.T) {
+	denial := regexp.MustCompile(`(?i)runpool is[^.]*\b(pre-release|unreleased)\b|status-pre--release`)
+
+	checked := 0
+	for _, file := range trackedDocs(t) {
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		for number, line := range strings.Split(string(body), "\n") {
+			if denial.MatchString(line) {
+				t.Errorf("%s:%d calls Runpool unreleased: %s",
+					file, number+1, strings.TrimSpace(line))
+			}
+		}
+	}
+	if checked < 2 {
+		t.Fatalf("read %d Markdown files, so this proves nothing", checked)
+	}
+}
+
 func unresolved(file string, number int, target, kind string) string {
 	return fmt.Sprintf("%s:%d names %s as a %s, and nothing is there",
 		file, number+1, target, kind)

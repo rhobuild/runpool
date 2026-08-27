@@ -1,7 +1,8 @@
 # Release readiness
 
-Runpool is **pre-release and not release-qualified**. This document contains
-the objective publication gates; it is not a development log.
+A version is **release-qualified** only when every gate below has passed for
+its exact commit, image digests and host platform. This document contains the
+objective publication gates; it is not a development log.
 
 ## Release target
 
@@ -32,7 +33,7 @@ tested or supported platform until it passes the relevant live matrix.
 | Scheduling and swap envelope | Implemented; live qualification not executed | Global and tier parallelism constrain provider announcements and local admission through restart and quarantine; preflight proves the worst admitted CPU, memory, and swap set plus host reserve fits; configured swap is enforced in a real capsule on the reference host |
 | Immutable release candidates | Implemented; qualification not executed | Controller and capsule images are built before qualification and identified by digest; the standalone binary and completions are retained by checksum; publication promotes or downloads those exact bytes without rebuilding |
 | Exact platform match | **Met** — Engine 29.7.2 frozen from the reference host | The reviewed lock is frozen before the candidate; every observed fact matches and missing facts fail the gate |
-| External security review | Outstanding | Findings affecting the release boundary are [resolved or explicitly accepted](security/review-findings.md) before release approval |
+| External security review | **Met** — one review against `c8ac420`, no blocking finding | Findings affecting the release boundary are [resolved or explicitly accepted](security/review-findings.md) before release approval |
 | Release authorization | Outstanding | The protected `release` environment approves publication only after all prior gates pass |
 
 The release-qualification host also needs GitHub Actions Runner 2.327.1 or

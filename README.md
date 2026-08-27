@@ -6,7 +6,7 @@
 [![Docker Engine](https://img.shields.io/badge/Docker_Engine-%E2%89%A528.0-2496ED?logo=docker&logoColor=white)](docs/reference/support-matrix.md)
 [![SQLite](https://img.shields.io/badge/SQLite-durable_state-003B57?logo=sqlite&logoColor=white)](docs/architecture.md)
 [![License](https://img.shields.io/github/license/rhobuild/runpool)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--release-orange)](docs/release-readiness.md)
+[![Release](https://img.shields.io/github/v/release/rhobuild/runpool)](https://github.com/rhobuild/runpool/releases)
 
 Runpool is a Docker-native control plane for autoscaling ephemeral CI
 runners on a single, capacity-bounded host. It translates provider demand
@@ -14,12 +14,12 @@ into durable assignments, isolated per-job execution capsules, and optional
 repository-scoped cache lanes—without requiring Kubernetes.
 
 > [!IMPORTANT]
-> Runpool is pre-release. No version is supported or release-qualified yet.
-> The controller end-to-end gate is implemented but has not yet run on the
-> release host. The first release still requires that evidence, an external
-> security review, and a successful no-skip release-qualification run on the
-> exact platform frozen before the candidate in
-> [`build/platform.lock.json`](build/platform.lock.json).
+> A version is release-qualified only after a no-skip qualification run on
+> the exact platform frozen before its candidate in
+> [`build/platform.lock.json`](build/platform.lock.json). Each release
+> carries the record that run produced, bound to its commit and to the image
+> digests it publishes; [release readiness](docs/release-readiness.md) lists
+> the gates and the evidence each one leaves.
 
 ## Why Runpool
 

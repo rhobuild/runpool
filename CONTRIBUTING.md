@@ -1,6 +1,6 @@
 # Contributing to Runpool
 
-Runpool is pre-release infrastructure software with a host-level trust
+Runpool is infrastructure software with a host-level trust
 boundary. Contributions are welcome, but changes must be reviewable,
 reproducible, and supported by evidence proportionate to their risk.
 
