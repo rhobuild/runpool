@@ -270,7 +270,7 @@ func TestValidateRules(t *testing.T) {
 			c.Network.Profile = "standard"
 		}, "network.profile"},
 		"invalid ipv6 mode": {func(c *Config) { c.Network.IPv6 = "on" }, "network.ipv6"},
-		"bind storage not yet supported": {func(c *Config) {
+		"bind storage is not implemented": {func(c *Config) {
 			c.Cache.Storage.Mode = "bind"
 		}, "cache.storage.mode"},
 		"bad log level": {func(c *Config) {

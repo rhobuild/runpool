@@ -338,9 +338,8 @@ credentials:
 
 ### cache
 
-`storage.mode` is `volume`. The quota-backed bind mode is not
-implemented, and the validator says so rather than accepting a value
-that does nothing.
+`storage.mode` is `volume`. No other mode is implemented, and the validator
+refuses one rather than accepting a value that does nothing.
 
 | Field | Meaning |
 | --- | --- |
@@ -383,7 +382,7 @@ a real leak visible.
 `log.format` is `json` or `text`; `log.level` is `debug`, `info`, `warn`
 or `error`.
 
-`metrics.enabled` **must be false.** No metrics endpoint exists yet.
+`metrics.enabled` **must be false.** There is no metrics endpoint.
 Capacity, credits and disk pressure are reported by `runpool status` and
 the structured log; accepting `true` would advertise a scrape target
 that is not there.

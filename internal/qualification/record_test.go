@@ -373,8 +373,8 @@ func TestAnUnstatedIdentityIsNotAMatch(t *testing.T) {
 // assembled against a lock the product does not have.
 //
 // Either verdict is a pass — a record, or a refusal that names the
-// platform — because the reference is pending today and frozen later,
-// and both are answers about it.
+// platform — because this runs wherever the suite runs, and a host the
+// reference does not cover is answered rather than accepted.
 func TestTheEmbeddedReferenceIsTheOneARecordIsBuiltFrom(t *testing.T) {
 	reference, err := platform.Load()
 	if err != nil {
