@@ -6,7 +6,7 @@ reproducible, and supported by evidence proportionate to their risk.
 
 ## Development prerequisites
 
-- Go 1.26.6, as pinned by `go.mod`;
+- Go 1.26.7, as pinned by `go.mod`;
 - Git;
 - Linux with rootful Docker Engine for live container contracts;
 - `shellcheck` for shell changes.

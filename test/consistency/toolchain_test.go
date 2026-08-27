@@ -17,6 +17,11 @@ import (
 // parsed rather than matched, because both have parsers here already.
 var builderStage = regexp.MustCompile(`(?m)^FROM (?:--platform=\S+ )?golang:([0-9][^-@ ]*)`)
 
+// goClaim matches a document naming a complete Go patch version, in
+// prose or inside a badge URL. A bare "Go 1.26" is a language version
+// and not a claim about the toolchain, so it is not matched.
+var goClaim = regexp.MustCompile(`(?:Go[- ])([0-9]+\.[0-9]+\.[0-9]+)`)
+
 // TestEveryBuilderAndGateNamesTheGoThatGoModDeclares: an image tag, a
 // workflow variable and a module directive are three ecosystems, and
 // every updater sees one of them.
@@ -90,6 +95,31 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 				t.Errorf("%s pins GOTOOLCHAIN %s; go.mod declares %s", rel(workflow), got, want)
 			}
 		}
+	}
+
+	// The fourth ecosystem is prose, and it drifted furthest: the landing
+	// page's own badge, the line beneath it naming the prerequisite, and
+	// the contributing guide citing go.mod by name all said 1.26.6 while
+	// go.mod said 1.26.7. A contributor installs what the page tells
+	// them to and meets a toolchain error the page cannot explain.
+	told := 0
+	for _, file := range tracked(t, "*.md") {
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(body), "\n") {
+			for _, match := range goClaim.FindAllStringSubmatch(line, -1) {
+				told++
+				if match[1] != want {
+					t.Errorf("%s:%d names Go %s; go.mod declares %s",
+						file, number+1, match[1], want)
+				}
+			}
+		}
+	}
+	if told == 0 {
+		t.Fatal("no document names a Go version, so this proves nothing")
 	}
 }
 
