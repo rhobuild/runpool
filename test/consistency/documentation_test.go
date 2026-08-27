@@ -52,7 +52,7 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	}
 
 	claims := 0
-	for _, file := range trackedDocs(t) {
+	for _, file := range tracked(t, "*.md") {
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
@@ -86,46 +86,65 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	}
 }
 
-// TestNoDocumentCallsRunpoolUnreleased: the tag freezes every document at
-// once, so one of them saying a release exists while another denies it is
-// a contradiction no later commit can reach.
-//
-// Cutting the changelog's heading is the visible half of a release, and
-// it was done alone: the tree carried "## v1.0.0" beside a landing page
-// reading "Runpool is pre-release. No version is supported or
-// release-qualified yet", a support document offering no published
-// binaries, and a deployment guide with no released digest. What a
-// reader observes is the banner, not the changelog — they open the
-// repository at the tag they just downloaded and the first thing on the
-// page says that tag is not supported.
-//
-// The release workflow cannot catch this. It holds the tag against the
-// changelog because only it sees a tag, and that leaves the tree's
-// agreement with itself unheld, which needs no tag at all.
-//
-// It matches a claim about Runpool's own status, not the words: a
-// document is free to discuss pre-release version identifiers, and the
-// support matrix has to be able to name one.
-func TestNoDocumentCallsRunpoolUnreleased(t *testing.T) {
-	denial := regexp.MustCompile(`(?i)runpool is[^.]*\b(pre-release|unreleased)\b|status-pre--release`)
+// denials are the claims this repository made, one pattern per shape it
+// used. It is a list and not a parser, and the reason to prefer that to
+// something cleverer is what the cleverer thing did: a single pattern
+// for "Runpool is pre-release" passed green over six documents saying a
+// release does not exist six other ways, two of them in files the same
+// change had just edited. A new way to say it has to be added here,
+// which is the point.
+var denials = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)runpool is\b[^.]{0,60}\b(pre-release|unreleased)\b`),
+	regexp.MustCompile(`(?i)\bhas not released\b`),
+	regexp.MustCompile(`(?i)\bremains unreleased\b`),
+	regexp.MustCompile(`(?i)there (is|are) no (release|tag|published)`),
+	regexp.MustCompile(`(?i)\bno release exists\b`),
+	regexp.MustCompile(`(?i)\buntil a release exists\b`),
+	regexp.MustCompile(`(?i)\bnothing\b[^.]{0,60}\brelease-qualified\b`),
+	regexp.MustCompile(`(?i)\bnot yet (release-)?qualified\b`),
+	regexp.MustCompile(`(?i)\bbefore V1\b`),
+	regexp.MustCompile(`(?i)the project is blocked`),
+	regexp.MustCompile(`(?i)\bbefore the first release\b`),
+	regexp.MustCompile(`status-pre--release`),
+}
 
-	checked := 0
-	for _, file := range trackedDocs(t) {
+// TestNoDocumentSaysThereIsNoRelease: the tag freezes every document at
+// once, so one of them announcing a release while another denies it is a
+// contradiction no later commit can reach.
+//
+// What a reader observes is whichever they open first, and the denials
+// were on the pages they open first: the landing page's banner, the
+// vulnerability policy's supported-versions section, the product
+// contract the changelog links them to, and the error the canonical
+// Compose file prints when they try to deploy.
+//
+// The release workflow cannot hold this. It holds the tag against the
+// changelog because only it sees a tag; a tree agreeing with itself
+// needs no tag, so it is held here, where it runs on every change.
+//
+// Newlines are spaces here because a claim wrapped between "Runpool is"
+// and "pre-release" is the same claim; the substitution is byte for
+// byte so the reported line still names where it starts.
+func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
+	files := tracked(t, "*.md", "deploy/*")
+	for _, file := range files {
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
 		}
-		checked++
-		for number, line := range strings.Split(string(body), "\n") {
-			if denial.MatchString(line) {
-				t.Errorf("%s:%d calls Runpool unreleased: %s",
-					file, number+1, strings.TrimSpace(line))
+		flat := strings.ReplaceAll(string(body), "\n", " ")
+		for _, denial := range denials {
+			for _, at := range denial.FindAllStringIndex(flat, -1) {
+				t.Errorf("%s:%d says there is no release: %s", file,
+					lineOf(string(body), at[0]), flat[at[0]:at[1]])
 			}
 		}
 	}
-	if checked < 2 {
-		t.Fatalf("read %d Markdown files, so this proves nothing", checked)
-	}
+}
+
+// lineOf is the 1-based line the byte offset falls on.
+func lineOf(body string, offset int) int {
+	return strings.Count(body[:offset], "\n") + 1
 }
 
 func unresolved(file string, number int, target, kind string) string {
@@ -169,13 +188,14 @@ func pathClaim(token string, topLevel map[string]bool) string {
 	return token
 }
 
-// trackedDocs is every Markdown file git knows about, including ones not
-// yet added: a reference is worth checking from the moment it is
+// tracked is every file git knows about matching the patterns, including
+// ones not yet added: a reference is worth checking from the moment it is
 // written.
-func trackedDocs(t *testing.T) []string {
+func tracked(t *testing.T, patterns ...string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", repoPath(), "ls-files", "-co",
-		"--exclude-standard", "--", "*.md").Output()
+	args := append([]string{"-C", repoPath(), "ls-files", "-co",
+		"--exclude-standard", "--"}, patterns...)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
 		t.Fatalf("git ls-files: %v", err)
 	}
@@ -186,7 +206,8 @@ func trackedDocs(t *testing.T) []string {
 		}
 	}
 	if len(files) < 2 {
-		t.Fatalf("the tree holds %d Markdown files, so this proves nothing", len(files))
+		t.Fatalf("the tree holds %d files matching %v, so this proves nothing",
+			len(files), patterns)
 	}
 	return files
 }

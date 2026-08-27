@@ -375,10 +375,11 @@ it cannot.
 Runpool identifies a schema by its contents, not by how many migrations
 produced it, so a database written from migrations this build does not
 have is refused by name rather than failing later on a missing table.
-Before the first release that includes the reviewed baseline itself,
-which is still edited in place: a state directory written by an earlier
-pre-release build is refused and has to be recreated. After the release
-the baseline is immutable and this can only report a genuine mismatch. It also takes its own pre-migration copy in the state
+The baseline is immutable from the first release onward, so a refusal
+reports a genuine mismatch rather than a baseline that moved underneath
+the database.
+
+It also takes its own pre-migration copy in the state
 directory, named `pre-migration-v<version>.db` and never overwritten —
 a retried upgrade gets `pre-migration-v<version>.1.db` rather than
 destroying the copy taken before the attempt that broke things.

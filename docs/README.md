@@ -31,8 +31,8 @@ Documentation is organized by the question it answers.
 
 ## Release Runpool
 
-- [Release readiness](release-readiness.md): objective gates that must be
-  satisfied before the first release.
+- [Release readiness](release-readiness.md): the objective gates a release
+  must satisfy.
 - [`build/platform.lock.json`](../build/platform.lock.json): reviewed platform
   selection and, once frozen, exact facts required by qualification.
 - [`build/images.lock.json`](../build/images.lock.json): digest-pinned capsule

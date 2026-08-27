@@ -14,9 +14,9 @@ once something enforces it.
 | **supported** | Released, qualified where required, and inside the support matrix |
 
 Release qualification is reproducible first-party engineering evidence, not a
-third-party certification. **Nothing in this repository is release-qualified or
-supported yet.** There is no release. See
-[release readiness](release-readiness.md).
+third-party certification. A version reaches each of these states by passing
+the gates in [release readiness](release-readiness.md), and reaches none of
+them by assertion.
 
 ## What Runpool promises
 

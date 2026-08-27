@@ -17,10 +17,9 @@ prefer otherwise.
 
 ## Supported versions
 
-Runpool has not released: there are no tags and no published binaries,
-so there is nothing to promise a fix window for. Every fix lands on
-`main` and nowhere else. When releases exist, this section will name
-exactly which ones receive fixes.
+Every fix lands on `main`, and reaches an installation through a release.
+The most recent release is the one that receives them; a fix is not
+backported to an earlier version.
 
 ## What is in scope
 

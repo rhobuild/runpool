@@ -15,7 +15,7 @@ services:
     # Supply the complete digest-qualified reference published in the
     # release, for example ghcr.io/rhobuild/runpool@sha256:.... A mutable
     # tag such as latest cannot identify the bytes being deployed.
-    image: ${RUNPOOL_IMAGE:?set the digest-qualified released controller image (no release exists yet)}
+    image: ${RUNPOOL_IMAGE:?set the digest-qualified released controller image}
     restart: unless-stopped
     init: true
     read_only: true

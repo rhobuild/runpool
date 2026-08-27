@@ -121,8 +121,8 @@ it.
   for a package a workflow published, so the only confirmation that the grant
   took is a push that succeeds. Dispatching `release.yml` by hand is that push,
   and it stops before qualifying or publishing anything.
-- Make both packages public before the first release. The repository is public;
-  a release whose images nobody can pull is not one.
+- Keep both packages public. The repository is public; a release whose images
+  nobody can pull is not one.
 - Protect `release-candidate` with release-maintainer approval. It gates the
   one job that writes to the registry before anything has been qualified: the
   candidate images a release later promotes. The protected `v*` tag is what

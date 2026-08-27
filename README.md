@@ -85,7 +85,7 @@ non-DNS UDP, IPv6, and other ports fail closed. Read the complete
 ## Evaluate locally
 
 Prerequisites are Go 1.26.6 and a Linux host with rootful Docker Engine 28.
-The selected release-qualification target and current lock status are documented in the
+The selected release-qualification target is documented in the
 [support matrix](docs/reference/support-matrix.md).
 
 ```bash
@@ -131,8 +131,8 @@ a job gets: its own Docker daemon, and egress through the relay.
 shapes exist, what a runner group has to grant, and which credential to
 use — and the [runbook](docs/runbook.md) covers operating it.
 
-The reference Compose deployment is version-pinned and cannot be used
-until a release exists; the images above are how a source checkout runs.
+The reference Compose deployment is version-pinned to a released digest;
+the images above are how a source checkout runs.
 Do not use a production credential for local experimentation.
 
 ## Deployment

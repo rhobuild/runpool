@@ -10,9 +10,9 @@ property requires it, and inside this matrix. Release qualification is
 Runpool's reproducible engineering evidence, not a third-party product
 certification.
 
-**Nothing here is release-qualified or supported.** There is no release. This
-page exists so that when there is one, the line between what was proven
-and what was assumed is already drawn. Live status is in
+This page draws the line between what a release proved and what it assumed. A
+property appears as tested or supported only once the live matrix behind it has
+run against a real host; the evidence each gate leaves is in
 [release readiness](../release-readiness.md).
 
 ## Runtime compatibility
@@ -29,11 +29,11 @@ not reject a newer major solely for being newer.
 
 Compatibility and support are evidence-based:
 
-| Engine | Status before V1 |
+| Engine | Status |
 | --- | --- |
 | `< 28.0` | Incompatible: the required isolated bridge mode does not exist |
 | `28.x` | Compatible floor implemented; not selected for the first release qualification |
-| `29.7.2` | Latest official stable Debian 13 package at the 2026-08-16 policy review; selected for the first qualification, not yet qualified |
+| `29.7.2` | Latest official stable Debian 13 package at the 2026-08-16 policy review; selected for the first release qualification, and frozen as the exact reference in [`build/platform.lock.json`](../../build/platform.lock.json) |
 | Other `29.x` | Expected to negotiate successfully, but must pass the complete live matrix before being listed as tested or supported |
 | Future majors | Unknown until their release notes and live matrix are reviewed |
 

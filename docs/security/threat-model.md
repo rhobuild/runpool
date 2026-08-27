@@ -207,8 +207,9 @@ These are consequences of the design, not oversights:
   contract tests that fail when upstream behaviour drifts.
 - The SQLite driver is CGo-free and covered by a durability suite — WAL
   behaviour, contention, kill-recovery rounds, disk-full on a capped
-  filesystem — that runs against a Linux named volume. No release-qualification
-  record exists yet; the protected release workflow is what will produce one.
+  filesystem — that runs against a Linux named volume. The
+  release-qualification record for a version is produced by the protected
+  release workflow, from the evidence its suites emit on the reference host.
 
 ## What an auditor should attack first
 

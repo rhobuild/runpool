@@ -16,15 +16,15 @@ What follows is where to ask, and what the project can answer for.
 
 ## Implemented scope
 
-These are the boundaries intended for the first qualified release; they are
-not a support commitment while the project remains unreleased.
+These are the boundaries a qualified release covers. Anything outside them is
+not a support commitment.
 
 | Area | State |
 | --- | --- |
 | CI provider | GitHub Actions, as the single adapter. The control plane is provider-neutral by construction, but no other adapter exists or is promised. |
 | Host | Linux amd64, rootful Docker Engine 28.0 or newer, cgroup v2 with the memory and pids controllers. Docker Engine 29.7.2 on Debian 13 is selected for the first release qualification, and the reference host's facts are frozen. See the exact support matrix. |
 | Scope | Repository-scoped and organization-scoped scale sets. Persistent cache lanes are repository-scoped only. |
-| Egress | The restricted profile (implemented and tested live, not yet release-qualified) denies direct egress and permits proxy HTTP or CONNECT to allowed addresses on ports 80/443. See [the runbook](docs/runbook.md). |
+| Egress | The restricted profile denies direct egress and permits proxy HTTP or CONNECT to allowed addresses on ports 80/443. See [the runbook](docs/runbook.md). |
 | State | SQLite in a Docker named volume, one controller per state directory, enforced by a lock. |
 
 ## What is not supported
@@ -33,6 +33,5 @@ not a support commitment while the project remains unreleased.
   boundary, not a hostile-compute sandbox.
 - Treating `shared-daemon` as containment for hostile or public-fork code.
 - Deployments where platform-wide volume pruning cannot be disabled.
-- Any release. The project is blocked on the controller end-to-end gate,
-  external security review, and exact-platform release qualification before it
-  publishes one. Nothing here is a production commitment.
+- Any version that has not passed release qualification on the exact platform
+  frozen for it. Nothing here is a production commitment.

@@ -714,11 +714,11 @@ by its public and operational effects.
   Every job carries a deadline, and every script in the tree is linted.
 - The job that builds the candidate images runs under its own protected
   environment: it writes to the registry before anything has been qualified.
-- The qualification policy is **pending in `build/platform.lock.json`**.
-  Docker Engine 29.7.2 on Debian 13 is selected for the first qualification;
-  the exact host facts must be captured, reviewed, and frozen before a release
-  candidate is authorized. Contract suites fail closed while the lock is
-  pending and later compare the host against the frozen manifest.
+- The qualification policy is **frozen in `build/platform.lock.json`**. Docker
+  Engine 29.7.2 on Debian 13 is selected for the first qualification, and the
+  reference host's exact facts were captured and reviewed before any release
+  candidate existed. Contract suites fail closed while a lock is pending, and
+  compare the host against the manifest once it is frozen.
 - Release qualification runs its live suites **on the reference host** and
   builds its record from evidence emitted there.
 - No contract may be skipped in release-qualification mode.
