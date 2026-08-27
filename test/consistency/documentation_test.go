@@ -108,50 +108,54 @@ var denials = []struct {
 	pattern *regexp.Regexp
 	matches string
 }{
-	{regexp.MustCompile(`(?i)runpool is\b[^.,]{0,60}\b(pre-release|unreleased)\b`),
+	{regexp.MustCompile(`(?i)runpool\s+is\b[^.,]{0,60}\b(pre-release|unreleased)\b`),
 		"Runpool is pre-release infrastructure software"},
-	{regexp.MustCompile(`(?i)\b(runpool|the project)\s+has not\s+(been\s+)?released\b`),
+	{regexp.MustCompile(`(?i)\b(runpool|the\s+project)\s+has\s+not\s+(been\s+)?released\b`),
 		"Runpool has not released: there are no tags"},
-	{regexp.MustCompile(`(?i)\bnot yet\s+released\b`),
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+released\b`),
 		"the binary is not yet released"},
 	{regexp.MustCompile(`(?i)\bremains\s+unreleased\b`),
 		"while the project remains unreleased"},
 	{regexp.MustCompile(`(?i)there\s+(is|are)\s+no\s+(release|tag|published)`),
 		"There is no release"},
-	{regexp.MustCompile(`(?i)\bno release\s+exists\b`),
+	{regexp.MustCompile(`(?i)\bno\s+release\s+exists\b`),
 		"no release exists yet"},
-	{regexp.MustCompile(`(?i)\buntil a release\s+exists\b`),
+	{regexp.MustCompile(`(?i)\buntil\s+a\s+release\s+exists\b`),
 		"cannot be used until a release exists"},
 	{regexp.MustCompile(`(?i)\bnothing\b[^.]{0,60}\brelease-qualified\b`),
 		"Nothing in this repository is release-qualified or supported yet"},
-	{regexp.MustCompile(`(?i)\bnot yet\s+(release-)?qualified\b`),
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(release-)?qualified\b`),
 		"selected for the first qualification, not yet qualified"},
-	{regexp.MustCompile(`(?i)\bbefore V1([^.0-9]|$)`),
+	{regexp.MustCompile(`(?i)\bbefore\s+V1([^.0-9]|$)`),
 		"| Engine | Status before V1 |"},
-	{regexp.MustCompile(`(?i)\b(qualification|release|project|publication)\s+is blocked\b`),
+	{regexp.MustCompile(`(?i)\b(qualification|release|project|publication)\s+is\s+blocked\b`),
 		"Release qualification is blocked until the host is frozen"},
 	{regexp.MustCompile(`(?i)\bpre-release,`),
 		"Pre-release, 'upgrade' is: the new binary opens existing state"},
-	{regexp.MustCompile(`(?i)\b(until|once|after|before)\s+the first release\b`),
+	{regexp.MustCompile(`(?i)\b(until|once|after|before)\s+the\s+first\s+release\b`),
 		"Once the first release is published it becomes immutable"},
-	{regexp.MustCompile(`(?i)\bnothing has\s+been\s+released\b`),
+	{regexp.MustCompile(`(?i)\bnothing\s+has\s+been\s+released\b`),
 		"nothing has been released, so 000001_initial is the whole of it"},
-	{regexp.MustCompile(`(?i)\buntil\b[^.]{0,60}\bis release-qualified\b`),
+	{regexp.MustCompile(`(?i)\buntil\b[^.]{0,60}\bis\s+release-qualified\b`),
 		"off by default until controller end-to-end reuse is release-qualified"},
-	{regexp.MustCompile(`(?i)\brelease qualification\s+pending\b`),
+	{regexp.MustCompile(`(?i)\brelease\s+qualification\s+pending\b`),
 		"accepted and implemented; release qualification pending"},
-	{regexp.MustCompile(`(?i)\bqualification\s+(remains|is still)\s+required\b`),
+	{regexp.MustCompile(`(?i)\bqualification\s+(remains|is\s+still)\s+required\b`),
 		"controller E2E qualification remains required"},
-	{regexp.MustCompile(`(?i)\bstill needs\s+release qualification\b`),
+	{regexp.MustCompile(`(?i)\bstill\s+needs\s+release\s+qualification\b`),
 		"asserts the sentinels and still needs release qualification"},
-	{regexp.MustCompile(`(?i)\bqualification\s+not executed\b`),
+	{regexp.MustCompile(`(?i)\bqualification\s+not\s+executed\b`),
 		"Implemented; qualification not executed"},
 	{regexp.MustCompile(`(?i)\bremains\s+unqualified\b`),
 		"remains unqualified until the release workflow succeeds"},
-	{regexp.MustCompile(`(?i)\b(is|are|but|and)\s+not release-qualified\b`),
+	{regexp.MustCompile(`(?i)\b(is|are|but|and)\s+not\s+release-qualified\b`),
 		"implemented but not release-qualified"},
-	{regexp.MustCompile(`(?i)\bbaseline is still\s+(edited in place|mutable)\b`),
+	{regexp.MustCompile(`(?i)\bbaseline\s+is\s+still\s+(edited\s+in\s+place|mutable)\b`),
 		"a database this build cannot account for while the baseline is still\n// mutable"},
+	{regexp.MustCompile(`(?i)\bqualification\b[^.]{0,40}\bhas\s+not\s+run\b`),
+		"release qualification on the reference platform has not run"},
+	{regexp.MustCompile(`(?i)\bhas\s+not\s+run\s+in\s+release\s+qualification\b`),
+		"a suite that has not run in release qualification"},
 	{regexp.MustCompile(`status-pre--release`),
 		"[![Status](https://img.shields.io/badge/status-pre--release-orange)]"},
 }
@@ -210,9 +214,11 @@ func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
 	}
 }
 
-// commentMarker is the prefix a wrapped comment carries on its
-// continuation lines.
-var commentMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*)[ \t]?`)
+// wrapMarker is what a wrapped claim carries between its words at a line
+// boundary: a comment's continuation prefix in Go, YAML, shell and SQL, a
+// Markdown blockquote's bar, and the quotes and comma that separate two
+// entries of a JSON string array.
+var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \t]*$`)
 
 // flatten is the text with its line breaks and comment markers blanked,
 // so a sentence reads the same whether the author wrapped it or not.
@@ -220,11 +226,13 @@ var commentMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*)[ \t]?`)
 // A claim inside a comment block carries the next line's marker between
 // its words — "// " in Go, "# " in YAML and shell, "-- " in SQL — which
 // is enough for every multi-word pattern to miss it, and comments are
-// most of what the whole-tree sweep added. Every replacement is the
-// same length as what it replaces, so an offset into the result is an
-// offset into the file and lineOf still names the right line.
+// most of what the whole-tree sweep added. A Markdown callout wraps
+// behind "> ", and two entries of a JSON string array are separated by
+// a quote, a comma and another quote. Every replacement is the same
+// length as what it replaces, so an offset into the result is an offset
+// into the file and lineOf still names the right line.
 func flatten(body []byte) string {
-	blanked := commentMarker.ReplaceAllFunc(body, func(marker []byte) []byte {
+	blanked := wrapMarker.ReplaceAllFunc(body, func(marker []byte) []byte {
 		return bytes.Repeat([]byte{' '}, len(marker))
 	})
 	return strings.ReplaceAll(string(blanked), "\n", " ")

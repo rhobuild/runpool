@@ -48,6 +48,32 @@ func TestOpenCreatesSchemaAndStableIdentity(t *testing.T) {
 	}
 }
 
+// TestTheBaselineIsTheBytesEveryDatabaseRecorded holds the baseline to
+// the fingerprint a database written from it records.
+//
+// The fingerprint covers each migration's version, name and body, bytes
+// and comments alike, and a database whose recorded fingerprint
+// disagrees is refused. Nothing else in the tree notices an edit to the
+// baseline: it compiles, every suite passes, and the failure arrives at
+// an operator upgrading a release, whose database this build then
+// refuses to open. The constant is not updated. A schema change adds a
+// migration, which extends the set and leaves this prefix alone.
+func TestTheBaselineIsTheBytesEveryDatabaseRecorded(t *testing.T) {
+	const recorded = "db214c9725e7a0e8135abd36ddc2d6dc92db4ec0d29a1bb94e275773c5e33d68"
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) == 0 {
+		t.Fatal("no migration is embedded, so this proves nothing")
+	}
+	if got := schemaFingerprint(migrations[:1]); got != recorded {
+		t.Errorf("the baseline fingerprints as %s; every database written from it "+
+			"recorded %s, and this build would refuse them all", got, recorded)
+	}
+}
+
 // The schema ships as one reviewed baseline, and a migration added to it
 // is forward-only.
 func TestSchemaShipsAsOneReviewedBaseline(t *testing.T) {
