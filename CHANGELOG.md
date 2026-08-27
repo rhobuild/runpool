@@ -5,14 +5,12 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## Unreleased
+## v1.0.0 — 2026-08-27
 
-**Nothing has been released.** There is no tag, no published binary and
-no image. The first release is `v1.0.0`, and it is
-blocked on the external security review and release qualification on
-the reference host — see
-[release readiness](docs/release-readiness.md) for the live status and
-for exactly what unblocks each.
+The first release. It publishes only what the qualification run on the
+reference host proved for this exact commit and these exact image
+digests; the gates it must clear, and the evidence each one leaves, are
+in [release readiness](docs/release-readiness.md).
 
 This section records the product delivered by the first release, grouped
 by its public and operational effects.

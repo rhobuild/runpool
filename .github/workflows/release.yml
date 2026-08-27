@@ -80,6 +80,30 @@ jobs:
           go build -trimpath -ldflags "-X main.version=${VERSION}" -o /tmp/runpool-version ./cmd/runpool
           /tmp/runpool-version version --check-release
 
+      - name: Verify the changelog names this release
+        # Only a tag push releases. A dispatch stamps v0.0.0-dry-run,
+        # which no changelog section names and none should.
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # The version exists only on the tag, so this is the only gate
+          # that can ask this. The step above asks the binary about its
+          # own stamp and cannot read the tree; the consistency suite
+          # reads the tree and never sees a tag. Between the two, a
+          # release whose newest section still reads "Unreleased"
+          # publishes, at its own tag, a document saying nothing has
+          # been released.
+          heading=$(grep -m1 '^## ' CHANGELOG.md)
+          case "$heading" in
+            "## ${VERSION}"|"## ${VERSION} "*) ;;
+            *)
+              echo "CHANGELOG.md opens with \"${heading}\"; this release is ${VERSION}" >&2
+              exit 1
+              ;;
+          esac
+          echo "the changelog names ${VERSION}"
+
   # One platform per runner, natively. Every base image these build from
   # is pinned to an index digest that publishes both, so an arm64 runner
   # resolves the arm64 child of the reviewed digest and nothing is
