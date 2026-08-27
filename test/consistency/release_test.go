@@ -63,6 +63,87 @@ func TestTheReleaseBuildsEveryPlatformTheLockDeclares(t *testing.T) {
 	}
 }
 
+// TestTheReleaseAsksWhetherTheChangelogNamesTheTag: the step is the only
+// place a tag is read against the tree, and a workflow it was deleted
+// from looks exactly like one that never carried it.
+//
+// The suite cannot ask the question itself — it never sees a tag — so a
+// release could publish a changelog whose newest section names another
+// version, or none, with every gate green.
+//
+// Where it is asked is half of it. A step that asks in a job nothing
+// depends on runs, fails, and publishes anyway: the failure is one red
+// square beside a release that shipped. So the job holding it has to be
+// one the publishing job descends from.
+func TestTheReleaseAsksWhetherTheChangelogNamesTheTag(t *testing.T) {
+	const publishes = "publish"
+
+	var workflow struct {
+		Jobs map[string]struct {
+			Needs yaml.Node `yaml:"needs"`
+			Steps []struct {
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	body, err := os.ReadFile(repoPath(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatal(err)
+	}
+
+	var asking []string
+	for name, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "CHANGELOG.md") && strings.Contains(step.Run, "VERSION") {
+				asking = append(asking, name)
+			}
+		}
+	}
+	if len(asking) != 1 {
+		t.Fatalf("%d steps in release.yml read CHANGELOG.md against the version, in %v; "+
+			"exactly one does", len(asking), asking)
+	}
+
+	// Every job the publication transitively waits for.
+	before := map[string]bool{}
+	var walk func(string)
+	walk = func(name string) {
+		for _, need := range needsOf(workflow.Jobs[name].Needs) {
+			if !before[need] {
+				before[need] = true
+				walk(need)
+			}
+		}
+	}
+	walk(publishes)
+	if len(before) == 0 {
+		t.Fatalf("%q waits for nothing, so this proves nothing", publishes)
+	}
+	if !before[asking[0]] {
+		t.Errorf("the changelog is read in %q, which %q does not wait for; the step would "+
+			"fail beside a release that published anyway", asking[0], publishes)
+	}
+}
+
+// needsOf reads a job's dependencies, which the workflow syntax writes as
+// one name or as a list of them.
+func needsOf(node yaml.Node) []string {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return []string{node.Value}
+	case yaml.SequenceNode:
+		var names []string
+		for _, item := range node.Content {
+			names = append(names, item.Value)
+		}
+		return names
+	}
+	return nil
+}
+
 // platformMatrices returns, for each strategy matrix in the document,
 // the platform values its include entries carry — one slice per matrix,
 // so a leg missing from one cannot be papered over by its sibling.

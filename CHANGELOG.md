@@ -5,14 +5,13 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## Unreleased
+## v1.0.0 — 2026-08-27
 
-**Nothing has been released.** There is no tag, no published binary and
-no image. The first release is `v1.0.0`, and it is
-blocked on the external security review and release qualification on
-the reference host — see
-[release readiness](docs/release-readiness.md) for the live status and
-for exactly what unblocks each.
+The first release. It publishes only what its qualification proved for this
+exact commit and these exact image digests: the live and end-to-end suites on
+the reference host, the upstream provider contracts against real fixtures, and
+the artifact checksums. The gates it must clear, and the evidence each one
+leaves, are in [release readiness](docs/release-readiness.md).
 
 This section records the product delivered by the first release, grouped
 by its public and operational effects.
@@ -229,8 +228,8 @@ by its public and operational effects.
   coexistence with positive host reserves, restricted egress, runner-group
   isolation, ownership-verified destructive intents, and idle-uplink recovery;
   **`dedicated-daemon`** remains the smaller-blast-radius option.
-- The schema ships as **one reviewed baseline**. After the first release,
-  migrations are forward-only and immutable.
+- The schema ships as **one reviewed baseline**; a migration added to it is
+  forward-only and immutable.
 - **The attempt owns execution evidence and disposition**; a
   `capsule_lease` owns only the host resources it consumes, and carries
   no provider identifier. GitHub's scale sets, runner ids and workflow
@@ -247,7 +246,7 @@ by its public and operational effects.
 - **A schema is identified by its contents.** The applied migrations'
   fingerprint is recorded with the schema, in the same transaction, and
   checked on every open. A version counter cannot tell two schemas apart
-  while the reviewed baseline is still edited in place, which is exactly
+  when a baseline is edited in place, which is exactly
   when a database written by an earlier build would otherwise be accepted
   and then fail on a missing table.
 - **A diagnosis answers when the daemon does not.** `runpool doctor`
@@ -711,18 +710,23 @@ by its public and operational effects.
   make — a platform nobody qualified, an entry still pending, an end-to-end run
   of other images.
 - Every workflow states the Go toolchain it builds with, held equal to the
-  version `go.mod` declares by the same check that holds the builder images to
-  it, so the binary a release ships is compiled by the toolchain its gates ran.
+  `toolchain` directive `go.mod` names by the same check that holds the builder
+  images to it, so the binary a release ships is compiled by the toolchain its
+  gates ran. The `go` directive is separate and lower: it is the oldest Go that
+  may build this module, which is what the dependency graph requires rather
+  than what a maintainer happens to run.
   Every job carries a deadline, and every script in the tree is linted.
 - The job that builds the candidate images runs under its own protected
   environment: it writes to the registry before anything has been qualified.
-- The qualification policy is **pending in `build/platform.lock.json`**.
-  Docker Engine 29.7.2 on Debian 13 is selected for the first qualification;
-  the exact host facts must be captured, reviewed, and frozen before a release
-  candidate is authorized. Contract suites fail closed while the lock is
-  pending and later compare the host against the frozen manifest.
+- The qualification policy is **frozen in `build/platform.lock.json`**. Docker
+  Engine 29.7.2 on Debian 13 is selected for the first qualification, and the
+  reference host's exact facts were captured and reviewed before any release
+  candidate existed. Contract suites fail closed while a lock is pending, and
+  compare the host against the manifest once it is frozen.
 - Release qualification runs its live suites **on the reference host** and
-  builds its record from evidence emitted there.
+  builds its record from the evidence its gates emit: those suites, the
+  upstream provider contracts against real fixtures, and the artifact
+  checksums.
 - No contract may be skipped in release-qualification mode.
 - The controller E2E drives three real assignments through the exact image
   candidates: restart recovery, cache reuse, generation isolation, restricted

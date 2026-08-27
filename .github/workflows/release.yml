@@ -80,6 +80,35 @@ jobs:
           go build -trimpath -ldflags "-X main.version=${VERSION}" -o /tmp/runpool-version ./cmd/runpool
           /tmp/runpool-version version --check-release
 
+      - name: Verify the changelog names this release
+        # Only a tag push releases. A dispatch stamps v0.0.0-dry-run,
+        # which no changelog section names and none should.
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # The version exists only on the tag, so this is the only gate
+          # that can ask this. The step above asks the binary about its
+          # own stamp and cannot read the tree; the consistency suite
+          # reads the tree and never sees a tag. Between the two, a
+          # release whose newest section still reads "Unreleased"
+          # publishes, at its own tag, a document denying the release
+          # a reader reached it from.
+          # || true, because the job's shell carries -e: a changelog with
+          # no section heading at all makes grep exit 1, which kills the
+          # step before the diagnostic below runs and leaves the operator
+          # a bare "exit code 1" that reads as a broken script rather
+          # than a broken changelog. Empty falls through to the case.
+          heading=$(grep -m1 '^## ' CHANGELOG.md || true)
+          case "$heading" in
+            "## ${VERSION}"|"## ${VERSION} "*) ;;
+            *)
+              echo "CHANGELOG.md opens with \"${heading}\"; this release is ${VERSION}" >&2
+              exit 1
+              ;;
+          esac
+          echo "the changelog names ${VERSION}"
+
   # One platform per runner, natively. Every base image these build from
   # is pinned to an index digest that publishes both, so an arm64 runner
   # resolves the arm64 child of the reviewed digest and nothing is

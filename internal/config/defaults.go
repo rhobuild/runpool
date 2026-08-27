@@ -27,8 +27,8 @@ const (
 
 	// NetworkProfilePublicInternetOnly is the restricted profile: the
 	// capsule has no route out, and its gateway relays what the policy
-	// allows. It is implemented and tested live; release qualification on
-	// the reference platform has not run.
+	// allows. Its live contract suite is one the release qualification
+	// runs without skips on the reference platform.
 	NetworkProfilePublicInternetOnly NetworkProfile = "public-internet-only"
 	// NetworkProfileUnsafeOpen builds no sandbox: the capsule reaches
 	// whatever the host reaches. It is named so that no deployment can

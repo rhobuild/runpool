@@ -1,6 +1,9 @@
 package consistency
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +20,11 @@ import (
 // parsed rather than matched, because both have parsers here already.
 var builderStage = regexp.MustCompile(`(?m)^FROM (?:--platform=\S+ )?golang:([0-9][^-@ ]*)`)
 
+// goClaim matches a document naming a complete Go patch version, in
+// prose or inside a badge URL. A bare "Go 1.26" is a language version
+// and not a claim about the toolchain, so it is not matched.
+var goClaim = regexp.MustCompile(`(?:Go[- ])([0-9]+\.[0-9]+\.[0-9]+)`)
+
 // TestEveryBuilderAndGateNamesTheGoThatGoModDeclares: an image tag, a
 // workflow variable and a module directive are three ecosystems, and
 // every updater sees one of them.
@@ -32,7 +40,7 @@ var builderStage = regexp.MustCompile(`(?m)^FROM (?:--platform=\S+ )?golang:([0-
 // is configured to propose only patch bumps for the builder, so this is
 // the check behind that policy rather than a substitute for it.
 func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
-	want := declaredGo(t)
+	want := declaredToolchain(t)
 
 	builders, err := filepath.Glob(repoPath("build", "*", "Dockerfile"))
 	if err != nil {
@@ -59,7 +67,7 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 		}
 	}
 
-	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.yml"))
+	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.y*ml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +99,80 @@ func TestEveryBuilderAndGateNamesTheGoThatGoModDeclares(t *testing.T) {
 			}
 		}
 	}
+
+	// The fourth ecosystem is prose, and nothing above reads it: the
+	// landing page's badge, the prerequisite line beneath it and the
+	// contributing guide each name a version, and the guide names go.mod
+	// while doing it. A contributor installs what the page tells them to
+	// and meets a toolchain error the page cannot explain.
+	//
+	// Prose states the requirement, not the toolchain: a reader wants to
+	// know whether the Go they have will build this, and the answer is
+	// the `go` directive.
+	minimum := declaredGo(t)
+	told := 0
+	for _, file := range tracked(t, "*.md") {
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(body), "\n") {
+			for _, match := range goClaim.FindAllStringSubmatch(line, -1) {
+				told++
+				if match[1] != minimum {
+					t.Errorf("%s:%d names Go %s; go.mod requires %s",
+						file, number+1, match[1], minimum)
+				}
+			}
+		}
+	}
+	if told == 0 {
+		t.Fatal("no document names a Go version, so this proves nothing")
+	}
+
+	// A `go-version:` scalar is a toolchain chosen by hand, wherever it
+	// is: the workflows here all say `go-version-file: go.mod` and are
+	// covered above, but the end-to-end fixture pins a version literally,
+	// and nothing above reads it.
+	//
+	// A file this cannot parse is reported rather than skipped. The one
+	// file the arm exists for is the fixture, and a silent skip would
+	// remove exactly it the first time a stray tab or a templating
+	// expression made it unparseable.
+	for _, file := range tracked(t, "*.yml", "*.yaml") {
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every document. Unmarshal into a Node decodes the first and
+		// returns no error for whatever follows a `---`, so a version
+		// pinned in a later one would never be read.
+		decoder := yaml.NewDecoder(bytes.NewReader(body))
+		for {
+			var document yaml.Node
+			err := decoder.Decode(&document)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Errorf("parse %s: %v", file, err)
+				break
+			}
+			for _, got := range valuesOf(&document, "go-version") {
+				if got != want {
+					t.Errorf("%s pins go-version %s; go.mod declares %s", file, got, want)
+				}
+			}
+		}
+	}
 }
 
-// declaredGo is the version go.mod's own directive names, read with the
-// parser the Go toolchain uses for it.
+// declaredGo is the lowest Go a build of this module may use: the `go`
+// directive, which is the highest any module in the graph requires.
+//
+// It is not the toolchain the gates run. Fusing the two published our
+// own desk as a requirement, refusing anyone whose patch release
+// differed from ours for no reason the code could name.
 func declaredGo(t *testing.T) string {
 	t.Helper()
 	path := repoPath("go.mod")
@@ -112,14 +190,45 @@ func declaredGo(t *testing.T) string {
 	return parsed.Go.Version
 }
 
+// declaredToolchain is the toolchain go.mod names, without its "go"
+// prefix: the one the builders, the gates and the release compile with.
+func declaredToolchain(t *testing.T) string {
+	t.Helper()
+	path := repoPath("go.mod")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := modfile.Parse(path, body, nil)
+	if err != nil {
+		t.Fatalf("parse go.mod: %v", err)
+	}
+	if parsed.Toolchain == nil || parsed.Toolchain.Name == "" {
+		t.Fatal("go.mod names no toolchain, so a builder is held to nothing")
+	}
+	return strings.TrimPrefix(parsed.Toolchain.Name, "go")
+}
+
 // valuesOf collects every scalar a mapping key holds anywhere in a
 // document, at any depth.
 func valuesOf(node *yaml.Node, key string) []string {
 	var found []string
 	if node.Kind == yaml.MappingNode {
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			if node.Content[i].Value == key && node.Content[i+1].Kind == yaml.ScalarNode {
-				found = append(found, node.Content[i+1].Value)
+			if node.Content[i].Value != key {
+				continue
+			}
+			// A sequence is how a matrix names several, and reading
+			// only scalars would pass every one of them.
+			switch value := node.Content[i+1]; value.Kind {
+			case yaml.ScalarNode:
+				found = append(found, value.Value)
+			case yaml.SequenceNode:
+				for _, item := range value.Content {
+					if item.Kind == yaml.ScalarNode {
+						found = append(found, item.Value)
+					}
+				}
 			}
 		}
 	}

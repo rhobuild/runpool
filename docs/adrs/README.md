@@ -15,7 +15,7 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-11 | [Repository cache scope](2026-08-11-repository-cache-scope.md) — persistent lanes only where identity binds | accepted |
 | 2026-08-11 | [Plain L3 routing is rejected](2026-08-11-network-sandbox-proxy.md) — why an in-bridge gateway cannot forward, and the one path the host's rule leaves open | accepted, implemented by the egress relay |
 | 2026-08-12 | [Docker API client](2026-08-12-docker-api-client.md) — versioned Moby modules behind a live-tested adapter | accepted; the adapter is named by the engine port |
-| 2026-08-13 | [Egress is a relay, not a route](2026-08-13-egress-relay.md) — what the host's own `--internal` rule forces, and what it gives | accepted and implemented; release qualification pending |
+| 2026-08-13 | [Egress is a relay, not a route](2026-08-13-egress-relay.md) — what the host's own `--internal` rule forces, and what it gives | accepted and implemented |
 | 2026-08-13 | [Admission credits](2026-08-13-admission-credits.md) — tier parallelism is shared credit with a rotating discovery credit | accepted |
 | 2026-08-14 | [Scheduling and swap semantics](2026-08-14-scheduling-and-swap.md) — optional global parallelism and provider-neutral resource units | accepted |
 | 2026-08-17 | [Capsule image substitution](2026-08-17-capsule-image-substitution.md) — a tier may name its capsule, and the capsule declares its protocol | accepted |

@@ -1,6 +1,7 @@
 package consistency
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,7 +53,7 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	}
 
 	claims := 0
-	for _, file := range trackedDocs(t) {
+	for _, file := range tracked(t, "*.md") {
 		body, err := os.ReadFile(repoPath(file))
 		if err != nil {
 			t.Fatal(err)
@@ -84,6 +85,164 @@ func TestEveryPathTheDocumentationNamesResolves(t *testing.T) {
 	if claims == 0 {
 		t.Fatal("the documentation names no in-repo path, so this proves nothing")
 	}
+}
+
+// denials are the shapes a claim that no release exists takes here, one
+// pattern each, paired with a statement it must match.
+//
+// It is a list and not a parser because the alternative is worse: a
+// document is free to discuss SemVer pre-release identifiers, an
+// unreleased lease, or a gateway that does not exist yet, and a matcher
+// general enough to catch every phrasing catches those too. The cost is
+// that a new phrasing has to be added here by hand.
+//
+// The paired statement is what makes narrowing a pattern safe. Three of
+// these were narrowed to clear a false positive, and a pattern narrowed
+// past the claim it was written for goes on passing silently; the
+// example fails instead.
+//
+// Words are separated by \s+ rather than a space because the text these
+// read has had its line breaks and comment markers blanked, which leaves
+// a run of spaces wherever the author wrapped.
+var denials = []struct {
+	pattern *regexp.Regexp
+	matches string
+}{
+	{regexp.MustCompile(`(?i)runpool\s+is\b[^.,]{0,60}\b(pre-release|unreleased)\b`),
+		"Runpool is pre-release infrastructure software"},
+	{regexp.MustCompile(`(?i)\b(runpool|the\s+project)\s+has\s+not\s+(been\s+)?released\b`),
+		"Runpool has not released: there are no tags"},
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+released\b`),
+		"the binary is not yet released"},
+	{regexp.MustCompile(`(?i)\bremains\s+unreleased\b`),
+		"while the project remains unreleased"},
+	{regexp.MustCompile(`(?i)there\s+(is|are)\s+no\s+(release|tag|published)`),
+		"There is no release"},
+	{regexp.MustCompile(`(?i)\bno\s+release\s+exists\b`),
+		"no release exists yet"},
+	{regexp.MustCompile(`(?i)\buntil\s+a\s+release\s+exists\b`),
+		"cannot be used until a release exists"},
+	{regexp.MustCompile(`(?i)\bnothing\b[^.]{0,60}\brelease-qualified\b`),
+		"Nothing in this repository is release-qualified or supported yet"},
+	{regexp.MustCompile(`(?i)\bnot\s+yet\s+(release-)?qualified\b`),
+		"selected for the first qualification, not yet qualified"},
+	{regexp.MustCompile(`(?i)\bbefore\s+V1([^.0-9]|$)`),
+		"| Engine | Status before V1 |"},
+	{regexp.MustCompile(`(?i)\b(qualification|release|project|publication)\s+is\s+blocked\b`),
+		"Release qualification is blocked until the host is frozen"},
+	{regexp.MustCompile(`(?i)\bpre-release,`),
+		"Pre-release, 'upgrade' is: the new binary opens existing state"},
+	{regexp.MustCompile(`(?i)\b(until|once|after|before)\s+the\s+first\s+release\b`),
+		"Once the first release is published it becomes immutable"},
+	{regexp.MustCompile(`(?i)\bnothing\s+has\s+been\s+released\b`),
+		"nothing has been released, so 000001_initial is the whole of it"},
+	{regexp.MustCompile(`(?i)\buntil\b[^.]{0,60}\bis\s+release-qualified\b`),
+		"off by default until controller end-to-end reuse is release-qualified"},
+	{regexp.MustCompile(`(?i)\brelease\s+qualification\s+pending\b`),
+		"accepted and implemented; release qualification pending"},
+	{regexp.MustCompile(`(?i)\bqualification\s+(remains|is\s+still)\s+required\b`),
+		"controller E2E qualification remains required"},
+	{regexp.MustCompile(`(?i)\bstill\s+needs\s+release\s+qualification\b`),
+		"asserts the sentinels and still needs release qualification"},
+	{regexp.MustCompile(`(?i)\bqualification\s+not\s+executed\b`),
+		"Implemented; qualification not executed"},
+	{regexp.MustCompile(`(?i)\bremains\s+unqualified\b`),
+		"remains unqualified until the release workflow succeeds"},
+	{regexp.MustCompile(`(?i)\b(is|are|but|and)\s+not\s+release-qualified\b`),
+		"implemented but not release-qualified"},
+	{regexp.MustCompile(`(?i)\bbaseline\s+is\s+still\s+(edited\s+in\s+place|mutable)\b`),
+		"a database this build cannot account for while the baseline is still\n// mutable"},
+	{regexp.MustCompile(`(?i)\bqualification\b[^.]{0,40}\bhas\s+not\s+run\b`),
+		"release qualification on the reference platform has not run"},
+	{regexp.MustCompile(`(?i)\bhas\s+not\s+run\s+in\s+release\s+qualification\b`),
+		"a suite that has not run in release qualification"},
+	{regexp.MustCompile(`status-pre--release`),
+		"[![Status](https://img.shields.io/badge/status-pre--release-orange)]"},
+}
+
+// TestEveryDenialPatternMatchesTheClaimItIsFor: a pattern that no longer
+// matches passes every file, and reads exactly like one that has nothing
+// to find.
+func TestEveryDenialPatternMatchesTheClaimItIsFor(t *testing.T) {
+	for _, denial := range denials {
+		if !denial.pattern.MatchString(flatten([]byte(denial.matches))) {
+			t.Errorf("%s no longer matches %q", denial.pattern, denial.matches)
+		}
+	}
+}
+
+// TestNoDocumentSaysThereIsNoRelease: the tag freezes every document at
+// once, so one of them announcing a release while another denies it is a
+// contradiction no later commit can reach.
+//
+// What a reader observes is whichever they open first, and these are the
+// pages they open first: the landing page's banner, the vulnerability
+// policy's supported-versions section, the product contract the changelog
+// links to, and the error the canonical Compose file prints at an
+// operator trying to deploy.
+//
+// The release workflow cannot hold this. It holds the tag against the
+// changelog because only it sees a tag; a tree agreeing with itself
+// needs no tag, so it is held here, where it runs on every change.
+//
+// Every tracked file, not the Markdown alone: the claim also lives in a
+// drill script's step banner, in Go comments, in a workflow fixture and
+// in the platform lock's own preamble, each of which a reader reaches.
+// This file is the exception, because it holds the list.
+func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
+	self := "test/consistency/documentation_test.go"
+	for _, file := range tracked(t, ".") {
+		if file == self {
+			continue
+		}
+		body, err := os.ReadFile(repoPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Binary content holds no sentences, and go.sum holds hashes
+		// that a substring match reads as words.
+		if bytes.IndexByte(body, 0) >= 0 || file == "go.sum" {
+			continue
+		}
+		flat := flatten(body)
+		for _, denial := range denials {
+			for _, at := range denial.pattern.FindAllStringIndex(flat, -1) {
+				t.Errorf("%s:%d says there is no release: %s", file,
+					lineOf(string(body), at[0]), strings.Join(strings.Fields(flat[at[0]:at[1]]), " "))
+			}
+		}
+	}
+}
+
+// wrapMarker is what a wrapped claim carries between its words at a line
+// boundary: a comment's continuation prefix in Go, YAML, shell and SQL, a
+// Markdown blockquote's bar, the quotes and comma that separate two
+// entries of a JSON string array, and the quote and plus that join two
+// halves of one Go string literal.
+var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \t]*$|"[ \t]*\+[ \t]*$`)
+
+// flatten is the text with its line breaks and comment markers blanked,
+// so a sentence reads the same whether the author wrapped it or not.
+//
+// A claim inside a comment block carries the next line's marker between
+// its words — "// " in Go, "# " in YAML and shell, "-- " in SQL — which
+// is enough for every multi-word pattern to miss it, and comments are
+// most of what the whole-tree sweep added. A Markdown callout wraps
+// behind "> ", and two entries of a JSON string array are separated by
+// a quote, a comma and another quote. A Go string literal split across
+// lines leaves a quote and a plus. Every replacement is the same length
+// as what it replaces, so an offset into the result is an offset into
+// the file and lineOf still names the right line.
+func flatten(body []byte) string {
+	blanked := wrapMarker.ReplaceAllFunc(body, func(marker []byte) []byte {
+		return bytes.Repeat([]byte{' '}, len(marker))
+	})
+	return strings.ReplaceAll(string(blanked), "\n", " ")
+}
+
+// lineOf is the 1-based line the byte offset falls on.
+func lineOf(body string, offset int) int {
+	return strings.Count(body[:offset], "\n") + 1
 }
 
 func unresolved(file string, number int, target, kind string) string {
@@ -127,13 +286,14 @@ func pathClaim(token string, topLevel map[string]bool) string {
 	return token
 }
 
-// trackedDocs is every Markdown file git knows about, including ones not
-// yet added: a reference is worth checking from the moment it is
+// tracked is every file git knows about matching the patterns, including
+// ones not yet added: a reference is worth checking from the moment it is
 // written.
-func trackedDocs(t *testing.T) []string {
+func tracked(t *testing.T, patterns ...string) []string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", repoPath(), "ls-files", "-co",
-		"--exclude-standard", "--", "*.md").Output()
+	args := append([]string{"-C", repoPath(), "ls-files", "-co",
+		"--exclude-standard", "--"}, patterns...)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
 		t.Fatalf("git ls-files: %v", err)
 	}
@@ -144,7 +304,8 @@ func trackedDocs(t *testing.T) []string {
 		}
 	}
 	if len(files) < 2 {
-		t.Fatalf("the tree holds %d Markdown files, so this proves nothing", len(files))
+		t.Fatalf("the tree holds %d files matching %v, so this proves nothing",
+			len(files), patterns)
 	}
 	return files
 }

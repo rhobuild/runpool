@@ -237,11 +237,6 @@ func TestAdapterDependsOnTheDomainNotTheReverse(t *testing.T) {
 	}
 }
 
-// TestGeneratedPersistenceStaysInsideTheStore: sqlc rows are not domain
-// types, and a coordinator that imports them couples its decisions to a
-// table layout. Only internal/store may see the generated package;
-// everything else talks to repositories that translate raw outcomes
-// into domain errors.
 // importGraph is every package in the module with its direct imports.
 //
 // The pattern is the module's own, never "./...": a test binary runs in
@@ -272,6 +267,11 @@ func importGraph(t *testing.T) map[string][]string {
 	return graph
 }
 
+// TestGeneratedPersistenceStaysInsideTheStore: sqlc rows are not domain
+// types, and a coordinator that imports them couples its decisions to a
+// table layout. Only internal/store may see the generated package;
+// everything else talks to repositories that translate raw outcomes
+// into domain errors.
 func TestGeneratedPersistenceStaysInsideTheStore(t *testing.T) {
 	generated := module + "/internal/store/sqlitedb"
 	for importer, imports := range importGraph(t) {

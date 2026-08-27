@@ -140,9 +140,9 @@ retry budget is what ends that — a failure that repeats is not one more
 retries fix, so the attempt goes to review rather than being served
 without limit.
 
-The schema is one reviewed baseline, not a development history: nothing
-has been released, so `000001_initial` is the whole of it. After the
-first release migrations are forward-only and immutable. There are no
+The schema is one reviewed baseline, not a development history:
+`000001_initial` is the whole of it, and a migration added to it is
+forward-only and immutable. There are no
 down scripts — restoring the backup taken before a migration is the
 rollback, because a down script claims every schema change is
 losslessly reversible and a dropped column is not.

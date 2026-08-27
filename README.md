@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/rhobuild/runpool/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rhobuild/runpool/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/rhobuild/runpool/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/rhobuild/runpool/actions/workflows/codeql.yml)
-[![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.0%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docker Engine](https://img.shields.io/badge/Docker_Engine-%E2%89%A528.0-2496ED?logo=docker&logoColor=white)](docs/reference/support-matrix.md)
 [![SQLite](https://img.shields.io/badge/SQLite-durable_state-003B57?logo=sqlite&logoColor=white)](docs/architecture.md)
 [![License](https://img.shields.io/github/license/rhobuild/runpool)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--release-orange)](docs/release-readiness.md)
+[![Release](https://img.shields.io/github/v/release/rhobuild/runpool)](https://github.com/rhobuild/runpool/releases)
 
 Runpool is a Docker-native control plane for autoscaling ephemeral CI
 runners on a single, capacity-bounded host. It translates provider demand
@@ -14,12 +14,12 @@ into durable assignments, isolated per-job execution capsules, and optional
 repository-scoped cache lanes—without requiring Kubernetes.
 
 > [!IMPORTANT]
-> Runpool is pre-release. No version is supported or release-qualified yet.
-> The controller end-to-end gate is implemented but has not yet run on the
-> release host. The first release still requires that evidence, an external
-> security review, and a successful no-skip release-qualification run on the
-> exact platform frozen before the candidate in
-> [`build/platform.lock.json`](build/platform.lock.json).
+> A version is release-qualified only after a no-skip qualification run on
+> the exact platform frozen before its candidate in
+> [`build/platform.lock.json`](build/platform.lock.json). Each release
+> carries the record that run produced, bound to its commit and to the image
+> digests it publishes; [release readiness](docs/release-readiness.md) lists
+> the gates and the evidence each one leaves.
 
 ## Why Runpool
 
@@ -84,8 +84,9 @@ non-DNS UDP, IPv6, and other ports fail closed. Read the complete
 
 ## Evaluate locally
 
-Prerequisites are Go 1.26.6 and a Linux host with rootful Docker Engine 28.
-The selected release-qualification target and current lock status are documented in the
+Prerequisites are Go 1.26.0 or newer and a Linux host with rootful Docker
+Engine 28.
+The selected release-qualification target is documented in the
 [support matrix](docs/reference/support-matrix.md).
 
 ```bash
@@ -131,8 +132,8 @@ a job gets: its own Docker daemon, and egress through the relay.
 shapes exist, what a runner group has to grant, and which credential to
 use — and the [runbook](docs/runbook.md) covers operating it.
 
-The reference Compose deployment is version-pinned and cannot be used
-until a release exists; the images above are how a source checkout runs.
+The reference Compose deployment requires a released digest and refuses to
+start without one; the images above are how a source checkout runs.
 Do not use a production credential for local experimentation.
 
 ## Deployment
@@ -143,7 +144,7 @@ controller: no domain, reverse-proxy route, or public port is required.
 | Platform | Entry point |
 | --- | --- |
 | Docker Compose | [`deploy/compose/compose.yaml`](deploy/compose/compose.yaml) |
-| A Compose platform | Deploy the canonical Compose file now; a One-Click catalog entry, where the platform has one, follows the first qualified release |
+| A Compose platform | Deploy the canonical Compose file; a platform catalog entry, where the platform has one, derives its template from that same contract |
 
 Read the [deployment guide](docs/deployment.md) before installing. The
 Compose contract reads an operator-managed
@@ -165,7 +166,7 @@ colocated services. Measure that reserve before deployment. Choose
 | [Runbook](docs/runbook.md) | Operations, recovery, backup, GC, and uninstall |
 | [Threat model](docs/security/threat-model.md) | Trust boundary, defences, one known weakness, and accepted exposure |
 | [ADRs](docs/adrs/README.md) | Architectural decisions and measured constraints |
-| [Release readiness](docs/release-readiness.md) | Objective gates for the first release |
+| [Release readiness](docs/release-readiness.md) | The objective gates a release must satisfy |
 
 ## Contributing and security
 

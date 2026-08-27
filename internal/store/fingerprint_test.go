@@ -8,9 +8,39 @@ import (
 	"testing"
 )
 
+// TestTheBaselineIsTheBytesEveryDatabaseRecorded holds the baseline
+// migration to the fingerprint the databases written from it carry.
+//
+// The fingerprint covers each migration's version, name and body, bytes
+// and comments alike, and every schema version's fingerprint covers the
+// baseline's bytes because it is the prefix of them all. Nothing else in
+// the tree notices an edit to that file: it compiles, every suite passes,
+// and the failure arrives at an operator upgrading a release, whose
+// database this build then refuses to open.
+//
+// The constant is not updated. A schema change adds a migration, which
+// extends the set and leaves this prefix alone.
+func TestTheBaselineIsTheBytesEveryDatabaseRecorded(t *testing.T) {
+	const recorded = "db214c9725e7a0e8135abd36ddc2d6dc92db4ec0d29a1bb94e275773c5e33d68"
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) == 0 {
+		t.Fatal("no migration is embedded, so this proves nothing")
+	}
+	if got := schemaFingerprint(migrations[:1]); got != recorded {
+		t.Errorf("000001_initial.up.sql fingerprints as %s, not the %s every "+
+			"database carrying this baseline was stamped from, so this build "+
+			"refuses all of them. Add a migration rather than editing it.",
+			got, recorded)
+	}
+}
+
 // TestSchemaIdentifiedByContentsNotCount is the regression test for a
-// database this build cannot account for while the baseline is still
-// mutable.
+// database this build cannot account for because a migration was edited
+// rather than added.
 //
 // PRAGMA user_version counts migrations, so editing the single reviewed
 // baseline in place leaves an older database reporting the current

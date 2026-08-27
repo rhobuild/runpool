@@ -2,9 +2,10 @@
 
 This states what Runpool defends, what it does not, and why. An auditor
 should be able to disagree with the boundary here rather than guess at
-it. Where a defence is claimed, the evidence for it is named; where the
-evidence is a suite that has not run in release qualification, the claim says
-"tested live", never "release-qualified".
+it. Where a defence is claimed, the evidence for it is named, and the name
+says where that evidence comes from: a hermetic test, a suite run live
+against a real Docker host, or a kernel-level measurement on the reference
+platform.
 
 ## What Runpool is
 
@@ -83,9 +84,9 @@ policy remain necessary in either topology.
 |---|---|---|
 | No state survives a job | Fresh dind data root, workspace and control tmpfs per capsule; the data root is a volume removed with the lease | Capsule contract, live |
 | A leaked runner cannot outlive its job | Ephemeral JIT runner, one job, removed on failure paths too — where the removal can be attempted and is accepted. It is not attempted for a target no longer configured or an attempt with no recorded runner id, and it is not accepted when the provider refuses to deregister one it still considers busy, or answers any other way. In every one of those the runner is left for the provider to expire; the refusal specifically is also what the controller reads as the job having been handed over | Live JIT flow, including removing a runner that never started; the refusal path is table-tested |
-| Provider credentials never enter capsules; JIT state does not persist across jobs | The provider token or App private key remains in the controller. JIT arrives over exec stdin, its files are redirected to tmpfs, and it is absent from Docker configuration, environment, labels, and logs. The upstream runner requires it transiently in argv, visible to the assigned workload | Capsule contract asserts volatile materialization and no log disclosure; controller end-to-end qualification remains required |
+| Provider credentials never enter capsules; JIT state does not persist across jobs | The provider token or App private key remains in the controller. JIT arrives over exec stdin, its files are redirected to tmpfs, and it is absent from Docker configuration, environment, labels, and logs. The upstream runner requires it transiently in argv, visible to the assigned workload | Capsule contract asserts volatile materialization and no log disclosure; the controller end-to-end gate drives the same flow against a real assignment |
 | Cross-repository cache contamination | Lanes are daemon-side named volumes, exclusive per lease, named by opaque ids, reused only for the same repository and generation | Live lane contract: marker persists for the same lane, another generation is blind |
-| Runpool deletes only what it owns | Instance- and lease-scoped ownership labels on every created object; creation recovery and destructive intent cleanup re-inspect ownership before acting; no daemon-wide prune | Foreign-resource contracts pass live; controller E2E asserts unrelated container, network and volume sentinels and still needs release qualification |
+| Runpool deletes only what it owns | Instance- and lease-scoped ownership labels on every created object; creation recovery and destructive intent cleanup re-inspect ownership before acting; no daemon-wide prune | Foreign-resource contracts pass live; the controller E2E asserts unrelated container and network sentinels by exact id, and the volume by name |
 | A crashed controller leaves nothing | Adoption of running capsules, sweep of orphans, singleton flock | Live SIGKILL mid-capsule, successor adopted and cleaned |
 | The host cannot be starved by a job | One envelope per lease, split between the capsule and its egress gateway and placed under one parent cgroup: the capsule's aggregate covers runner, daemon and every inner container; the gateway holds the rest of the same tier, because every connection a job opens is work it performs. The doctor refuses a configuration whose full tiers plus reserve exceed the host, and the validator refuses a tier too small to split | Kernel-proven on the reference host: inner OOM charged to the capsule; both containers report one parent cgroup and their limits sum to the tier; a fork storm in the gateway stops at its own ceiling |
 | The host cannot be filled | Disk monitor probes the daemon's filesystem from inside it; admission closes at the soft floor, fails closed at the hard floor, and GC evicts only free lanes | Pressure transitions table-tested; disk-full behaviour live for both SQLite and containers |
@@ -207,8 +208,11 @@ These are consequences of the design, not oversights:
   contract tests that fail when upstream behaviour drifts.
 - The SQLite driver is CGo-free and covered by a durability suite — WAL
   behaviour, contention, kill-recovery rounds, disk-full on a capped
-  filesystem — that runs against a Linux named volume. No release-qualification
-  record exists yet; the protected release workflow is what will produce one.
+  filesystem — that runs against a Linux named volume. The
+  release-qualification record for a version is produced by the protected
+  release workflow, from the evidence its gates emit: the live and
+  end-to-end suites on the reference host, the upstream provider contracts
+  against real fixtures, and the artifact checksums.
 
 ## What an auditor should attack first
 

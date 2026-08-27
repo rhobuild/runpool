@@ -48,8 +48,8 @@ func TestOpenCreatesSchemaAndStableIdentity(t *testing.T) {
 	}
 }
 
-// The unreleased schema ships as one reviewed baseline. New forward-only
-// migrations begin after the first release.
+// The schema ships as one reviewed baseline, and a migration added to it
+// is forward-only.
 func TestSchemaShipsAsOneReviewedBaseline(t *testing.T) {
 	migrations, err := embeddedMigrations()
 	if err != nil {
@@ -67,7 +67,7 @@ func TestSchemaShipsAsOneReviewedBaseline(t *testing.T) {
 	}
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".sql" && !isUpScript(e.Name()) {
-			t.Errorf("%s: down scripts were removed; restoring the pre-migration backup is the rollback", e.Name())
+			t.Errorf("%s: there are no down scripts; restoring the pre-migration backup is the rollback", e.Name())
 		}
 	}
 }

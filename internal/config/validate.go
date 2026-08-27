@@ -283,7 +283,7 @@ func Validate(c *Config) error {
 	}
 
 	if c.Cache.Storage.Mode != CacheStorageModeVolume {
-		v.errf("cache.storage.mode", "must be %q; the quota-backed bind mode arrives with the advanced storage feature", CacheStorageModeVolume)
+		v.errf("cache.storage.mode", "must be %q; no other mode is implemented", CacheStorageModeVolume)
 	}
 	g := c.Cache.Global
 	if g.LowWatermarkPercent < 1 || g.HighWatermarkPercent > 99 || g.LowWatermarkPercent >= g.HighWatermarkPercent {
@@ -317,7 +317,7 @@ func Validate(c *Config) error {
 	// `enabled: true` would have an operator wire an alert to a port
 	// nothing listens on.
 	if c.Observability.Metrics.Enabled {
-		v.errf("observability.metrics.enabled", "must be false; no metrics endpoint exists yet — capacity, credits and disk pressure are reported by `runpool status` and the structured log")
+		v.errf("observability.metrics.enabled", "must be false; there is no metrics endpoint — capacity, credits and disk pressure are reported by `runpool status` and the structured log")
 	}
 
 	if f := c.Observability.Log.Format; f != LogFormatJSON && f != LogFormatText {

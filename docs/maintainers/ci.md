@@ -26,6 +26,7 @@ that is what decides whether it can run on a pull request at all.
 | `qualify-release` | `validate release inputs` | The ref is a protected tag, the images are digest-qualified, and the standalone candidate is the tag it claims | Hosted |
 | `qualify-release` | `live contracts on the reference host` | Every live suite, without skips, on the reference host | Self-hosted, protected |
 | `qualify-release` | `release-qualification record` | The evidence supports the claim the record makes | Hosted |
+| `release` | `validate release tag` | The version stamped into the binary is publishable, and the changelog's newest section names the tag being released | Hosted |
 | `release` | `capsule candidate`, `controller candidate`, `standalone candidates` | Each platform built on a runner of its own architecture, pushed by digest | Hosted, one leg per platform, protected `release-candidate` |
 | `release` | `capsule index`, `build immutable candidates` | The index serves every platform the run built, and the standalone artifacts exist by checksum | Hosted, protected `release-candidate` |
 | `release` | `attest and publish qualified artifacts` | The record covers this build, the artifacts match their checksums, and the promoted digests are the qualified ones | Hosted, protected `release` |
