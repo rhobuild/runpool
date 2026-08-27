@@ -66,6 +66,36 @@ func TestTheReleaseBuildsEveryPlatformTheLockDeclares(t *testing.T) {
 // platformMatrices returns, for each strategy matrix in the document,
 // the platform values its include entries carry — one slice per matrix,
 // so a leg missing from one cannot be papered over by its sibling.
+// TestTheReleaseAsksWhetherTheChangelogNamesTheTag: the step is the only
+// place a tag is read against the tree, and a workflow it was deleted
+// from looks exactly like one that never carried it.
+//
+// The suite cannot ask the question itself — it never sees a tag — so a
+// release could publish a changelog whose newest section names another
+// version, or none, with every gate green. What is held here is that the
+// question is still asked, and asked of CHANGELOG.md.
+func TestTheReleaseAsksWhetherTheChangelogNamesTheTag(t *testing.T) {
+	body, err := os.ReadFile(repoPath(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow yaml.Node
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatal(err)
+	}
+
+	asked := 0
+	for _, script := range valuesOf(&workflow, "run") {
+		if strings.Contains(script, "CHANGELOG.md") && strings.Contains(script, "VERSION") {
+			asked++
+		}
+	}
+	if asked != 1 {
+		t.Errorf("%d steps in release.yml read CHANGELOG.md against the version; "+
+			"exactly one does, in the job every publishing job descends from", asked)
+	}
+}
+
 func platformMatrices(n *yaml.Node) [][]string {
 	var out [][]string
 	var walk func(*yaml.Node)

@@ -218,7 +218,7 @@ func TestNoDocumentSaysThereIsNoRelease(t *testing.T) {
 // boundary: a comment's continuation prefix in Go, YAML, shell and SQL, a
 // Markdown blockquote's bar, and the quotes and comma that separate two
 // entries of a JSON string array.
-var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \t]*$`)
+var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \t]*$|"[ \t]*\+[ \t]*$`)
 
 // flatten is the text with its line breaks and comment markers blanked,
 // so a sentence reads the same whether the author wrapped it or not.
@@ -228,9 +228,10 @@ var wrapMarker = regexp.MustCompile(`(?m)^[ \t]*(//+|#+|--+|\*|>+|")[ \t]?|",[ \
 // is enough for every multi-word pattern to miss it, and comments are
 // most of what the whole-tree sweep added. A Markdown callout wraps
 // behind "> ", and two entries of a JSON string array are separated by
-// a quote, a comma and another quote. Every replacement is the same
-// length as what it replaces, so an offset into the result is an offset
-// into the file and lineOf still names the right line.
+// a quote, a comma and another quote. A Go string literal split across
+// lines leaves a quote and a plus. Every replacement is the same length
+// as what it replaces, so an offset into the result is an offset into
+// the file and lineOf still names the right line.
 func flatten(body []byte) string {
 	blanked := wrapMarker.ReplaceAllFunc(body, func(marker []byte) []byte {
 		return bytes.Repeat([]byte{' '}, len(marker))

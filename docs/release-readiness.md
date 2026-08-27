@@ -50,8 +50,9 @@ A protected SemVer tag starts the release workflow. The workflow:
 
 1. builds and pushes immutable controller and capsule candidates for that
    commit, and builds the standalone release artifacts once;
-2. qualifies that exact commit, both image digests, and the retained artifact
-   checksums on the reference host;
+2. qualifies that exact commit, both image digests and the retained artifact
+   checksums, running the live and end-to-end suites on the reference host and
+   the remaining gates on hosted runners;
 3. requires hermetic CI, live Docker and provider contracts, and the real
    controller end-to-end workload with no skipped required contract;
 4. creates `release-qualification.json` from the evidence and verifies it
