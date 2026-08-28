@@ -17,14 +17,41 @@ the word "yet", which is a promise with a date nobody set. Closing it
 needed one question answered: what can an operator of one host not find
 out today.
 
-The answer is nothing. Every condition that requires a person is already
-in `status --json` — disk pressure at either emergency level, an attempt
-held for manual review, a binding that has stopped reaching its
-provider, a queue that is not draining while credits are free, a
-disagreement between the books and the daemon, and an unreadable engine.
-It is computed from the store and the configuration by a read-only open,
-not from controller memory, which is why `runpool healthcheck` already
-works the same way.
+Asking it properly took two answers. The first was a list of six
+conditions, and an independent review found two it was missing — which
+is the point of asking rather than asserting.
+
+The answer now is nothing, across seven conditions: disk pressure at
+either emergency level, an attempt held for manual review, a binding
+that has stopped reaching its provider, a queue that is not draining
+while credits are free, a disagreement between the books and the daemon,
+an unreadable engine, and a lease stuck in quarantine. It is computed
+from the store and the configuration by a read-only open, not from
+controller memory, which is why `runpool healthcheck` already works the
+same way.
+
+The two that were missing are worth recording, because one of them was
+not a gap in the list.
+
+A **quarantined lease** was: it is not terminal, so it holds an admission
+credit, and it is deliberately not a discrepancy because the lease is
+live. It is in the document — `leases[].state` — and the first list
+simply did not name it. Worse, a host wedged entirely on quarantined
+leases has no free credits, which is the condition under which "the queue
+is not draining" stays quiet: the worse the wedge, the less the rest of
+the list had to say.
+
+A **binding that cannot persist what it is handed** was a defect in the
+controller, not in the list. The poll that carries a message records
+contact when it succeeds, which is right — the provider answered. But a
+delivery that could not be persisted was left for redelivery, and
+redelivery arrives through another poll, which records contact again. A
+binding wedged that way refreshed its own health forever while nothing it
+was offered became an attempt, so it was not queued either. It read as
+healthy from every angle. The acquisition failure beside it already
+recorded a failure for exactly this reason; its two sibling branches did
+not. They do now, which is what makes this record's claim true rather
+than narrower.
 
 What an operator cannot do is *be interrupted* by any of it. That is a
 delivery problem, and one the host solves — a timer, an exit status, and

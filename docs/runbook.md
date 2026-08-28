@@ -33,8 +33,8 @@ report that the controller is running rather than acting behind it.
 There is no metrics endpoint and no exporter, by decision — see
 [the record](adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 `runpool status --json` is the machine-readable account, and it carries
-an `api_version` so a script that reads it is written once. Six
-conditions are the ones that need a person, and all six are in that
+an `api_version` so a script that reads it is written once. Seven
+conditions are the ones that need a person, and all seven are in that
 document:
 
 | Condition | Where it shows | Why it needs a person |
@@ -45,6 +45,7 @@ document:
 | A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
 | The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
 | An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
+| A lease stuck in quarantine | `leases[].state` | An object the daemon will not remove; it is not a discrepancy, because the lease is live — and it holds an admission credit, so a host wedged this way loses capacity silently |
 
 This prints one line per condition and nothing at all when there is
 nothing to look at, which is what makes it a cron job: `cron` mails the
@@ -67,6 +68,9 @@ docker compose exec -T controller runpool status --json | jq -r '
          "the container engine is unreadable: \(.engine_error)" else empty end),
       (if ((.scheduling.queued // 0) > 0 and (.scheduling.available // 0) > 0) then
          "\(.scheduling.queued) queued with \(.scheduling.available) free: the queue is not draining"
+       else empty end),
+      (if ([.leases[]? | select(.state == "quarantined")] | length) > 0 then
+         "\([.leases[]? | select(.state == "quarantined")] | length) lease(s) stuck in quarantine, each holding a credit"
        else empty end)
     ] | .[]
   end'
@@ -80,6 +84,13 @@ Two things it deliberately does not report. A queue with no free credits
 is a busy instance, not a stuck one. And a binding that failed and then
 reconnected is a binding that recovered, which is why the comparison is
 against `last_contact_at` rather than the presence of an error.
+
+The quarantine check earns its place by covering the first one's blind
+spot. A quarantined lease is not terminal, so it counts toward `active`
+and reduces `available` — and a host wedged entirely on quarantined
+leases has `available` at zero, which is exactly the condition under
+which "the queue is not draining" stays quiet. Without this line, the
+worse the wedge, the less the check has to say about it.
 
 Where the output goes is the host's to decide: mail from `cron`, a
 systemd timer's failure state, a ping to whatever the machine already
