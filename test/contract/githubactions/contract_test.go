@@ -149,10 +149,20 @@ func ensureSet(t *testing.T, gh *githubactions.Client, name string) githubaction
 // deletion, even when the test fails midway.
 func createScaleSet(t *testing.T, c *scaleset.Client, group *scaleset.RunnerGroup, name string) *scaleset.RunnerScaleSet {
 	t.Helper()
-	created, err := c.CreateRunnerScaleSet(testCtx(t), &scaleset.RunnerScaleSet{
+	return createScaleSetWith(t, c, &scaleset.RunnerScaleSet{
 		Name:          name,
 		RunnerGroupID: group.ID,
 	})
+}
+
+// createScaleSetWith creates the scale set as described and registers the
+// same deletion. It takes the whole request because the label tests vary
+// a field createScaleSet does not name, and a second copy of the cleanup
+// is a second place for a live fixture to be left behind.
+func createScaleSetWith(t *testing.T, c *scaleset.Client, spec *scaleset.RunnerScaleSet) *scaleset.RunnerScaleSet {
+	t.Helper()
+	name := spec.Name
+	created, err := c.CreateRunnerScaleSet(testCtx(t), spec)
 	if err != nil {
 		t.Fatalf("create scale set %q: %v", name, err)
 	}

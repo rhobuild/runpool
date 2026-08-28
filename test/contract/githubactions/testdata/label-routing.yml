@@ -1,0 +1,59 @@
+# Fixture workflow for the label-routing experiment. Install it in the
+# fixture repository as .github/workflows/label-routing.yml; the suite
+# verifies the installed copy is byte-identical to this one before
+# dispatching, so an edited fixture fails loudly instead of measuring a
+# contract this file no longer describes.
+#
+# It exists to answer one question GitHub documents for runners in
+# general and not for scale sets: whether a job asking for a set of
+# labels reaches a scale set that carries those labels and more. The
+# workflow syntax says a job runs on "any runner that matches all of the
+# specified runs-on values"; whether a scale set is matched that way, and
+# what happens when two of them are, is not written down anywhere.
+#
+# `runs-on` is an array here, which is the whole point, and it comes from
+# an input for the same reason identity.yml's single label does: the
+# suite's scale sets carry random names, and a fixed label would send
+# every concurrent run to whichever set happened to hold it.
+name: label-routing
+
+# The correlation id surfaces in the run's display title, which is the
+# only dispatch-visible field the runs API returns. It is how the suite
+# finds the exact run it created -- and cancels only that one.
+run-name: "label-routing ${{ inputs.correlation_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_labels:
+        description: JSON array of labels this run must be assigned by
+        required: true
+        type: string
+      correlation_id:
+        description: Run-scoped id tying this run to one suite execution
+        required: true
+        type: string
+
+# One run at a time per repository, as identity.yml: the suite reasons
+# about which assignment is its own by listening to the scale sets it
+# created, and overlapping runs would put two jobs in flight at once.
+concurrency:
+  group: label-routing-fixture-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  probe:
+    # An array, evaluated from the input. A string here would measure
+    # single-label routing, which identity.yml already covers.
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    # The suite reads which session was offered the job and cancels the
+    # run; no runner is ever started for it. The timeout bounds what an
+    # abandoned run costs if the cancellation does not land.
+    timeout-minutes: 5
+    steps:
+      - name: Report the labels this job was assigned by
+        run: |
+          echo "run_id=${{ github.run_id }}"
+          echo "correlation=${{ inputs.correlation_id }}"
