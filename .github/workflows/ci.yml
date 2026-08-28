@@ -57,6 +57,9 @@ jobs:
           # The exact toolchain from go.mod's toolchain directive, not
           # the latest patch: a reproducible build pins the compiler.
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Verify formatting
         # gofmt -l prints offenders and exits zero, so the check has to
         # look at the output rather than the status.
@@ -162,6 +165,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Lint the workflows
         # Pinned in go.mod like every other gate: a linter resolved at
         # run time changes what passes without anyone deciding to.
@@ -213,6 +219,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Scan for known vulnerabilities
         # The scanner is pinned in go.mod and run with `go tool`: a gate
         # that resolves @latest at run time cannot be reproduced, and a
@@ -231,7 +240,7 @@ jobs:
       - name: Build the controller image
         # Built but not pushed: publishing is a release decision, and a
         # pull request must never be able to publish.
-        run: docker build -f build/controller/Dockerfile -t runpool:ci .
+        run: scripts/ci/retry.sh docker build -f build/controller/Dockerfile -t runpool:ci .
       - name: Verify the runtime layer carries no shell
         run: |
           if docker run --rm --entrypoint sh runpool:ci -c true 2>/dev/null; then

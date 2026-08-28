@@ -38,6 +38,10 @@ type Snapshot struct {
 	// Pressure is the disk monitor's last persisted verdict; nil until
 	// the monitor has run once.
 	Pressure *PressureInfo
+	// Sandbox is the egress sandbox's last rediscovery pass; nil until
+	// one has completed, and nil for the whole life of an instance that
+	// maintains no policy at all.
+	Sandbox *SandboxPass
 }
 
 // BindingInfo reports one configured source of work in neutral terms.
@@ -142,6 +146,10 @@ func (s *Store) Snapshot() (Snapshot, error) {
 			return err
 		}
 		snap.Pressure, err = tx.Pressure()
+		if err != nil {
+			return err
+		}
+		snap.Sandbox, err = tx.SandboxPass()
 		return err
 	})
 	return snap, err

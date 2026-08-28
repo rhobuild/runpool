@@ -7,6 +7,17 @@ a version speaks for are listed in
 
 ## Unreleased
 
+### Isolation and egress
+
+- **An egress sandbox that closed itself says so.** Rediscovery runs every
+  five minutes, and a pass it cannot complete closes every gateway on the
+  host to all egress — the right answer to a policy that cannot be shown to
+  be current, and also every running job losing its network at once, for as
+  long as discovery keeps failing. The same failure refuses to let `serve`
+  start at all; once running, the only account of it was a line in the
+  controller's log. `runpool status --json` now carries `egress_sandbox`
+  with the last pass's time and, when it failed, why.
+
 ### Operations
 
 - **A release page says what changed.** The body carried the qualified commit
@@ -16,6 +27,34 @@ a version speaks for are listed in
   gate checked, carried from the step that checked them rather than read a
   second time — and follows with the digest to deploy, the grouped detail, and
   the provenance and the command that verifies it.
+- **A capsule that died before it could explain itself now carries what it
+  said.** An operator's own capsule image is built by deriving from the
+  published one, and the published one stays root deliberately: the
+  supervisor is PID 1, boots the inner Docker daemon, and drops the runner
+  to uid 1001 itself. A derived image ending `USER runner` cannot write the
+  root-owned control surface the launcher mounts for it — so it cannot write
+  the abort that would have said so either, and every attempt on that tier
+  was held with an exit code and the words "the capsule image and this
+  controller are not a pair", which sends an operator to re-check a digest
+  that was correct. The reason was in the container's log the whole time,
+  and the refusal now quotes it — in the controller's log, where the
+  refusal is reported. What the held attempt itself records is unchanged:
+  still `capsule_incompatible`, so `runpool attempts` reads as before.
+- **A step that fetches over the network is tried again when it fails.**
+  Four release cycles were lost to services answering badly and nothing
+  asking twice — a digest verification that could not reach Docker Hub, a
+  base image fetched through a 502, a module proxy that reset mid-download,
+  and a push accepted layer by layer and then called an unknown blob — each
+  costing a manual re-run, one of them after the tag was already cut. Every
+  build, push, pull and index assembly goes through the retry, and so does
+  the module download each job now does once, so the builds and the tests
+  that follow it work from a warm cache. Three reaches are still asked
+  once, and naming them is the point: a step that is an action rather than
+  a command — the SBOM scan and the attestations — which is not a command
+  line to wrap; `docker login`, whose token arrives on a pipe the first
+  attempt consumes; and `govulncheck`, which fetches its vulnerability
+  index on every run and would, if retried, print two spurious attempts
+  over a real finding.
 - **A binding that cannot persist what its provider hands it no longer
   reports as healthy.** The poll that carries a message records contact when
   it succeeds, and a delivery that could not be persisted was left for

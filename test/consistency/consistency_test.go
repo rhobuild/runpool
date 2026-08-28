@@ -436,3 +436,80 @@ func TestTheDeploymentSaysWhichHealthModeItWires(t *testing.T) {
 		t.Error("deployment.md says the reference asks for liveness only; compose.yaml also wires readiness")
 	}
 }
+
+// registryCommand matches a command that reaches a registry.
+//
+// The four that do: a build fetches its base image, a push and a pull
+// speak to it by definition, and imagetools reads and writes manifests.
+// `docker image inspect` is local and absent on purpose.
+var registryCommand = regexp.MustCompile(`docker (build|push|pull) |docker buildx imagetools `)
+
+// TestEveryRegistryCommandIsRetried: four release cycles were lost to
+// registries answering badly, and nothing asked twice.
+//
+// A digest verification that could not reach Docker Hub, a base image
+// fetched through a 502, a module proxy that reset the stream mid-download,
+// and a push GHCR accepted layer by layer and then called an unknown blob.
+// None was a fault here, and each cost a maintainer a manual re-run of a
+// tagged release — one of them after the tag had already been cut.
+//
+// The helper is bounded and blind: deciding which failures deserve another
+// attempt means matching a registry's wording, which changes without
+// telling anyone. What this holds is that a command reaching a registry
+// goes through it, because the next one added is the one that will not.
+func TestEveryRegistryCommandIsRetried(t *testing.T) {
+	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workflows) == 0 {
+		t.Fatal("no workflow runs anything, so this proves nothing")
+	}
+
+	const helper = "scripts/ci/retry.sh"
+	info, err := os.Stat(repoPath(helper))
+	if err != nil {
+		t.Fatalf("%s is missing, and every workflow calls it: %v", helper, err)
+	}
+	// Present is not enough. The workflows invoke it as a path, not
+	// through an interpreter, so a helper that lost its execute bit --
+	// which a checkout preserves and an editor or a patch can drop --
+	// exists, reads correctly, and fails every step that calls it.
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("%s is not executable (mode %v); every step calling it would fail to start",
+			helper, info.Mode().Perm())
+	}
+
+	found := 0
+	for _, workflow := range workflows {
+		body, err := os.ReadFile(workflow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document yaml.Node
+		if err := yaml.Unmarshal(body, &document); err != nil {
+			t.Errorf("parse %s: %v", rel(workflow), err)
+			continue
+		}
+		for _, script := range valuesOf(&document, "run") {
+			for _, line := range strings.Split(script, "\n") {
+				// Anywhere on the line, wrapped or not: a pattern that
+				// only matched an unwrapped command would find none once
+				// they all are, and its own vacuity guard would fire.
+				// Comments name these commands while explaining them.
+				if trimmed := strings.TrimSpace(line); !registryCommand.MatchString(line) ||
+					strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				found++
+				if !strings.Contains(line, helper) {
+					t.Errorf("%s reaches a registry without %s:\n    %s",
+						rel(workflow), helper, strings.TrimSpace(line))
+				}
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no workflow reaches a registry, so this proves nothing")
+	}
+}

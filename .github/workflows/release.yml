@@ -82,6 +82,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
+
       - name: Verify the version stamped into the artifact
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -233,8 +236,8 @@ jobs:
           CANDIDATE: ${{ needs.version.outputs.candidate }}
         run: |
           arch=${PLATFORM#*/}
-          docker build -f build/capsule/Dockerfile -t "${NAME}:${CANDIDATE}-${arch}" .
-          docker push "${NAME}:${CANDIDATE}-${arch}"
+          scripts/ci/retry.sh docker build -f build/capsule/Dockerfile -t "${NAME}:${CANDIDATE}-${arch}" .
+          scripts/ci/retry.sh docker push "${NAME}:${CANDIDATE}-${arch}"
           reference=$(docker image inspect --format '{{index .RepoDigests 0}}' \
             "${NAME}:${CANDIDATE}-${arch}")
           case "$reference" in
@@ -294,8 +297,8 @@ jobs:
           # The controller embeds this one reference: the daemon resolves
           # the matching child at pull time, so one exact digest is
           # correct for every architecture.
-          docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
-          digest=$(docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
+          scripts/ci/retry.sh docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
+          digest=$(scripts/ci/retry.sh docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
             --format '{{json .Manifest.Digest}}' | tr -d '"')
           case "$digest" in
             sha256:*) ;;
@@ -314,7 +317,7 @@ jobs:
           # architecture and are skipped rather than counted as a
           # platform nobody asked for.
           template='{{range .Manifest.Manifests}}{{if .Platform}}{{if ne .Platform.Architecture "unknown"}}{{.Platform.Architecture}} {{end}}{{end}}{{end}}'
-          published=$(docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
+          published=$(scripts/ci/retry.sh docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
             | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')
           if [ "$built" != "$published" ]; then
             echo "the index serves [$published]; this run built [$built]"
@@ -358,11 +361,11 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           arch=${PLATFORM#*/}
-          docker build -f build/controller/Dockerfile \
+          scripts/ci/retry.sh docker build -f build/controller/Dockerfile \
             --build-arg "VERSION=${VERSION}" \
             --build-arg "CAPSULE_IMAGE=${CAPSULE_IMAGE}" \
             -t "${NAME}:${CANDIDATE}-${arch}" .
-          docker push "${NAME}:${CANDIDATE}-${arch}"
+          scripts/ci/retry.sh docker push "${NAME}:${CANDIDATE}-${arch}"
           reference=$(docker image inspect --format '{{index .RepoDigests 0}}' \
             "${NAME}:${CANDIDATE}-${arch}")
           case "$reference" in
@@ -404,6 +407,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
 
       - name: Build this platform's standalone binary
         # Built and then run on the architecture it is for. A binary
@@ -466,6 +472,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
+
       - name: Download the per-platform digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -496,8 +505,8 @@ jobs:
             set -- "$@" "${NAME}@$(cat "$file")"
           done
           [ "$#" -gt 0 ] || { echo "no platform digest to index"; exit 1; }
-          docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
-          digest=$(docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
+          scripts/ci/retry.sh docker buildx imagetools create --tag "${NAME}:${CANDIDATE}" "$@"
+          digest=$(scripts/ci/retry.sh docker buildx imagetools inspect "${NAME}:${CANDIDATE}" \
             --format '{{json .Manifest.Digest}}' | tr -d '"')
           case "$digest" in
             sha256:*) ;;
@@ -516,7 +525,7 @@ jobs:
           # architecture and are skipped rather than counted as a
           # platform nobody asked for.
           template='{{range .Manifest.Manifests}}{{if .Platform}}{{if ne .Platform.Architecture "unknown"}}{{.Platform.Architecture}} {{end}}{{end}}{{end}}'
-          published=$(docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
+          published=$(scripts/ci/retry.sh docker buildx imagetools inspect "${NAME}@${digest}" --format "$template" \
             | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')
           if [ "$built" != "$published" ]; then
             echo "the index serves [$published]; this run built [$built]"
@@ -584,6 +593,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
+
       - name: Download the release-qualification record
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -633,8 +645,8 @@ jobs:
             candidate=$1
             name=$2
             digest=${candidate#*@}
-            docker buildx imagetools create --tag "${name}:${VERSION}" "$candidate" >&2
-            promoted=$(docker buildx imagetools inspect "${name}:${VERSION}" \
+            scripts/ci/retry.sh docker buildx imagetools create --tag "${name}:${VERSION}" "$candidate" >&2
+            promoted=$(scripts/ci/retry.sh docker buildx imagetools inspect "${name}:${VERSION}" \
               --format '{{json .Manifest.Digest}}' | tr -d '"')
             if [ "$promoted" != "$digest" ]; then
               echo "promoted digest differs from the qualified candidate"

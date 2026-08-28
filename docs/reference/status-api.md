@@ -15,8 +15,10 @@ them under the wrong schema.
 - **Collections are always arrays.** An empty one is `[]`, never
   `null`, so a consumer branches on length rather than presence.
 - **`null` means absent, not empty.** `disk_pressure` is `null` before
-  the monitor has run once; `discrepancies` is `null` when the daemon
-  could not be reached, which is different from finding none.
+  the monitor has run once; `egress_sandbox` is `null` before the first
+  rediscovery pass and for the whole life of an instance that maintains
+  no policy; `discrepancies` is `null` when the daemon could not be
+  reached, which is different from finding none.
 
 ## The two forms, and their discriminator
 
@@ -53,6 +55,7 @@ absent state, because the attempt it was asked about cannot exist.
 | `schema_version` | number | The state schema in use |
 | `scheduling` | object, optional | Present when status can read configuration: `mode`, `instance_parallelism`, `effective_parallelism`, `active`, `available`, `queued`, and `tiers[]` |
 | `disk_pressure` | object or null | `level`, `free_bytes`, `free_inodes`, `managed_bytes`, `measured_at` |
+| `egress_sandbox` | object or null | `last_pass_at`, and `error` when the last rediscovery failed. A non-empty `error` means every gateway on this host is closed to all egress; a `last_pass_at` that has stopped moving means the pass itself has stopped running |
 | `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, and the provider reach fields below |
 | `leases` | array | `id`, `state`, `terminal`, `attempt_id`, `project`, `runtime_name`, `evidence`, `created_at`, `resources[]`. Every live lease, plus recent finished ones — see below |
 | `leases[].resources` | array | What the lease owns on the daemon: `kind`, `role`, `name`, `lease_id`, and `state` — one of `planned`, `creating`, `present`, `cleanup_pending`, `deleting`, which is the books' account of the object rather than the daemon's |

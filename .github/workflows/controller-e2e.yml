@@ -57,6 +57,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
+
       - name: Verify the fixture configuration is complete
         env:
           ORGANIZATION: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}
@@ -112,7 +115,7 @@ jobs:
               *@sha256:*) ;;
               *) echo "candidate references must be digest-qualified"; exit 1 ;;
             esac
-            docker pull "$image"
+            scripts/ci/retry.sh docker pull "$image"
           done
 
       - name: Drive a real controller workload
