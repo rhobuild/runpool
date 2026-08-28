@@ -247,7 +247,8 @@ runpool attempts resolve <id> --retry --reason "..." --actor "<name>" --apply
 ```
 
 ```bash
-runpool attempts resolve <id> --settle-may-have-run --reason "..." --actor "<name>" --apply
+runpool attempts resolve <id> --settle-may-have-run \
+  --reason "..." --actor "<name>" --apply
 ```
 
 `--retry` returns the attempt to the queue; use it when the evidence
@@ -364,7 +365,8 @@ docker volume ls --filter name=runpool
 ```
 
 ```bash
-docker run --rm -v runpool_runpool-state:/state:ro busybox tar -czf - -C /state . > runpool-state-backup.tgz
+docker run --rm -v runpool_runpool-state:/state:ro busybox \
+  tar -czf - -C /state . > runpool-state-backup.tgz
 ```
 
 ```bash
