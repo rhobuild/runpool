@@ -7,6 +7,17 @@ a version speaks for are listed in
 
 ## Unreleased
 
+### Isolation and egress
+
+- **An egress sandbox that closed itself says so.** Rediscovery runs every
+  five minutes, and a pass it cannot complete closes every gateway on the
+  host to all egress — the right answer to a policy that cannot be shown to
+  be current, and also every running job losing its network at once, for as
+  long as discovery keeps failing. The same failure refuses to let `serve`
+  start at all; once running, the only account of it was a line in the
+  controller's log. `runpool status --json` now carries `egress_sandbox`
+  with the last pass's time and, when it failed, why.
+
 ### Operations
 
 - **A release page says what changed.** The body carried the qualified commit

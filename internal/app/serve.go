@@ -400,7 +400,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	loops.Add(1)
 	go func() {
 		defer loops.Done()
-		s.netSandbox.Watch(ctx)
+		s.netSandbox.Watch(ctx, s.recordSandboxPass)
 	}()
 	for _, b := range s.bindings {
 		loops.Add(1)
