@@ -9,6 +9,13 @@ a version speaks for are listed in
 
 ### Operations
 
+- **A release page says what changed.** The body carried the qualified commit
+  and the two image digests and nothing else, so the page every reader reaches
+  a version from answered what exactly this is and never answered what is in
+  it. It now opens with the changelog entry for the tag — the same bytes the
+  gate checked, carried from the step that checked them rather than read a
+  second time — and follows with the digest to deploy, the grouped detail, and
+  the provenance and the command that verifies it.
 - **A binding that cannot persist what its provider hands it no longer
   reports as healthy.** The poll that carries a message records contact when
   it succeeds, and a delivery that could not be persisted was left for
