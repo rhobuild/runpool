@@ -60,8 +60,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/atomicfile"
 	"github.com/rhobuild/runpool/internal/capsule/protocol"
-	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 const (

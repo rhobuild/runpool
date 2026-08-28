@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhobuild/runpool/internal/platform/atomicfile"
+	"github.com/rhobuild/runpool/internal/atomicfile"
 )
 
 // TestParseAuthority is the strictest surface in the gateway: this
