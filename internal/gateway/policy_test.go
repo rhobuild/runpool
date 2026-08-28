@@ -196,13 +196,9 @@ func TestAConcurrentInstallLeavesAPolicyInForce(t *testing.T) {
 			return next, next.Validate()
 		}, noKernel)
 	}
-	denyAll := func() error {
-		return installPolicyWith(dir, func(current egress.Policy, _ bool) (egress.Policy, error) {
-			next := current
-			next.Allow, next.Deny = nil, []string{"0.0.0.0/0"}
-			return next, nil
-		}, noKernel)
-	}
+	// The builder DenyAll uses, not a copy of it: a second one is free to
+	// stay correct while the shipped one stops being.
+	denyAll := func() error { return installPolicyWith(dir, denyAllSuccessor, noKernel) }
 
 	var wg sync.WaitGroup
 	for i := range 16 {
@@ -556,5 +552,97 @@ func TestAnOversizedPolicyIsRefusedNotTruncated(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("error = %q; it has to name the bound rather than fail parsing the truncation", err)
+	}
+}
+
+// TestDenyAllDropsTheAllowListItInherits: the deny set is not what makes
+// it deny.
+//
+// The decider reads the allow list first and returns on a hit, so an
+// allow entry carried forward from the policy in force stays reachable
+// under a deny of the whole address space. The successor drops it, and
+// nothing said so: the sibling builder nine lines up copies the current
+// policy and overwrites one field, which is the shape a unification of
+// the two would take, and it would readmit the operator's own ranges at
+// the one moment the controller has already decided it cannot trust the
+// policy in force.
+func TestDenyAllDropsTheAllowListItInherits(t *testing.T) {
+	inForce := egress.Policy{
+		InternalSubnet: "10.90.0.0/24",
+		UplinkSubnet:   "10.91.0.0/24",
+		Allow:          []string{"93.184.216.0/24"},
+		Deny:           []string{"10.0.0.0/8"},
+	}
+	allowed := netip.MustParseAddr("93.184.216.34")
+
+	before, err := inForce.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.Allowed(allowed) {
+		t.Fatalf("the fixture does not allow %s, so this proves nothing", allowed)
+	}
+
+	next, err := denyAllSuccessor(inForce, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := next.Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Allowed(allowed) {
+		t.Errorf("%s is still reachable after deny-all; the allow list outranks the deny set, "+
+			"so a policy that carries one forward denies nothing it had permitted", allowed)
+	}
+
+	// The legs survive: a gateway whose own subnets were dropped cannot
+	// relay at all, which is dying rather than denying.
+	if next.InternalSubnet != inForce.InternalSubnet || next.UplinkSubnet != inForce.UplinkSubnet {
+		t.Errorf("deny-all changed the gateway's own subnets to %q/%q; it must deny, not disconnect",
+			next.InternalSubnet, next.UplinkSubnet)
+	}
+}
+
+// TestAPolicyIsNotWrittenWhenTheKernelRefusesIt: the file the relay reads
+// must never advance past the ruleset.
+//
+// installPolicy applies to the kernel before writing, so a capsule never
+// sees a window where a newly denied destination is still reachable
+// through the relay. The refusal path was covered for a successor that
+// fails to build; a kernel that refuses one that built fine was not.
+func TestAPolicyIsNotWrittenWhenTheKernelRefusesIt(t *testing.T) {
+	dir := t.TempDir()
+	first := egress.Policy{
+		InternalSubnet: "10.90.0.0/24", UplinkSubnet: "10.91.0.0/24",
+		Deny: []string{"10.0.0.0/8"},
+	}
+	if err := installPolicyWith(dir, func(egress.Policy, bool) (egress.Policy, error) {
+		return first, nil
+	}, func(egress.Policy) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	refused := errors.New("iptables-restore: permission denied")
+	err := installPolicyWith(dir, func(current egress.Policy, _ bool) (egress.Policy, error) {
+		next := current
+		next.Deny = []string{"0.0.0.0/0"}
+		return next, nil
+	}, func(egress.Policy) error { return refused })
+	if !errors.Is(err, refused) {
+		t.Fatalf("a refused ruleset returned %v; the caller cannot know the gateway is unchanged", err)
+	}
+
+	// What the relay reads has to be the policy the kernel is still
+	// enforcing, so an address the first one permits must still pass.
+	// Had the refused successor been written, nothing would.
+	got, err := (&PolicyStore{Path: PolicyPath(dir)}).Current()
+	if err != nil {
+		t.Fatalf("the refused install removed the policy in force: %v", err)
+	}
+	permitted := netip.MustParseAddr("93.184.216.34")
+	if !got.Allowed(permitted) {
+		t.Errorf("%s is refused after a ruleset the kernel rejected; the relay advanced past "+
+			"what is enforced, which is the window the ordering exists to close", permitted)
 	}
 }
