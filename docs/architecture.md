@@ -28,7 +28,7 @@ cmd/capsule-supervisor           pid 1 inside a capsule: boots the runner,
     -> internal/gateway          the egress relay's server, proxy, DNS and firewall
     -> internal/egress
 
-internal/platform/githubactions  the provider adapter
+internal/githubactions           the provider adapter
 internal/engine                  the container engine Runpool asks for
 internal/engine/docker           the Moby adapter
 ```
@@ -47,7 +47,7 @@ product: a gate that links into what it gates is a gate measuring itself.
 
 The arrow never points from lifecycle or state domains to a provider. An
 architecture test enforces it: core packages may not depend on
-`internal/platform/githubactions` or on the provider SDK, directly or
+`internal/githubactions` or on the provider SDK, directly or
 transitively. `internal/app` is deliberately exempt because injecting the
 adapter is its job -- which is why the egress policy lifecycle lives in
 `internal/netsandbox` rather than beside it: a security decision belongs

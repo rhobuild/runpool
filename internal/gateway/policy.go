@@ -11,8 +11,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/rhobuild/runpool/internal/atomicfile"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // MaxPolicyBytes bounds a policy document. The real one is a few
