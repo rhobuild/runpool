@@ -62,6 +62,15 @@ jobs:
     needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      # The section this step read, split where the release page wants
+      # it: the entry's opening summary, and the grouped detail under
+      # it. Carried from here rather than read again in the publishing
+      # job, so the bytes published are the bytes the gate accepted --
+      # a second read could take a section from a heading nobody
+      # checked against the tag.
+      lead: ${{ steps.changelog.outputs.lead }}
+      detail: ${{ steps.changelog.outputs.detail }}
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,11 +90,13 @@ jobs:
           /tmp/runpool-version version --check-release
 
       - name: Verify the changelog names this release
+        id: changelog
         # Only a tag push releases. A dispatch stamps v0.0.0-dry-run,
         # which no changelog section names and none should.
         if: github.event_name == 'push'
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          DELIM: RUNPOOL_CHANGELOG_SECTION
         run: |
           # The version exists only on the tag, so this is the only gate
           # that can ask this. The step above asks the binary about its
@@ -108,6 +119,57 @@ jobs:
               ;;
           esac
           echo "the changelog names ${VERSION}"
+
+          # The same heading, not the version matched a second time:
+          # $heading is the line the case above accepted, so what is
+          # published is what was checked. Print between it and the next
+          # heading -- the whole entry, and nothing from the release
+          # before it.
+          section=$(awk -v h="$heading" '
+            $0 == h { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md)
+
+          # Every entry opens with a paragraph saying what the release
+          # is, then groups the detail under `###` headings. They go to
+          # different places on the release page: the summary above the
+          # deployment instructions a reader came for, the groups below
+          # them. An entry with no groups is all summary, which is what
+          # a release with one kind of change looks like.
+          lead=$(printf '%s\n' "$section" | awk '/^### / { exit } { print }')
+          detail=$(printf '%s\n' "$section" | awk '/^### / { on = 1 } on { print }')
+          # The heading travels with the groups rather than sitting in
+          # the body template, so an entry that has none contributes an
+          # empty string instead of a heading with nothing under it.
+          if [ -n "$(printf '%s' "$detail" | tr -d '[:space:]')" ]; then
+            detail=$(printf '## What changed\n\n%s\n' "$detail")
+          fi
+
+          emit() {
+            # Blank lines at either end only. A body opening on an empty
+            # line renders as one on the release page.
+            value=$(printf '%s\n' "$2" | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;};/\n$/ba')
+            # A delimiter occurring in the value would end it early and
+            # leave the remainder parsed as further outputs.
+            if printf '%s\n' "$value" | grep -qx "$DELIM"; then
+              echo "the changelog section contains the delimiter this step writes with" >&2
+              exit 1
+            fi
+            {
+              echo "$1<<$DELIM"
+              printf '%s\n' "$value"
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          if [ -z "$(printf '%s' "$lead" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md heading \"${heading}\" has no summary under it" >&2
+            exit 1
+          fi
+          emit lead "$lead"
+          emit detail "$detail"
+          echo "the release page carries $(printf '%s\n' "$section" | wc -l) lines of changelog"
 
   # One platform per runner, natively. Every base image these build from
   # is pinned to an index digest that publishes both, so an arm64 runner
@@ -482,7 +544,7 @@ jobs:
 
   publish:
     name: attest and publish qualified artifacts
-    needs: [candidate, qualify, version]
+    needs: [candidate, qualify, validate, version]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -636,10 +698,50 @@ jobs:
             dist/capsule.sbom.spdx.json
             qualification/release-qualification.json
           body: |
-            Release-qualified commit: `${{ github.sha }}`
+            ${{ needs.validate.outputs.lead }}
 
-            Controller: `${{ steps.promote.outputs.controller_reference }}`
+            ## Deploy this release
 
-            Capsule: `${{ steps.promote.outputs.capsule_reference }}`
+            Point the Compose deployment at this controller digest and recreate
+            the container:
+
+            ```bash
+            RUNPOOL_IMAGE=${{ steps.promote.outputs.controller_reference }}
+            ```
+
+            The controller carries the capsule digest below stamped into it and
+            refuses any other, so there is one image to set. Read the
+            [deployment guide](https://github.com/rhobuild/runpool/blob/${{ needs.version.outputs.version }}/docs/deployment.md)
+            before a first installation, and
+            [the runbook](https://github.com/rhobuild/runpool/blob/${{ needs.version.outputs.version }}/docs/runbook.md)
+            before moving an existing one.
+
+            ${{ needs.validate.outputs.detail }}
+
+            ---
+
+            ## Provenance
+
+            | | |
+            | --- | --- |
+            | Release-qualified commit | `${{ github.sha }}` |
+            | Controller | `${{ steps.promote.outputs.controller_reference }}` |
+            | Capsule | `${{ steps.promote.outputs.capsule_reference }}` |
+
+            Publication runs only after qualification passed against these exact
+            digests, so an attestation signed here says more than that GitHub
+            built it. Verify a digest before it reaches a deployment:
+
+            ```bash
+            gh attestation verify oci://${{ steps.promote.outputs.controller_reference }} \
+              --repo ${{ github.repository }} \
+              --signer-workflow ${{ github.repository }}/.github/workflows/release.yml \
+              --source-ref refs/tags/${{ needs.version.outputs.version }} \
+              --deny-self-hosted-runners
+            ```
+
+            Attached: standalone `linux/amd64` and `linux/arm64` binaries with
+            `checksums.txt`, an SBOM for each image, and the qualification
+            record this release was authorized against.
           draft: true
           fail_on_unmatched_files: true
