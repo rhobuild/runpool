@@ -36,6 +36,7 @@ func TestTheRetryHelperNeverPassesWithoutRunning(t *testing.T) {
 		pause    string
 		exit     int // the status the wrapped command exits with
 		noArgs   bool
+		notFound bool
 		wantExit int
 		wantRuns int
 	}{
@@ -53,6 +54,17 @@ func TestTheRetryHelperNeverPassesWithoutRunning(t *testing.T) {
 		"a pause that is not a number refuses":      {pause: "soon", exit: 0, wantExit: 2, wantRuns: 0},
 		"no command at all refuses rather than 0":   {noArgs: true, wantExit: 2, wantRuns: 0},
 		"a leading zero is read as base ten, not 8": {attempts: "08", exit: 0, wantExit: 0, wantRuns: 1},
+		"a negative count refuses":                  {attempts: "-1", exit: 0, wantExit: 2, wantRuns: 0},
+		"a negative pause refuses":                  {pause: "-1", exit: 0, wantExit: 2, wantRuns: 0},
+		"a pause past the bound refuses":            {pause: "301", exit: 0, wantExit: 2, wantRuns: 0},
+		"a pause that would wrap refuses":           {pause: "99999999999999999999", exit: 0, wantExit: 2, wantRuns: 0},
+		"a command that is not there is a real failure, not a pass": {
+			// exit 127 travels like any other nonzero status. It is here
+			// because a helper that swallowed it would look exactly like
+			// one that ran the command -- the same confusion as the three
+			// bugs above, arriving from the command's side.
+			notFound: true, wantExit: 127, wantRuns: 0,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The wrapped command records every invocation, so "did it
@@ -64,6 +76,9 @@ func TestTheRetryHelperNeverPassesWithoutRunning(t *testing.T) {
 				"echo ran >> "+ledger+"; exit "+strconv.Itoa(tc.exit))
 			if tc.noArgs {
 				cmd = exec.Command(helper)
+			}
+			if tc.notFound {
+				cmd = exec.Command(helper, "sh", "-c", "definitely-not-a-command-here")
 			}
 			cmd.Env = append(os.Environ(), "RETRY_PAUSE=0")
 			if tc.attempts != "" {

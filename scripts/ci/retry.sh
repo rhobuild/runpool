@@ -80,6 +80,15 @@ pause=$((10#$pause))
 if [ "$attempts" -lt 1 ] || [ "$attempts" -gt 10 ]; then
   echo "retry: RETRY_ATTEMPTS must be between 1 and 10, not $attempts" >&2; exit 2
 fi
+# The pause is bounded for the same reason, and it is bounded here rather
+# than left alone because leaving one of the two unchecked is the shape
+# this file has already been wrong in three times. It cannot cause the
+# false success -- attempt one runs before any pause -- but an absurd
+# value stops a job dead after a single retry, and arithmetic that wraps
+# silently is not something to leave a step's liveness resting on.
+if [ "$pause" -gt 300 ]; then
+  echo "retry: RETRY_PAUSE must be at most 300 seconds, not $pause" >&2; exit 2
+fi
 
 for attempt in $(seq 1 "$attempts"); do
   # The status comes from the else branch, not from after the if: a
