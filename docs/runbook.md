@@ -382,9 +382,35 @@ by design, and the next job recreates them cold.
 instance identity, the schema and the audit trail come back with it;
 `runpool status` on the restored volume is the verification.
 
-**Upgrade.** Stop the controller, back up (above), start the new
-version: it migrates the schema forward on open and refuses to serve if
-it cannot.
+**Upgrade.** The platform performs it: point the deployment at the new
+digest and recreate the container. Nothing about the state moves by hand.
+
+```bash
+docker compose exec controller runpool version --json   # what is running now
+docker compose stop controller
+```
+
+Back up before the schema can move (above), then set `RUNPOOL_IMAGE` to
+the new release's digest — verify it first, `deployment.md` covers how —
+and start it:
+
+```bash
+docker compose up -d controller
+docker compose exec controller runpool version --json
+docker compose exec controller runpool status
+```
+
+`version --json` names the capsule it is paired with, and `status` reports
+the schema it opened. Those two answers are the upgrade: the controller
+migrates the schema forward on open and refuses to serve if it cannot.
+
+Two things the platform must not do. **Do not start the new controller
+before the old one has stopped** — the singleton lock refuses the second,
+and with `restart: unless-stopped` that is a crash loop until the first
+releases. Rolling and zero-downtime strategies are off. And **a release
+that moves the capsule control protocol needs every derived
+`tiers[].capsuleImage` rebuilt from the new published capsule**, or the
+tiers using them hold their attempts as `capsule_incompatible`.
 
 Runpool identifies a schema by its contents, not by how many migrations
 produced it, so a database written from migrations this build does not
@@ -397,9 +423,42 @@ directory, named `pre-migration-v<version>.db` and never overwritten —
 a retried upgrade gets `pre-migration-v<version>.1.db` rather than
 destroying the copy taken before the attempt that broke things.
 
-**Rollback** is restoring a pre-upgrade backup and starting the previous
-version. Runpool has no down migrations: a schema change is not assumed to
-be losslessly reversible, and restore also covers an upgrade that failed
+**Rollback.** Say which case you are in first, because two of the three
+need no restore.
+
+*The release moved no schema.* Point `RUNPOOL_IMAGE` back at the previous
+digest and recreate. Nothing else: both builds read that database.
+`runpool status` before rolling back tells you — if its schema version is
+the one the old build wrote, this is the case you are in.
+
+*The schema moved.* The old build refuses the database by name rather
+than failing later, so the state has to go back too. Either restore the
+archive taken above, or use the copy the migration took:
+
+```bash
+docker compose stop controller
+docker run --rm -v runpool_runpool-state:/state busybox sh -c \
+  'cd /state && rm -f runpool.db runpool.db-wal runpool.db-shm \
+   && mv pre-migration-v1.db runpool.db'
+# set RUNPOOL_IMAGE back to the previous digest, then:
+docker compose up -d controller
+docker compose exec controller runpool status
+```
+
+All three files, not just the database. The write-ahead log and the
+shared-memory file beside it belong to the schema that was running when
+they were written, and a restored database opened next to them is read
+through the wrong one.
+
+*Either way, a restore forfeits what was accepted after the copy was
+taken.* Leases created under the new version are absent from the
+restored books, so their capsules are labelled and unowned, and the
+previous controller's sweep removes them: those jobs die and the provider
+sees failed runs. If a rollback must not lose work, stop admitting before
+upgrading rather than after.
+
+Runpool has no down migrations: a schema change is not assumed to be
+losslessly reversible, and a restore also covers an upgrade that failed
 half-way.
 
 Nothing prunes those copies. Each is a full copy of the state database,
