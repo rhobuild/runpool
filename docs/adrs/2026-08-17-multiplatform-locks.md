@@ -1,6 +1,6 @@
 # A lock records the platforms that were qualified, not the only one that works
 
-**Status:** accepted and implemented
+**Status:** implemented
 **Date:** 2026-08-17
 
 `build/platform.lock.json` carries a single `policy.arch`, so one lock

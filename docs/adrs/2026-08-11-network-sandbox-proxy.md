@@ -1,6 +1,7 @@
 # Plain L3 routing over a Docker internal network is rejected
 
-**Status:** accepted; implemented by [the egress relay](2026-08-13-egress-relay.md)
+**Status:** implemented
+**Implemented by:** [the egress relay](2026-08-13-egress-relay.md)
 **Date:** 2026-08-11
 **Scope:** rejects one topology — direct L3 routing across an `internal`
 bridge — not transparent sandboxing as such. Finding 3 below is the

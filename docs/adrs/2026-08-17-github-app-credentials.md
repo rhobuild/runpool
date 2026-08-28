@@ -1,6 +1,6 @@
 # A deployment authenticates as a GitHub App, not only as a person
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-17
 
 `credentials[].type` accepts `token` and nothing else, and the adapter

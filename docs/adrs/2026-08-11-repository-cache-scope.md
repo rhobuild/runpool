@@ -1,6 +1,6 @@
 # Persistent cache binds to repository-scoped scale sets only
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-11
 
 ## Context

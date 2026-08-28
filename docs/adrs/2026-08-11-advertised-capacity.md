@@ -1,6 +1,7 @@
 # Advertised capacity is a total, and zero is forever
 
-**Status:** accepted; allocation refined by [admission credits](2026-08-13-admission-credits.md)
+**Status:** amended
+**Amended by:** [admission credits](2026-08-13-admission-credits.md), which refined how allocation is decided
 **Date:** 2026-08-11
 
 ## Context

@@ -1,6 +1,6 @@
 # A resolution reaches the writer
 
-**Status:** accepted and implemented
+**Status:** implemented
 **Date:** 2026-08-27
 
 The controller listens on a unix socket inside its state directory —

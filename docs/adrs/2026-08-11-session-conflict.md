@@ -1,7 +1,7 @@
 # A crashed controller's broker session must be waited out
 
-**Status:** accepted; its retry deadline superseded by
-[the session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md)
+**Status:** amended
+**Amended by:** [the session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md), which replaced its retry deadline
 **Date:** 2026-08-11
 
 ## Context

@@ -1,6 +1,6 @@
 # Scheduling uses explicit parallelism and provider-neutral resource units
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-14
 
 ## Context

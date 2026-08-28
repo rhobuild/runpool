@@ -1,8 +1,6 @@
 # The session wait has no deadline; what changes is what it reports
 
-**Status:** accepted, supersedes one consequence of
-[session conflict](2026-08-11-session-conflict.md)
-
+**Status:** implemented
 **Date:** 2026-08-20
 
 ## Context

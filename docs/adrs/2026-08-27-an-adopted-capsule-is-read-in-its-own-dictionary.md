@@ -1,6 +1,6 @@
 # An adopted capsule is read in its own dictionary
 
-**Status:** accepted and implemented
+**Status:** implemented
 **Date:** 2026-08-27
 
 A controller confirms a running capsule's control protocol before it

@@ -1,6 +1,6 @@
 # Capsule egress is a relay, not a route
 
-**Status:** accepted and implemented
+**Status:** implemented
 **Date:** 2026-08-13
 **Supersedes:** the routed-gateway topology
 

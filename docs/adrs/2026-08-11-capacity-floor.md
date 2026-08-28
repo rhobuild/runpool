@@ -1,6 +1,7 @@
 # A zero-capacity binding cannot discover queued demand
 
-**Status:** superseded by [admission credits](2026-08-13-admission-credits.md)
+**Status:** superseded
+**Superseded by:** [admission credits](2026-08-13-admission-credits.md)
 **Date:** 2026-08-11
 
 ## Context
