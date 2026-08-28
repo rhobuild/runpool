@@ -57,6 +57,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
+
       - name: Verify the fixture configuration is complete
         env:
           ORGANIZATION: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}

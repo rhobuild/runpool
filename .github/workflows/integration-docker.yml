@@ -81,6 +81,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Report the host contract
         # The suite asserts against this host, so what it was is part of
         # the record: engine, cgroup driver and security options.
@@ -112,6 +115,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Build the capsule image from the pinned inputs
         run: scripts/ci/retry.sh docker build -f build/capsule/Dockerfile -t runpool-capsule:dev .
       - name: Run the capsule, egress and budget contracts
@@ -147,6 +153,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Run the lifecycle drills
         # The runbook's procedures, executed rather than described:
         # every step asserts its outcome against the real image and a
@@ -170,6 +179,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch modules
+        run: scripts/ci/retry.sh go mod download
       - name: Run the durability suite on a named volume
         # The state database lives on a named volume in production, so
         # it is tested on one here: WAL behaviour, contention, and

@@ -9,12 +9,19 @@ a version speaks for are listed in
 
 ### Operations
 
-- A command that reaches a registry is tried again when it fails. Four
-  release cycles were lost to registries answering badly and nothing asking
-  twice — a digest verification that could not reach Docker Hub, a base image
-  fetched through a 502, a module proxy that reset mid-download, and a push
-  accepted layer by layer and then called an unknown blob — each costing a
-  manual re-run, one of them after the tag was already cut.
+- **A step that fetches over the network is tried again when it fails.**
+  Four release cycles were lost to services answering badly and nothing
+  asking twice — a digest verification that could not reach Docker Hub, a
+  base image fetched through a 502, a module proxy that reset mid-download,
+  and a push accepted layer by layer and then called an unknown blob — each
+  costing a manual re-run, one of them after the tag was already cut. Every
+  build, push, pull and index assembly goes through the retry, and so does
+  the module download each job now does once, so the builds and the gates
+  that follow it work from a warm cache and reach nothing. What is still
+  asked once: a step that is an action rather than a command — the SBOM
+  scan and the attestations — which is not a command line to wrap, and
+  `docker login`, whose token arrives on a pipe that the first attempt
+  consumes.
 
 ## v1.1.0 — 2026-08-28
 

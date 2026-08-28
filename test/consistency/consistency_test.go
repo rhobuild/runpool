@@ -467,8 +467,17 @@ func TestEveryRegistryCommandIsRetried(t *testing.T) {
 	}
 
 	const helper = "scripts/ci/retry.sh"
-	if _, err := os.Stat(repoPath(helper)); err != nil {
+	info, err := os.Stat(repoPath(helper))
+	if err != nil {
 		t.Fatalf("%s is missing, and every workflow calls it: %v", helper, err)
+	}
+	// Present is not enough. The workflows invoke it as a path, not
+	// through an interpreter, so a helper that lost its execute bit --
+	// which a checkout preserves and an editor or a patch can drop --
+	// exists, reads correctly, and fails every step that calls it.
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("%s is not executable (mode %v); every step calling it would fail to start",
+			helper, info.Mode().Perm())
 	}
 
 	found := 0
