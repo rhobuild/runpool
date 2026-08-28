@@ -169,3 +169,78 @@ func platformMatrices(n *yaml.Node) [][]string {
 	walk(n)
 	return out
 }
+
+// TestTheReleaseBodyCarriesTheChangelog: a release page is where the
+// version is read from, and for most readers it is the only page they
+// will open. A body carrying provenance and nothing else answers "what
+// exactly is this" and never answers "what changed", which is what the
+// reader came for.
+//
+// The failure this pins is silent, which is why it needs pinning: an
+// expression reaching a job the publishing job does not directly depend
+// on is not an error in GitHub Actions. It is the empty string. Drop
+// `validate` from the needs list and every gate stays green, the release
+// publishes, and the section is simply gone -- with the workflow still
+// reading exactly as though it carried one.
+func TestTheReleaseBodyCarriesTheChangelog(t *testing.T) {
+	var workflow struct {
+		Jobs map[string]struct {
+			Needs yaml.Node `yaml:"needs"`
+			Steps []struct {
+				Uses string            `yaml:"uses"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	body, err := os.ReadFile(repoPath(".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatal(err)
+	}
+
+	var bodies []string
+	var publishing string
+	for name, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if !strings.HasPrefix(step.Uses, "softprops/action-gh-release@") {
+				continue
+			}
+			bodies = append(bodies, step.With["body"])
+			publishing = name
+		}
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("%d steps publish a GitHub release; exactly one does", len(bodies))
+	}
+
+	// The changelog travels as job outputs. Which job produced them is
+	// read from the expression rather than assumed, so the reachability
+	// check below is against the job the body actually names.
+	source := ""
+	for _, field := range []string{"lead", "detail"} {
+		want := "needs.NAME.outputs." + field
+		found := ""
+		for name := range workflow.Jobs {
+			if strings.Contains(bodies[0], strings.Replace(want, "NAME", name, 1)) {
+				found = name
+			}
+		}
+		if found == "" {
+			t.Fatalf("the release body interpolates no %s output from any job; "+
+				"the page would publish without the changelog's %s", field, field)
+		}
+		if source != "" && found != source {
+			t.Fatalf("the release body takes lead from %q and detail from %q; "+
+				"one section split across two readings is two sections", source, found)
+		}
+		source = found
+	}
+
+	if !slices.Contains(needsOf(workflow.Jobs[publishing].Needs), source) {
+		t.Errorf("the release body reads outputs of %q, which %q does not directly "+
+			"depend on; the expression resolves to the empty string and the release "+
+			"publishes with no changelog and no error", source, publishing)
+	}
+}
