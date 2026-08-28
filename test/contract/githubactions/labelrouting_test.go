@@ -23,7 +23,28 @@ const (
 	// test. Both outcomes are answers, so the bound decides how long an
 	// answer takes rather than whether one arrives.
 	routingWindow = 90 * time.Second
+
+	// The budget for everything before the measurement: reading the
+	// installed fixture, resolving the runner group, creating the scale
+	// set, opening a session, dispatching, and polling for the run the
+	// dispatch created -- which is allowed a minute on its own. testCtx's
+	// ninety seconds would leave that minute sharing the rest with four
+	// network calls and no slack, and while a shortfall there is now a
+	// loud failure rather than a wrong answer, it is still a red run that
+	// measured nothing. The identity suite budgets the same one-minute
+	// ceiling inside ten minutes, for the same reason.
+	routingSetup = 5 * time.Minute
 )
+
+// routingCtx is the budget for setting an experiment up. It is separate
+// from the measurement window, which takes its own clock, so nothing
+// spent here can shorten the observation that decides the answer.
+func routingCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), routingSetup)
+	t.Cleanup(cancel)
+	return ctx
+}
 
 // TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor is the
 // experiment that decides whether runpool can ever serve more than one
@@ -52,7 +73,7 @@ func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 	repo := requireEnv(t, envRepoA)
 	c := newClient(t, url, token)
 	rest := newRESTClient(token)
-	ctx := testCtx(t)
+	ctx := routingCtx(t)
 
 	verifyLabelRoutingFixture(t, ctx, rest, repo)
 
@@ -125,7 +146,7 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 	repo := requireEnv(t, envRepoA)
 	c := newClient(t, url, token)
 	rest := newRESTClient(token)
-	ctx := testCtx(t)
+	ctx := routingCtx(t)
 
 	verifyLabelRoutingFixture(t, ctx, rest, repo)
 
