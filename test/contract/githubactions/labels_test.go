@@ -35,11 +35,11 @@ func TestScaleSetSystemLabel(t *testing.T) {
 // is decided by the configuration. Serving several labels instead would
 // move that decision into GitHub's matcher, and the matcher's rules are
 // published in fragments: the workflow syntax says a job runs on "any
-// runner that matches all of the specified runs-on values", the ARC
-// 0.14.0 announcement says a scale set may carry several labels, and the
-// concepts page still says it may carry one. Nothing states what happens
-// when two sets both match, or whether a set keeps answering to its own
-// name once it has been given labels.
+// runner that matches all of the specified runs-on values", and the ARC
+// 0.14.0 announcement says a scale set may carry several labels. What
+// none of them states is whether a scale set is matched by that rule,
+// what happens when two sets both match, or whether a set keeps
+// answering to its own name once it has been given labels.
 //
 // Each test states the behaviour observed, so a failure is upstream
 // having changed and is worth a maintainer's attention either way. The

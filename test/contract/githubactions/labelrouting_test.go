@@ -34,8 +34,7 @@ const (
 // the configuration decides which tier serves a job. Labels would move
 // that decision into GitHub's matcher -- and the rule is published for
 // runners in general ("any runner that matches all of the specified
-// runs-on values") and nowhere for scale sets, whose concepts page still
-// says they carry one label at all.
+// runs-on values") and nowhere for scale sets.
 //
 // If the rule is the general one, then a tier labelled {a, b, c} answers
 // a job asking for {a, b}, two tiers whose labels overlap both answer,
@@ -98,7 +97,7 @@ func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 		}
 	})
 
-	if offered := waitForAnyJob(t, ctx, session, routingWindow); offered {
+	if offered := waitForAnyJob(t, session, routingWindow); offered {
 		t.Errorf("a job asking for %v was offered to a scale set carrying %v. "+
 			"A scale set is matched on holding all of the requested labels, not on "+
 			"carrying exactly them -- so two tiers whose labels overlap both answer "+
@@ -163,7 +162,7 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 		}
 	})
 
-	if waitForAnyJob(t, ctx, session, routingWindow) {
+	if waitForAnyJob(t, session, routingWindow) {
 		t.Logf("a scale set given labels still answers to its own name: existing "+
 			"`runs-on: %s` workflows would survive a tier being given labels", name)
 		return
@@ -178,9 +177,16 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 // the window closed. Both answers are the measurement, so a window that
 // closes is not a failure here -- unlike messagePoller, which is used
 // where an assignment is the contract and its absence is a broken one.
-func waitForAnyJob(t *testing.T, ctx context.Context, session *scaleset.MessageSessionClient, within time.Duration) bool {
+func waitForAnyJob(t *testing.T, session *scaleset.MessageSessionClient, within time.Duration) bool {
 	t.Helper()
-	deadline, cancel := context.WithTimeout(ctx, within)
+	// Its own clock, deliberately not the caller's. Setting up costs
+	// real time -- finding the dispatched run is allowed a minute of
+	// polling on its own -- and a window carved out of an already-ticking
+	// budget shrinks by however long that took. Here silence is the
+	// answer that means "exact matching", so a window that quietly
+	// closed early would not fail: it would report a measurement, and
+	// the wrong one.
+	deadline, cancel := context.WithTimeout(t.Context(), within)
 	defer cancel()
 	for {
 		msg, err := session.GetMessage(deadline, 0, 2)
@@ -218,6 +224,15 @@ func requireEnv(t *testing.T, name string) string {
 	t.Helper()
 	v := os.Getenv(name)
 	if v == "" {
+		// The same refusal target() makes, and for the same reason: this
+		// suite's contract is that it cannot be skipped while
+		// qualifying. A gate that only skips would let a release attest
+		// a routing rule nothing measured -- which is worse here than
+		// elsewhere, because the answer these tests produce is what
+		// decides whether a tier can be selected by label at all.
+		if os.Getenv(envQualify) != "" {
+			t.Fatalf("release qualification requires %s; the label-routing experiment cannot be skipped", name)
+		}
 		t.Skipf("%s not set; the label-routing experiment needs a fixture repository", name)
 	}
 	return v

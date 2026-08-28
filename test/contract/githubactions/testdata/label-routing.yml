@@ -49,8 +49,11 @@ jobs:
     # single-label routing, which identity.yml already covers.
     runs-on: ${{ fromJSON(inputs.runner_labels) }}
     # The suite reads which session was offered the job and cancels the
-    # run; no runner is ever started for it. The timeout bounds what an
-    # abandoned run costs if the cancellation does not land.
+    # run by id; no runner is ever started for it. That cancellation is
+    # the backstop, not this timeout -- `timeout-minutes` bounds a job
+    # that is running, and in the outcome this fixture exists to detect
+    # the job is never assigned at all. The timeout covers only the case
+    # where something did pick it up.
     timeout-minutes: 5
     steps:
       - name: Report the labels this job was assigned by
