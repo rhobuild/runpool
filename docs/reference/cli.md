@@ -38,6 +38,11 @@ flag list.
 answers with a document in every case it can reach, including the one
 before this instance has ever run.
 
+`attempts inspect` is the exception, and the reason is that it is asked
+about one row: before this instance has run there is no state to hold
+one, so it fails naming the absent directory rather than answering with a
+document about an attempt that cannot exist.
+
 **One document is a versioned contract**: `status --json` carries an
 `api_version` and is specified in [the status API
 reference](status-api.md). The other `--json` outputs — `version`,

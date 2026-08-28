@@ -310,15 +310,21 @@ decision, it is stuck on an object. Clear the obstruction and the
 periodic reconciler converges the lease on its own, without a restart.
 
 ```bash
-docker compose exec controller runpool status
+docker compose exec controller runpool status --json
 ```
 
-The `discrepancies` the report lists are where the books and the daemon
-disagree, and a quarantined lease's resources are named in its own entry.
+`--json`, because the objects are what you need and only that form names
+them: `leases[].resources[]` carries each one's kind, name and state,
+while the text report gives a count. Nor will they be in
+`discrepancies` — that list is for objects belonging to no live lease,
+and a quarantined lease is live.
+
 Find why the daemon will not remove the object — a container still
 running, a volume still mounted, a network with an endpoint attached —
 and remove the reason. The next reconciliation pass retries the release
-and the credit comes back.
+and the credit comes back. That pass runs about once a minute, and only
+takes a lease nothing has touched for two minutes, so a quarantine that
+clears is not instant: give it a few minutes before looking again.
 
 A quarantined lease is never swept as an orphan and never pruned by
 retention: both would take the resources of a job that may still be

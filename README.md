@@ -113,8 +113,12 @@ elsewhere; from source, this tag is the pairing.
 Then a configuration, a credential, and the state directory:
 
 ```bash
-RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token RUNPOOL_HOST_TOPOLOGY=dedicated-daemon RUNPOOL_STATE_DIR=/var/lib/runpool/state ./runpool doctor
+RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token RUNPOOL_HOST_TOPOLOGY=dedicated-daemon RUNPOOL_STATE_DIR="$PWD/state" ./runpool doctor
 ```
+
+`RUNPOOL_STATE_DIR` is `$PWD/state` here rather than the default
+`/var/lib/runpool/state`, which the deployed controller uses from inside
+its container and which a shell on the host cannot create without root.
 
 `doctor` proves the host and the credential, and prints the `runs-on`
 label for every tier it would serve. Then `./runpool serve`, and a
