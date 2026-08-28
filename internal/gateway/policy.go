@@ -196,16 +196,32 @@ func Reload(controlDir string, r io.Reader) error {
 // "narrower", it is merely older, and a subnet that appeared since is
 // reachable under it.
 func DenyAll(controlDir string) error {
-	return installPolicy(controlDir, func(current egress.Policy, inForce bool) (egress.Policy, error) {
-		if !inForce {
-			return egress.Policy{}, errNoPolicyInForce
-		}
-		return egress.Policy{
-			InternalSubnet: current.InternalSubnet,
-			UplinkSubnet:   current.UplinkSubnet,
-			Deny:           []string{"0.0.0.0/0"},
-		}, nil
-	})
+	return installPolicy(controlDir, denyAllSuccessor)
+}
+
+// denyAllSuccessor is the policy DenyAll installs, built once.
+//
+// What makes it deny everything is not the deny set: the decider reads
+// the allow list first and returns on a hit, so an allow entry carried
+// forward from the policy in force would still be reachable under a deny
+// of the whole address space. Dropping it is the property, and a
+// successor built by copying the current policy and overwriting Deny --
+// which is how the sibling above builds one, and how this was written
+// twice, once here and once in a test -- keeps it.
+//
+// It is a function so there is one of it. The exported entry point
+// applies to the kernel, which a hermetic test cannot do, so the test
+// that raced this against a reload held a second copy of the builder:
+// correct, and free to stay correct while this one stopped being.
+func denyAllSuccessor(current egress.Policy, inForce bool) (egress.Policy, error) {
+	if !inForce {
+		return egress.Policy{}, errNoPolicyInForce
+	}
+	return egress.Policy{
+		InternalSubnet: current.InternalSubnet,
+		UplinkSubnet:   current.UplinkSubnet,
+		Deny:           []string{"0.0.0.0/0"},
+	}, nil
 }
 
 // installPolicy is the part both paths share: read what is in force,
