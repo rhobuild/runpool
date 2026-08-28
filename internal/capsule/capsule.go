@@ -486,14 +486,15 @@ func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
 //
 // It exists because the capsule that cannot start is usually the capsule
 // that cannot say so. An image whose configured user is not root fails
-// at boot -- first creating the daemon's socket directory under a
-// root-owned /run, then writing the protocol file into the root-owned
-// tmpfs this launcher mounts -- and then fails again writing the abort
-// that would have explained either, because that goes to the same
-// unwritable tmpfs and its error is discarded. What is left is a
-// container that exited 79, from which the only account is "not a pair",
-// sending an operator to re-check a digest that was correct. The reason
-// was in the container log the whole time, and nothing read it.
+// at boot on its first real write -- creating the daemon's socket
+// directory under a root-owned /run, which returns before the protocol
+// write into the control tmpfs is ever reached -- and then fails a
+// second time writing the abort that would have explained it, onto that
+// same tmpfs this launcher mounts root-owned, where the error is
+// discarded too. What is left is a container that exited 79, from which
+// the only account is "not a pair", sending an operator to re-check a
+// digest that was correct. The reason was in the container log the whole
+// time, and nothing read it.
 //
 // Best effort by construction: this runs on a path that is already
 // failing, and a log that cannot be read must not replace the error that
