@@ -561,3 +561,56 @@ func TestTheReaperDeliversEachTrackedExitOnce(t *testing.T) {
 // tracked channel never fires. The production process has one; the test
 // process gets one.
 var testReaper = sync.OnceValue(newReaper)
+
+// TestTheFailureExitCarriesTheStateItWasGiven: the code the controller
+// reads must say what the state already decided, and never decide it
+// again.
+//
+// ClassifyExit reads the reserved code as the account that the runner
+// never started, and an attempt with that account returns to the queue.
+// So an abort reported for a failure that happened after fork/exec runs
+// a workload a second time — a deploy, a publish — with no review entry
+// and nobody asked. The reverse holds a job that never ran for a person,
+// which is a delay.
+//
+// The decision belongs to terminalFailure, which makes it from the one
+// fact only the supervisor has: whether `running` was written. This
+// carries that decision out; the two used to be made separately, from a
+// typed value and from the prefix of the string built out of it.
+func TestTheFailureExitCarriesTheStateItWasGiven(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		state protocol.State
+		want  int
+	}{
+		{"a failure before the runner was handed the job is an abort",
+			protocol.State(protocol.AbortedPrefix + "dockerd never became ready"), exitAborted},
+		{"a failure after it is not",
+			protocol.State(protocol.FailedPrefix + "the runner was killed"), 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := failureExit(c.state); got != c.want {
+				t.Errorf("failureExit(%q) = %d; want %d", c.state, got, c.want)
+			}
+		})
+	}
+}
+
+// TestTheExitAgreesWithTerminalFailure holds the two together: whatever
+// terminalFailure decides from the running state, the exit reports.
+// Testing failureExit alone would let the pair drift while each half
+// stayed correct on its own.
+func TestTheExitAgreesWithTerminalFailure(t *testing.T) {
+	handedOver := terminalFailure(protocol.StateRunning, errors.New("killed"))
+	if got := failureExit(handedOver); got == exitAborted {
+		t.Errorf("a failure with %q reported the abort code; the controller reads that as "+
+			"a job that never started and returns it to the queue", handedOver)
+	}
+	for _, before := range []protocol.State{protocol.StateWaiting, protocol.StateStarting, ""} {
+		never := terminalFailure(before, errors.New("dockerd never became ready"))
+		if got := failureExit(never); got != exitAborted {
+			t.Errorf("a failure from %q exited %d; the runner was never handed the job, "+
+				"and anything but the abort code settles it as one that ran", before, got)
+		}
+	}
+}
