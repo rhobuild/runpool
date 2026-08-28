@@ -75,8 +75,8 @@ docker compose exec -T controller runpool status --json | jq -r '
                            and (now - (.created_at | fromdateiso8601)) > 1800)
          | "lease \(.id) has been \(.state) for over 30m and still holds a credit"),
       (.leases[]? | select(.terminal == false
-                           and (now - (.created_at | fromdateiso8601)) > 43200)
-         | "lease \(.id) has been live for over 12h in state \(.state)"),
+                           and (now - (.created_at | fromdateiso8601)) > 608400)
+         | "lease \(.id) has been live for over a week in state \(.state)"),
       (if ((now - ((.disk_pressure.measured_at // "1970-01-01T00:00:00Z") | fromdateiso8601)) > 900) then
          "the disk was last measured at \(.disk_pressure.measured_at // "never"), so the level below is that old"
        else empty end),
@@ -111,10 +111,18 @@ and the next one will not be on any list written today. So the first
 check is "not terminal, not running work, and older than thirty
 minutes" — thirty because a capsule's whole preparation is bounded at
 fifteen, so nothing healthy sits in any other state that long. The second
-is "not terminal and older than twelve hours", which is above the
-eight-hour default job ceiling and catches a lease that outlived it in
-any state at all, `workload_running` included. **Raise the twelve hours
-if any tier sets a longer `jobTimeout`.**
+is "not terminal and older than a week", which catches a lease that
+outlived its ceiling in any state at all, `workload_running` included.
+
+A week rather than something tighter, and the reason is the point: the
+default ceiling is eight hours, but `jobTimeout` is per-tier and the
+validator accepts up to `168h`. A bound derived from the default would
+fire on every healthy job of any tier legally configured above it —
+anchoring to the default instead of to the limit is precisely the mistake
+the rest of this section exists to avoid. So it anchors to the limit, and
+is a backstop rather than a tight bound: the thirty-minute check does the
+real work, and this one says only that something has outlived any ceiling
+this configuration could have permitted.
 
 The disk check is that reasoning applied to a measurement rather than a
 state. `disk_pressure.level` is rewritten only by a measurement that
