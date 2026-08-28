@@ -12,6 +12,10 @@
 *.db
 *.db-shm
 *.db-wal
+# Except the released-schema fixture, which is test input rather than
+# somebody's state: it is what a database v1.0.0 wrote, kept so the first
+# migration meets one it did not write before an operator's does.
+!internal/store/testdata/*.db
 
 # OS noise
 .DS_Store
