@@ -16,7 +16,7 @@ import (
 
 const (
 	module  = "github.com/rhobuild/runpool"
-	adapter = module + "/internal/platform/githubactions"
+	adapter = module + "/internal/githubactions"
 	// upstream is the provider SDK itself; only the adapter and its
 	// contract suite may see it.
 	upstream = "github.com/actions/scaleset"
@@ -75,10 +75,10 @@ var narrowDeps = map[string][]string{
 	// other rule here -- so the vocabulary every layer shares would learn
 	// configuration, or the clientless port would learn persistence, and
 	// the suite would say the architecture still holds.
-	module + "/internal/assignment":          {},
-	module + "/internal/capsule/protocol":    {},
-	module + "/internal/platform/atomicfile": {},
-	module + "/internal/egress":              {},
+	module + "/internal/assignment":       {},
+	module + "/internal/capsule/protocol": {},
+	module + "/internal/atomicfile":       {},
+	module + "/internal/egress":           {},
 	// The capsule supervisor is PID 1 beside the job, and the gateway it
 	// starts is the process that decides what that job reaches. What it
 	// links is what an escape finds already loaded: the engine adapter
@@ -95,7 +95,7 @@ var narrowDeps = map[string][]string{
 	module + "/cmd/capsule-supervisor": {
 		module + "/internal/capsule/protocol",
 		module + "/internal/gateway",
-		module + "/internal/platform/atomicfile",
+		module + "/internal/atomicfile",
 	},
 	// The port names what a container engine does and holds no client.
 	module + "/internal/engine": {module + "/internal/assignment"},
@@ -182,7 +182,7 @@ var narrowDeps = map[string][]string{
 	module + "/internal/gateway": {
 		module + "/internal/capsule/protocol",
 		module + "/internal/egress",
-		module + "/internal/platform/atomicfile",
+		module + "/internal/atomicfile",
 	},
 }
 

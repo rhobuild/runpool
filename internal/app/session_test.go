@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/githubactions"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 
