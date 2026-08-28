@@ -40,6 +40,11 @@ const (
 	// controlDir is the tmpfs control surface, declared at creation so
 	// nothing under it can reach a disk or a Docker-persisted field.
 	controlDir = "/run/runpool"
+
+	// Enough for the supervisor's own account of why it stopped, which is
+	// the last thing it logs, without pasting a boot transcript into an
+	// error an operator reads at a glance.
+	logTailLines = 5
 	// protocolFile is where the supervisor writes the version of the
 	// control protocol it speaks, at boot, before it is asked anything.
 	protocolFile = controlDir + "/protocol"
@@ -200,7 +205,7 @@ func (m *Launcher) create(ctx context.Context, rec ResourceRecorder, kind engine
 }
 
 // capsuleDaemon is the daemon as a capsule needs it, declared here
-// rather than by the adapter: what this package may know is the eleven
+// rather than by the adapter: what this package may know is the twelve
 // operations a capsule is built from, and a seam is what lets the
 // refusals be asked for. A live daemon cannot be told to be absent, to
 // be unreachable, or to refuse a container that is already running, and
@@ -219,6 +224,7 @@ type capsuleDaemon interface {
 	ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error)
 	OwnedIDByName(ctx context.Context, kind engine.ObjectKind, name string,
 		instanceID assignment.InstanceID, leaseID assignment.LeaseID) (string, error)
+	TailLogs(ctx context.Context, id string, lines int) (string, error)
 }
 
 // Launcher builds capsules. It holds no per-capsule state: everything a
@@ -454,8 +460,8 @@ func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
 			// fallback awaitState carries for the same shape.
 			if state, serr := m.dock.ContainerStatus(ctx, outerID); serr == nil &&
 				state.Status != engine.StatusRunning {
-				return fmt.Errorf("%w: the capsule exited %d before declaring a control protocol",
-					ErrIncompatibleImage, state.ExitCode)
+				return fmt.Errorf("%w: the capsule exited %d before declaring a control protocol%s",
+					ErrIncompatibleImage, state.ExitCode, m.lastWords(ctx, outerID))
 			}
 		}
 		if time.Now().After(deadline) {
@@ -473,6 +479,43 @@ func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// lastWords is what a stopped container said, folded onto one line and
+// prefixed for an error that would otherwise name only an exit code.
+//
+// It exists because the capsule that cannot start is usually the capsule
+// that cannot say so. Its control surface is a root-owned tmpfs this
+// launcher mounts, so an image whose configured user is not root fails
+// its first write, fails again writing the abort that would have
+// explained it, and leaves a container that exited 79 -- from which the
+// only account is "not a pair", sending an operator to re-check a digest
+// that was correct. The reason was in the container log the whole time,
+// and nothing read it.
+//
+// Best effort by construction: this runs on a path that is already
+// failing, and a log that cannot be read must not replace the error that
+// sent us here. Empty is the honest answer, and the error stands without
+// it.
+func (m *Launcher) lastWords(ctx context.Context, id string) string {
+	tail, err := m.dock.TailLogs(ctx, id, logTailLines)
+	if err != nil {
+		return ""
+	}
+	var said []string
+	for _, line := range strings.Split(strings.TrimSpace(tail), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			said = append(said, line)
+		}
+	}
+	if len(said) == 0 {
+		return ""
+	}
+	// Joined rather than kept as lines: this lands in an error that is
+	// logged and recorded as the evidence an operator reads beside a
+	// held attempt, and a multi-line value there is one field that reads
+	// as several.
+	return "; it last said: " + strings.Join(said, " / ")
 }
 
 // ErrIncompatibleImage reports a capsule that does not speak this
@@ -628,8 +671,8 @@ func (m *Launcher) awaitState(ctx context.Context, containerID string, want prot
 			// Best effort: a daemon that cannot answer this leaves the
 			// poll exactly where it was, which is the deadline below.
 			if state, serr := m.dock.ContainerStatus(ctx, containerID); serr == nil && state.Status != engine.StatusRunning {
-				return fmt.Errorf("container %s exited %d before reaching %q",
-					engine.ShortID(containerID), state.ExitCode, want)
+				return fmt.Errorf("container %s exited %d before reaching %q%s",
+					engine.ShortID(containerID), state.ExitCode, want, m.lastWords(ctx, containerID))
 			}
 		}
 		if time.Now().After(deadline) {

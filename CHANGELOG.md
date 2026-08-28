@@ -5,6 +5,22 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## Unreleased
+
+### Operations
+
+- **A capsule that died before it could explain itself now carries what it
+  said.** An operator's own capsule image is built by deriving from the
+  published one, and the published one stays root deliberately: the
+  supervisor is PID 1, boots the inner Docker daemon, and drops the runner
+  to uid 1001 itself. A derived image ending `USER runner` cannot write the
+  root-owned control surface the launcher mounts for it — so it cannot write
+  the abort that would have said so either, and every attempt on that tier
+  was held with an exit code and the words "the capsule image and this
+  controller are not a pair", which sends an operator to re-check a digest
+  that was correct. The reason was in the container's log the whole time.
+  The refusal now quotes it.
+
 ## v1.1.0 — 2026-08-28
 
 A capsule adopted across a controller replacement is read under its own
