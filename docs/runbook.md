@@ -77,7 +77,7 @@ docker compose exec -T controller runpool status --json | jq -r '
          | "lease \(.id) has been \(.state) for over 30m and still holds a credit"),
       (.leases[]? | select(.terminal == false
                            and (now - (.created_at | fromdateiso8601)) > 608400)
-         | "lease \(.id) has been live for over a week in state \(.state)"),
+         | "lease \(.id) has been live for over 169h in state \(.state)"),
       (if ((now - ((.disk_pressure.measured_at // "1970-01-01T00:00:00Z") | fromdateiso8601)) > 900) then
          "the disk was last measured at \(.disk_pressure.measured_at // "never"), so the level below is that old"
        else empty end),
