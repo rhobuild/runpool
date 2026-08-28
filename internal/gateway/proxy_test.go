@@ -986,3 +986,24 @@ func TestTheAddressCheckedIsTheAddressDialed(t *testing.T) {
 		})
 	}
 }
+
+// TestTheAllowedPortSetIsExactlyTwo: the set is the relay's contract,
+// and a sample of it is not the contract.
+//
+// A CONNECT tunnel carries any protocol a proxy-aware client speaks, so
+// the port set is what keeps an allowed address from becoming arbitrary
+// TCP to that address. The existing tests prove 80 and 443 are in it and
+// that five other ports are not, which a wider map still satisfies: a
+// sixth port added here is a widening nothing reads back.
+func TestTheAllowedPortSetIsExactlyTwo(t *testing.T) {
+	want := map[int]string{80: "HTTP", 443: "HTTPS"}
+	if len(AllowedConnectPorts) != len(want) {
+		t.Fatalf("the relay allows %d ports: %v. Every one is a protocol a tunnel can carry "+
+			"to an allowed address", len(AllowedConnectPorts), AllowedConnectPorts)
+	}
+	for port, name := range want {
+		if got, ok := AllowedConnectPorts[port]; !ok || got != name {
+			t.Errorf("port %d is %q, %v; want %q", port, got, ok, name)
+		}
+	}
+}

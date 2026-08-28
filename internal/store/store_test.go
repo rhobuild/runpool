@@ -2599,3 +2599,115 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 		t.Errorf("nothing migrated and %v was written", backups)
 	}
 }
+
+// stateIn finds every `state IN (…)` list in a SQL body.
+//
+// The word boundary keeps it off ack_state, which is the delivery
+// vocabulary and shares neither values nor meaning with this one.
+var stateIn = regexp.MustCompile(`(?is)\bstate\s+IN\s*\(([^)]*)\)`)
+
+func quotedStates(list string) []AttemptState {
+	var out []AttemptState
+	for _, part := range strings.Split(list, "'") {
+		part = strings.TrimSpace(part)
+		if part == "" || strings.ContainsAny(part, "(),") {
+			continue
+		}
+		out = append(out, AttemptState(part))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestTheOpenAttemptSetIsSpelledOnceForEveryReader: four readers decide
+// which attempts are still live, and each carries its own copy of the
+// answer.
+//
+// The index enforces one open attempt per workload; openAttemptStates
+// gates the two hand-written queries that prune lease history and find
+// stranded work; and two generated queries ask the same question again.
+// The comment above openAttemptStates already names the index as the
+// authority the others agree with — and nothing checked that they do.
+//
+// A state added to the index and missed in the Go copy makes a live
+// attempt's lease prunable, and an attempt whose lease was pruned is
+// reachable by no working set: it is not requeued, not settled, and not
+// held for anyone. The subsets are deliberate and are not compared with
+// the rest; what they must be is spelled from the same vocabulary, which
+// is where a typo would otherwise live.
+func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
+	schema, err := migrationsFS.ReadFile("migrations/000001_initial.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(schema)
+	start := strings.Index(body, "CREATE UNIQUE INDEX one_open_attempt_per_workload")
+	if start < 0 {
+		t.Fatal("the open-attempt index moved; this test can no longer find it")
+	}
+	indexed := stateIn.FindStringSubmatch(body[start:])
+	if indexed == nil {
+		t.Fatal("the open-attempt index no longer selects by state")
+	}
+	authority := quotedStates(indexed[1])
+	if len(authority) == 0 {
+		t.Fatal("the index names no state, so this proves nothing")
+	}
+
+	if got := quotedStates(openAttemptStates); !slices.Equal(got, authority) {
+		t.Errorf("openAttemptStates is %v; the index is %v. The Go copy gates pruning "+
+			"lease history, and a state it omits makes a live attempt's lease prunable",
+			got, authority)
+	}
+
+	known := make(map[AttemptState]bool, len(AllAttemptStates))
+	for _, s := range AllAttemptStates {
+		known[s] = true
+	}
+	// The authority is spelled from the vocabulary too: a lease state
+	// reads as an attempt state here and selects nothing, which is an
+	// index that silently enforces less than it names.
+	for _, s := range authority {
+		if !known[s] {
+			t.Errorf("the index selects attempt state %q, which is not one", s)
+		}
+	}
+	files, err := filepath.Glob("query/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no query source found, so this proves nothing")
+	}
+	agreed, checked := 0, 0
+	for _, file := range files {
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range stateIn.FindAllStringSubmatch(string(source), -1) {
+			states := quotedStates(match[1])
+			checked++
+			// Every list is spelled from the vocabulary, subsets
+			// included: that is where a typo hides.
+			for _, s := range states {
+				if !known[s] {
+					t.Errorf("%s selects attempt state %q, which is not one", file, s)
+				}
+			}
+			if len(states) == len(authority) {
+				agreed++
+				if !slices.Equal(states, authority) {
+					t.Errorf("%s selects %v; the index selects %v", file, states, authority)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no query selects by attempt state, so this proves nothing")
+	}
+	if agreed < 2 {
+		t.Errorf("%d generated queries ask the open-attempt question; two did, and a "+
+			"reader that stopped matching the index by length is one this no longer compares", agreed)
+	}
+}

@@ -272,8 +272,12 @@ the platform does not break it. Eight things, in order:
    most likely to interfere with that one.
 3. Configuration and credentials arrive read-only and at mode `0600`, and the
    platform copies neither into a log nor into an environment variable.
-4. The platform's health display is wired to `runpool healthcheck` and reflects
-   both `liveness` and `readiness`, rather than a TCP port that does not exist.
+4. The platform's health display is wired to `runpool healthcheck` rather than
+   to a TCP port that does not exist. The reference Compose file asks it for
+   `liveness` only: readiness moves with the provider and the daemon, and a
+   platform that restarts a container for being briefly unready would restart
+   it for something it cannot fix. A platform that displays readiness without
+   acting on it may ask for both.
 5. The platform's stop grace period exceeds the controller's shutdown budget, so
    a stop does not kill the controller mid-drain.
 6. A redeploy with a live capsule adopts it rather than re-running its job.
