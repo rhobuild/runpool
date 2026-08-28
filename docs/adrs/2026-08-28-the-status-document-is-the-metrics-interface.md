@@ -17,19 +17,19 @@ the word "yet", which is a promise with a date nobody set. Closing it
 needed one question answered: what can an operator of one host not find
 out today.
 
-The answer is nothing, across nine conditions: disk pressure at either
+The answer is nothing, across ten conditions: disk pressure at either
 emergency level, a disk measurement that has stopped arriving, an attempt
 held for manual review, a binding that has stopped reaching its provider,
 a queue that is not draining while credits are free, a disagreement
 between the books and the daemon, an unreadable engine, a live lease that
-has stopped moving, and a default capsule image that cannot be
-resolved. It is computed from the store and the configuration
+has stopped moving, a default capsule image that cannot be resolved, and
+an egress sandbox that has closed itself or stopped checking. It is computed from the store and the configuration
 by a read-only open, not from controller memory, which is why
 `runpool healthcheck` already works the same way.
 
-Three of those eight were not in the first list drawn up for this
-decision, and two of them are worth recording, because one was not a gap
-in a list at all.
+Four of those ten were not in the first list drawn up for this decision,
+and three are worth recording, because two of them were not gaps in a
+list at all.
 
 A **lease that has stopped moving** was: it is not terminal, so it holds an admission
 credit, and it is deliberately not a discrepancy because the lease is
@@ -38,6 +38,15 @@ simply did not name it. Worse, a host wedged entirely on quarantined
 leases has no free credits, which is the condition under which "the queue
 is not draining" stays quiet: the worse the wedge, the less the rest of
 the list had to say.
+
+An **egress sandbox that closed itself** was not in the document at all,
+and could not have been. Rediscovery runs every five minutes and a pass
+it cannot complete closes every gateway on the host to all egress —
+correct, and also every running job losing its network at once, for as
+long as discovery keeps failing. The same failure refuses to let the
+controller start; once running, its only account was a log line. That is
+now recorded, so this record's claim is about a document that carries it
+rather than about one that could not.
 
 A **binding that cannot persist what it is handed** was a defect in the
 controller, not in the list. The poll that carries a message records
