@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/atomicfile"
 	"github.com/rhobuild/runpool/internal/egress"
-	"github.com/rhobuild/runpool/internal/platform/atomicfile"
 )
 
 // TestPolicyGenerationAdvancesOnlyOnChange: the relay drops pooled

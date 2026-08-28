@@ -8,7 +8,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/credential"
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"

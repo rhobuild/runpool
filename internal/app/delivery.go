@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/rhobuild/runpool/internal/assignment"
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
 

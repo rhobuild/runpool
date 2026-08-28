@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/actions/scaleset"
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/githubactions"
 )
 
 // TestASecondSessionIsRefusedRecognisably pins the one error the restart
