@@ -5,6 +5,18 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## Unreleased
+
+### Operations
+
+- **A release page says what changed.** The body carried the qualified commit
+  and the two image digests and nothing else, so the page every reader reaches
+  a version from answered what exactly this is and never answered what is in
+  it. It now opens with the changelog entry for the tag — the same bytes the
+  gate checked, carried from the step that checked them rather than read a
+  second time — and follows with the digest to deploy, the grouped detail, and
+  the provenance and the command that verifies it.
+
 ## v1.1.0 — 2026-08-28
 
 A capsule adopted across a controller replacement is read under its own
