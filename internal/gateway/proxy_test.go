@@ -745,7 +745,14 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 	var mu sync.Mutex
 	served := map[uint64]*http.Transport{}
 
-	// installed counts the policies that have actually landed. The
+	// installed counts the installer's attempts, not the generations any
+	// reader saw: the store advances a generation when a caller observes
+	// a changed file, so two writes with no read between them still move
+	// it once. That is fine for what this is used for -- it is how a
+	// reader knows the installer is running at all, and the count of
+	// generations actually observed is asserted separately at the end,
+	// unconditionally, which is what makes the answer true rather than
+	// this. The
 	// readers below wait on it rather than on a fixed number of their
 	// own iterations, because a reader here never blocks: it is a map
 	// read and an atomic load, so on a host with fewer cores than this
@@ -770,9 +777,13 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 		}
 	}()
 
-	// The deadline is the whole test's, not one reader's: it bounds a
+	// The budget is the whole test's, not one reader's: it bounds a
 	// starved installer into a failure that says so instead of a hang.
-	deadline := time.Now().Add(30 * time.Second)
+	// Named because the message at the end quotes it, and a second
+	// literal there would keep saying thirty seconds after someone
+	// changed this one.
+	const readerBudget = 30 * time.Second
+	deadline := time.Now().Add(readerBudget)
 	var readers sync.WaitGroup
 	for range 8 {
 		readers.Add(1)
@@ -810,7 +821,7 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 	if len(served) < 2 {
 		t.Fatalf("only %d generation(s) were observed in %s; the policy never moved under the "+
 			"readers and the race this rules out was never given a chance",
-			len(served), 30*time.Second)
+			len(served), readerBudget)
 	}
 }
 
