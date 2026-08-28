@@ -15,8 +15,9 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 || (os.Args[1] != "create" && os.Args[1] != "verify") {
-		fmt.Fprintln(os.Stderr, "usage: seed <create|verify> <state-dir>")
+	if len(os.Args) != 3 ||
+		(os.Args[1] != "create" && os.Args[1] != "verify" && os.Args[1] != "open") {
+		fmt.Fprintln(os.Stderr, "usage: seed <create|verify|open> <state-dir>")
 		os.Exit(2)
 	}
 	mode, dir := os.Args[1], os.Args[2]
@@ -38,6 +39,18 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println(st.InstanceID())
+	case "open":
+		// Opening is the migration: store.Open applies what is pending
+		// and takes its copy first. `status` cannot stand in for this --
+		// a reporting command opens read-only and refuses a database
+		// that predates the build rather than moving it, which is what
+		// it says when asked.
+		version, err := st.SchemaVersion()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "open:", err)
+			os.Exit(1)
+		}
+		fmt.Println(version)
 	case "verify":
 		var found bool
 		if err := st.Tx(ctx, func(tx *store.Tx) error {
