@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/app"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/store"
 )
@@ -243,12 +244,36 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 		return nil
 	}
 
-	// The resolve mutates live scheduling state, so it takes the same
-	// singleton lock the controller holds: a resolution racing a live
-	// controller could requeue an attempt the controller is disposing.
+	// The writer applies it. Whoever holds the lock owns every write to
+	// this state, and while a controller is running that is the
+	// controller -- so the decision goes to it rather than the operator
+	// taking the lock away, which is what stopping it amounted to. On a
+	// shared host stopping the controller is stopping every tenant's CI,
+	// for one attempt.
+	decided := app.ResolveRequest{Attempt: id, Reason: reason, Actor: actor, Decision: app.DecisionSettle}
+	if retry {
+		decided.Decision = app.DecisionRetry
+	}
+	switch _, err := app.ResolveThroughController(stateDir(), decided, nil); {
+	case err == nil:
+		fmt.Fprintf(streams.Out, "attempt %s: %s (by %s)\n", id, decision, actor)
+		return nil
+	case !errors.Is(err, app.ErrNoController):
+		// It answered, and refused. That is the controller's answer and
+		// the operator's to act on, not something to retry another way.
+		return err
+	}
+
+	// Nothing answered. Either there is no controller, and the lock is
+	// free for this write, or there is one that cannot carry a
+	// resolution -- which the lock tells apart, because the kernel
+	// releases a dead owner's and a stale socket file cannot fake a
+	// listener.
 	lock, err := store.TryAcquire(stateDir())
 	if err != nil {
-		return fmt.Errorf("cannot take the maintenance lock: %w; stop the controller before resolving attempts", err)
+		return fmt.Errorf("the controller is running but does not answer resolutions "+
+			"(is it older than the version that added the maintenance socket?): %w; "+
+			"upgrade and restart it, or stop it to resolve directly", err)
 	}
 	defer lock.Release()
 

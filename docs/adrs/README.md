@@ -26,3 +26,4 @@ justified it usually still holds even when the remedy does not.
 | 2026-08-23 | [The engine port has a name](2026-08-23-the-engine-port-has-a-name.md) — the container engine is a port, and the Moby client is one adapter behind it | accepted and implemented |
 | 2026-08-20 | [The session wait has no deadline](2026-08-20-the-session-wait-has-no-deadline.md) — why giving up costs more than waiting, and what the report says instead | accepted; supersedes one consequence of session conflict |
 | 2026-08-23 | [The launch proves its own gateway](2026-08-23-the-launch-proves-its-own-gateway.md) — a capsule cannot start under a deny set that is not the one in force | accepted and implemented |
+| 2026-08-27 | [A resolution reaches the writer](2026-08-27-the-resolution-reaches-the-writer.md) — the controller applies operator decisions so resolving one attempt does not stop every tenant's CI | accepted and implemented |

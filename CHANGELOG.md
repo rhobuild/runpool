@@ -5,6 +5,23 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## Unreleased
+
+### Operations
+
+- **Resolving a held attempt no longer stops the controller.** `runpool
+  attempts resolve --apply` hands the decision to the controller serving
+  that state directory, which applies it; with none running it writes
+  directly under the lock as before. One command either way. Every write
+  still belongs to whoever holds the lock — the decision travels to it
+  rather than around it — and the audit record names the operator who
+  decided, never the controller that carried it. See
+  [the ADR](docs/adrs/2026-08-27-the-resolution-reaches-the-writer.md).
+- A pull the registry refused in a way it might not repeat is tried again,
+  up to three times, instead of spending an attempt's retry budget on a
+  blip. An answer that will not change — an unpublished reference, a
+  credential that does not carry, a malformed reference — is not retried.
+
 ## v1.0.0 — 2026-08-27
 
 The first release. It publishes only what its qualification proved for this

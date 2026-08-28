@@ -371,6 +371,22 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	defer s.closeSessions()
 
 	var loops sync.WaitGroup
+	// Opened after the startup reconcile, so a resolution can never land
+	// while the books are still being brought back to what the host
+	// shows. A controller that cannot open it serves without it: the
+	// offline path still exists, and stopping every tenant's CI over a
+	// listener that only saves a restart is the disproportion this
+	// removes.
+	if ln, err := listenForResolutions(opts.StateDir); err != nil {
+		log.Warn("maintenance socket unavailable; resolving a held attempt needs the controller stopped",
+			"error", err)
+	} else {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			s.serveResolutions(ctx, ln)
+		}()
+	}
 	loops.Add(1)
 	go func() {
 		defer loops.Done()

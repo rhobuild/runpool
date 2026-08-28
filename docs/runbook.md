@@ -236,12 +236,11 @@ runpool attempts inspect <id>
 Then decide it. Exactly one of the two decisions, and `--apply` to make
 it.
 
-The applying form takes the singleton lock, so **the controller has to be
-stopped** — and on a shared host that is every tenant's CI, not just the
-job in question. Read the attempt first, decide, and stop the controller
-for the resolution rather than the other way round. A dry run needs no
-lock, so everything except the last step can be done while serving
-continues.
+`--apply` reaches a controller that is serving: the decision travels to
+the process that holds the lock, and that process applies it. Nothing has
+to stop. When no controller is running, the same command writes directly
+under the lock instead, so the two cases are one command and the operator
+chooses neither.
 
 ```bash
 runpool attempts resolve <id> --retry --reason "..." --actor "<name>" --apply
@@ -258,8 +257,17 @@ whatever external effects it had. The evidence line and the provider's own
 UI are what tell those apart — an attempt held as `start_outcome_unknown`
 is exactly the case where this instance could not tell.
 
-**`--apply` needs the controller stopped.** It takes the same singleton
-lock `serve` holds, and reports that it could not. A dry run does not.
+**Every write to this state belongs to whoever holds the lock.** That is
+what the controller does not give up, and why the decision goes to it
+rather than around it. Two answers mean something specific:
+
+- *"the controller is running but does not answer resolutions"* — a
+  controller older than the maintenance socket. Upgrade and restart it,
+  or stop it and resolve directly.
+- *"the resolution was sent but its outcome is unknown"* — the decision
+  travelled and the answer was lost. Read `runpool attempts inspect <id>`
+  before deciding again: a resolution that landed shows its reviewer, and
+  running it a second time is refused rather than repeated.
 
 An attempt is held for one of three reasons:
 
