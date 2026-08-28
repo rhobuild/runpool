@@ -240,6 +240,12 @@ func (m *diskMonitor) collectGarbage(ctx context.Context, level disk.Level) {
 // takes part in.
 func (s *Controller) currentPressure() disk.Level { return s.disk.current() }
 
+// sandboxRecordBudget bounds the detached write below. Five seconds
+// because it is one upsert of two rows against a local file, and well
+// inside LoopStopBudget, whose claim about what a stopping loop may cost
+// this must not be the thing that falsifies.
+const sandboxRecordBudget = 5 * time.Second
+
 // recordSandboxPass writes down what the egress sandbox's last
 // rediscovery concluded.
 //
@@ -259,7 +265,15 @@ func (s *Controller) recordSandboxPass(ctx context.Context, cause error) {
 	if cause != nil {
 		pass.Error = cause.Error()
 	}
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	// Detached, for the same reason closing the message sessions is: a
+	// pass can conclude and shutdown begin before this runs, and the
+	// context Watch was given is the one that just got cancelled. A
+	// failure recorded nowhere because the process was stopping is the
+	// failure most worth having recorded -- the gateways stay closed
+	// across the restart, and the next pass is five minutes away.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxRecordBudget)
+	defer cancel()
+	if err := s.store.Tx(writeCtx, func(tx *store.Tx) error {
 		return tx.SetSandboxPass(pass)
 	}); err != nil {
 		s.log.Error("cannot record the sandbox rediscovery outcome", "error", err)

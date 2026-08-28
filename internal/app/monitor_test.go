@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,4 +203,64 @@ func TestCollectGarbageRunsWhatTheLevelObliges(t *testing.T) {
 		t.Fatalf("a soft emergency left %d free lane(s); AllFree did not reach the planner", lanes())
 	}
 	_ = loc
+}
+
+// TestASandboxFailureIsRecordedWhileTheControllerIsStopping is the
+// delivery half of the egress report: the pass concludes, and something
+// has to write that down where a reader in another process can find it.
+//
+// The context is cancelled first, deliberately. A rediscovery can fail
+// and a shutdown begin before the write runs, and the context the loop
+// was given is the one that has just been cancelled — so a write on it
+// would fail exactly when it matters most. The gateways stay closed
+// across a restart and the next pass is five minutes away, which is
+// five minutes of an operator being told nothing.
+func TestASandboxFailureIsRecordedWhileTheControllerIsStopping(t *testing.T) {
+	h := newHarness(t, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	h.srv.recordSandboxPass(ctx, errors.New("host discovery: the probe could not run"))
+
+	var got *store.SandboxPass
+	if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		got, err = tx.SandboxPass()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("a rediscovery that closed every gateway recorded nothing because the " +
+			"controller was stopping; the gateways stay closed across the restart")
+	}
+	if !strings.Contains(got.Error, "the probe could not run") {
+		t.Errorf("recorded %q; it has to carry why, which is what an operator acts on", got.Error)
+	}
+	if got.At == 0 {
+		t.Error("recorded no time; a pass that stopped running is only visible as a " +
+			"timestamp that stopped moving")
+	}
+}
+
+// TestASuccessfulSandboxPassClearsTheReason: recovery has to be
+// readable. A sandbox that reopened while still reporting the failure it
+// recovered from sends an operator after a problem that is over.
+func TestASuccessfulSandboxPassClearsTheReason(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.recordSandboxPass(t.Context(), errors.New("the probe could not run"))
+	h.srv.recordSandboxPass(t.Context(), nil)
+
+	var got *store.SandboxPass
+	if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
+		var err error
+		got, err = tx.SandboxPass()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Error != "" {
+		t.Errorf("after a pass that succeeded the record is %+v; a sandbox that "+
+			"recovered would keep reporting the failure it recovered from", got)
+	}
 }

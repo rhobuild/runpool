@@ -3,10 +3,17 @@ package store
 import "strconv"
 
 // The egress sandbox's last completed rediscovery pass, as two
-// instance-scoped singletons. They live in meta rather than a table of
-// their own because that is what meta is for and because a new table is
-// a migration, which this does not need: one timestamp and one reason
-// are the whole of what a reader has to know.
+// instance-scoped singletons.
+//
+// A table of their own would match this store's own precedents more
+// closely -- pressure and provider_binding_contact are both a
+// background loop's last outcome, and provider_binding_contact is this
+// exact shape, a timestamp and an error string. They are in meta anyway,
+// and the reason is not that meta is the better home: it is that a new
+// table is a migration, the baseline is immutable, and the first
+// migration this project writes will meet deployed v1.0.0 databases.
+// Spending that on one timestamp and one reason is the wrong trade. If
+// this ever needs a third field, it should take the table instead.
 const (
 	sandboxPassAtKey    = "sandbox_pass_at"
 	sandboxPassErrorKey = "sandbox_pass_error"
