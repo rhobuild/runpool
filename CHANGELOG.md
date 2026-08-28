@@ -5,7 +5,14 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## Unreleased
+## v1.1.0 — 2026-08-28
+
+A capsule adopted across a controller replacement is read under its own
+protocol, a held attempt is resolved without stopping the controller, and a
+registry that blinked no longer costs an attempt. The schema is unchanged, so
+an installation moves by repointing the image and recreating the container;
+[the runbook](docs/runbook.md) names the commands and what to do if it has to
+go back.
 
 ### Isolation and execution
 
