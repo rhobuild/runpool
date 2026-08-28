@@ -1,7 +1,6 @@
 # The launch proves its own gateway
 
-**Status:** accepted and implemented
-
+**Status:** implemented
 **Date:** 2026-08-23
 
 ## Context

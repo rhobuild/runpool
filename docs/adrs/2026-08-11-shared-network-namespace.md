@@ -1,6 +1,7 @@
 # Runner and dockerd share one network namespace
 
-**Status:** accepted; implementation evolved to a single capsule container
+**Status:** amended
+**Amended by:** the single-capsule container, which shares one namespace by being one process tree rather than two containers
 **Date:** 2026-08-11
 
 ## Context

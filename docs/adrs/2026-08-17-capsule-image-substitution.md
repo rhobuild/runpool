@@ -1,6 +1,6 @@
 # An operator may name the capsule image, and the capsule declares its protocol
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-17
 
 A release binary refuses `RUNPOOL_CAPSULE_IMAGE` whenever its built-in

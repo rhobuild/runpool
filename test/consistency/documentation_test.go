@@ -309,3 +309,79 @@ func tracked(t *testing.T, patterns ...string) []string {
 	}
 	return files
 }
+
+// adrStatuses is the vocabulary a decision record may declare.
+//
+// It is a list because every other named vocabulary here is: attempt
+// states, lease states, resolutions and evidence each have one, held
+// against what the schema admits. This one had none, and the field drifted
+// into prose — five records said "accepted and implemented" while twelve
+// said "accepted" and meant the same thing, so the shorter word read as
+// its opposite.
+var adrStatuses = map[string]string{
+	"accepted":    "decided, and not built yet",
+	"implemented": "decided, and the code has it",
+	"amended":     "stands, and a named part of it was replaced",
+	"superseded":  "replaced entirely",
+}
+
+var adrStatusLine = regexp.MustCompile(`(?m)^\*\*Status:\*\* (.*)$`)
+
+// TestEveryDecisionDeclaresOneOfFourStatuses: a reader asking whether a
+// decision is in the code should not have to read the record to find out.
+//
+// The index repeats each status, so there are two places to say it and
+// they were not the same: an entry read "accepted; implementation evolved
+// to a single capsule container" where its record said something else in
+// different words. What replaced a decision belongs on a line of its own,
+// which is what keeps this field to one word.
+func TestEveryDecisionDeclaresOneOfFourStatuses(t *testing.T) {
+	records, err := filepath.Glob(repoPath("docs", "adrs", "2026-*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) < 2 {
+		t.Fatalf("found %d decision records, so this proves nothing", len(records))
+	}
+
+	index, err := os.ReadFile(repoPath("docs", "adrs", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]string{}
+	for _, row := range regexp.MustCompile(`(?m)^\| 2026-\d\d-\d\d \| \[[^\]]+\]\(([^)]+)\)[^|]*\| ([^|]+)\|$`).
+		FindAllStringSubmatch(string(index), -1) {
+		listed[match(row[1])] = strings.TrimSpace(row[2])
+	}
+
+	for _, record := range records {
+		name := filepath.Base(record)
+		body, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := adrStatusLine.FindStringSubmatch(string(body))
+		if found == nil {
+			t.Errorf("%s declares no status", name)
+			continue
+		}
+		status := strings.TrimSpace(found[1])
+		if _, ok := adrStatuses[status]; !ok {
+			t.Errorf("%s declares status %q. It is one of the four words, and what "+
+				"replaced the decision goes on its own line: a status that narrates is "+
+				"one two readers summarise differently", name, status)
+		}
+		switch row, ok := listed[name]; {
+		case !ok:
+			t.Errorf("%s is not listed in the index", name)
+		case row != status:
+			t.Errorf("%s declares %q and the index says %q", name, status, row)
+		}
+	}
+	if len(listed) != len(records) {
+		t.Errorf("the index lists %d records and there are %d", len(listed), len(records))
+	}
+}
+
+// match is the file a record's index link names.
+func match(link string) string { return filepath.Base(link) }

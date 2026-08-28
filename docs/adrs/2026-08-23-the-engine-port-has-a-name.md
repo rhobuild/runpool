@@ -1,7 +1,6 @@
 # The container engine is a port, and the Moby client is one adapter behind it
 
-**Status:** accepted and implemented
-
+**Status:** implemented
 **Date:** 2026-08-23
 
 ## Context

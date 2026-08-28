@@ -1,6 +1,6 @@
 # SQLite driver: modernc.org/sqlite
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-11
 
 ## Context

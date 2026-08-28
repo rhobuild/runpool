@@ -1,6 +1,6 @@
 # Admission is a pool of credits with a rotating discovery credit
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-13
 **Supersedes:** [the per-binding capacity floor](2026-08-11-capacity-floor.md)
 

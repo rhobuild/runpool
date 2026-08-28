@@ -1,6 +1,6 @@
 # The lease ceiling is a backstop, not the job's timeout
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-17
 
 `jobTimeout` is two hours, declared as a constant in `internal/app`, and

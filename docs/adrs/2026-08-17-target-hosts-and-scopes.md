@@ -1,6 +1,6 @@
 # A target is any host the protocol serves, at any scope it defines
 
-**Status:** accepted
+**Status:** implemented
 **Date:** 2026-08-17
 
 `ParseTargetURL` refuses any host that is not `github.com`, with the

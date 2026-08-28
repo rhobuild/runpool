@@ -1,8 +1,7 @@
 # Use the versioned Moby client modules
 
-**Status:** accepted; the adapter is named by
-[the engine port](2026-08-23-the-engine-port-has-a-name.md)
-
+**Status:** implemented
+**Implemented by:** [the engine port](2026-08-23-the-engine-port-has-a-name.md), which names the adapter
 **Date:** 2026-08-12
 
 ## Context
