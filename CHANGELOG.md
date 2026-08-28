@@ -16,12 +16,14 @@ a version speaks for are listed in
   and a push accepted layer by layer and then called an unknown blob — each
   costing a manual re-run, one of them after the tag was already cut. Every
   build, push, pull and index assembly goes through the retry, and so does
-  the module download each job now does once, so the builds and the gates
-  that follow it work from a warm cache and reach nothing. What is still
-  asked once: a step that is an action rather than a command — the SBOM
-  scan and the attestations — which is not a command line to wrap, and
-  `docker login`, whose token arrives on a pipe that the first attempt
-  consumes.
+  the module download each job now does once, so the builds and the tests
+  that follow it work from a warm cache. Three reaches are still asked
+  once, and naming them is the point: a step that is an action rather than
+  a command — the SBOM scan and the attestations — which is not a command
+  line to wrap; `docker login`, whose token arrives on a pipe the first
+  attempt consumes; and `govulncheck`, which fetches its vulnerability
+  index on every run and would, if retried, print two spurious attempts
+  over a real finding.
 
 ## v1.1.0 — 2026-08-28
 
