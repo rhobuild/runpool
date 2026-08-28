@@ -36,6 +36,12 @@ import "strings"
 //
 // The builds are not interchangeable in either direction, which is what
 // the equality check enforces.
+//
+// Both bumps moved what an existing word means, which is why reading a
+// state under the wrong version is the hazard this number exists to
+// prevent rather than a formality. A word whose meaning moves takes a
+// new spelling and a bump; the old one is not repurposed, because a
+// controller holding it has no way to tell which meaning it has.
 const Version = "3"
 
 // State is what a supervisor-family container writes to its control
@@ -124,6 +130,14 @@ func Terminal(state State) bool {
 // an aborted capsule, the daemon reports `exited` and nothing inside can
 // be read. Without it, every abort read as an ordinary exit — and an
 // attempt that never ran was settled as complete and never requeued.
+//
+// It is therefore the one value a controller can read from a capsule
+// built by another version, and it is never renumbered. A replaced
+// controller adopts capsules that are already running, and the ones that
+// exit under it are classified by this number alone — there is no file
+// left to declare a version, so a bump cannot protect anyone from a code
+// that moved. Every other value here is read only while the capsule
+// lives, where the version can be checked first.
 const AbortedExitCode = 79
 
 // GatewayDenyAllCommand is the supervisor subcommand that revokes a
