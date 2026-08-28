@@ -206,6 +206,15 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		if err != nil {
 			s.log.Error("cannot persist the delivery; leaving it for redelivery",
 				"binding", b.key, "error", err)
+			// Same reason the acquisition failure above says so: the poll
+			// that carried this message was recorded as contact, so a
+			// binding stuck here refreshes its contact on every redelivery
+			// and reports as reaching its provider. It is not the provider
+			// that is unreachable, but the binding is just as stuck --
+			// nothing it is offered becomes an attempt, so the work is not
+			// queued either, and without this the only place it is visible
+			// is a log line nobody is watching for.
+			s.recordProviderFailure(ctx, b, err)
 			select {
 			case <-time.After(s.backoff()):
 			case <-ctx.Done():
@@ -223,6 +232,9 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		if err := s.recordLifecycleEvents(ctx, b, msg); err != nil {
 			s.log.Error("cannot record the message's lifecycle events; leaving it for redelivery",
 				"binding", b.key, "error", err)
+			// As above: redelivery keeps the contact fresh while nothing
+			// this binding is offered ever lands.
+			s.recordProviderFailure(ctx, b, err)
 			select {
 			case <-time.After(s.backoff()):
 			case <-ctx.Done():

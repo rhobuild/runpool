@@ -28,6 +28,146 @@ Commands that change something take `--apply` or `--confirm`, preview
 without it, and take the singleton lock the controller holds — so they
 report that the controller is running rather than acting behind it.
 
+## Watching an instance
+
+There is no metrics endpoint and no exporter, by decision — see
+[the record](adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
+`runpool status --json` is the machine-readable account, and it carries
+an `api_version` so a script that reads it is written once. Ten
+conditions are the ones that need a person, and all ten are in that
+document:
+
+| Condition | Where it shows | Why it needs a person |
+| --- | --- | --- |
+| Disk pressure at either emergency level | `disk_pressure.level` | Admission is closed; hard means freeing space by hand |
+| An attempt held for manual review | `manual_review` | The product holds undecidable work for a person rather than guessing; a person who is never told defeats that |
+| A binding that stopped reaching its provider | `bindings[].last_error_at` at or after `last_contact_at` | The provider sends nothing and says nothing; CI queues invisibly |
+| A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
+| The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
+| An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
+| A live lease that has stopped moving | `leases[].terminal`, `state`, `created_at` | Quarantine is one way a lease comes to rest; a finalization that fails after its resources are already gone is another. Both hold an admission credit, so a host wedged this way loses capacity silently |
+| A disk measurement that has stopped arriving | `disk_pressure.measured_at` | The probe runs a container to measure, so it fails exactly when the disk is full — and a failed measurement writes nothing, leaving the last `level` reading "normal" indefinitely |
+| A capsule image that cannot be resolved | `capsule_image_error` | Every tier that names no `capsuleImage` of its own would launch the build's default, and this says what that default is not |
+| An egress sandbox that closed itself, or stopped checking | `egress_sandbox.error`, `last_pass_at` | A rediscovery it cannot complete closes every gateway on the host to all egress, which is right and is also every running job losing its network at once |
+
+This prints one line per condition and nothing at all when there is
+nothing to look at, which is what makes it a cron job: `cron` mails the
+operator only when a command writes output.
+
+```bash
+docker compose exec -T controller runpool status --json | jq -r '
+  if .served != true then
+    "not serving: \(.detail // "no detail")"
+  else
+    [ (if ((.disk_pressure.level // "normal") | test("emergency")) then
+         "disk pressure is \(.disk_pressure.level); admission is closed" else empty end),
+      (if ((.manual_review // []) | length) > 0 then
+         "\((.manual_review | length)) attempt(s) held for a person" else empty end),
+      (.bindings[]? | select(.last_error_at and (.last_contact_at == null or .last_error_at >= .last_contact_at))
+         | "binding \(.target_id) has not reached its provider since \(.last_error_at)"),
+      (if ((.discrepancies // []) | length) > 0 then
+         "\((.discrepancies | length)) discrepancy between the books and the daemon" else empty end),
+      (if ((.engine_error // "") != "") then
+         "the container engine is unreadable: \(.engine_error)" else empty end),
+      (if ((.scheduling.queued // 0) > 0 and (.scheduling.available // 0) > 0) then
+         "\(.scheduling.queued) queued with \(.scheduling.available) free: the queue is not draining"
+       else empty end),
+      (.leases[]? | select(.terminal == false and .state != "workload_running"
+                           and (now - (.created_at | fromdateiso8601)) > 1800)
+         | "lease \(.id) has been \(.state) for over 30m and still holds a credit"),
+      (.leases[]? | select(.terminal == false
+                           and (now - (.created_at | fromdateiso8601)) > 608400)
+         | "lease \(.id) has been live for over 169h in state \(.state)"),
+      (if ((now - ((.disk_pressure.measured_at // "1970-01-01T00:00:00Z") | fromdateiso8601)) > 900) then
+         "the disk was last measured at \(.disk_pressure.measured_at // "never"), so the level below is that old"
+       else empty end),
+      (if ((.capsule_image_error // "") != "") then
+         "the default capsule image cannot be resolved: \(.capsule_image_error)"
+       else empty end),
+      (if ((.egress_sandbox.error // "") != "") then
+         "every gateway is closed to all egress: \(.egress_sandbox.error)"
+       else empty end),
+      (if (.egress_sandbox != null
+           and (now - (.egress_sandbox.last_pass_at | fromdateiso8601)) > 1800) then
+         "the egress policy was last rechecked at \(.egress_sandbox.last_pass_at)"
+       else empty end)
+    ] | .[]
+  end'
+```
+
+An instance that has not run yet reports that, rather than passing for
+healthy — a monitoring script that treats a missing answer as a good one
+is the failure this replaces.
+
+Two things it deliberately does not report. A queue with no free credits
+is a busy instance, not a stuck one. And a binding that failed and then
+reconnected is a binding that recovered, which is why the comparison is
+against `last_contact_at` rather than the presence of an error.
+
+The lease checks earn their place by covering the first one's blind spot.
+A live lease is not terminal, so it counts toward `active` and reduces
+`available` — and a host wedged on them has `available` at zero, which is
+exactly the condition under which "the queue is not draining" stays
+quiet. Without these lines, the worse the wedge, the less the rest of the
+list has to say about it.
+
+**Both lease checks ask about shape rather than about a named state, and
+that is deliberate.** A list of states to worry about keeps losing to a
+state machine: quarantine is one way a lease comes to rest, a
+finalization that fails after its resources are already gone is another,
+and the next one will not be on any list written today. So the first
+check is "not terminal, not running work, and older than thirty
+minutes" — thirty because a capsule's whole preparation is bounded at
+fifteen, so nothing healthy sits in any other state that long. The second
+is "not terminal and older than 169 hours", which catches a lease that
+outlived its ceiling in any state at all, `workload_running` included.
+
+169 rather than something tighter, and the reason is the point: the
+default ceiling is eight hours, but `jobTimeout` is per-tier and the
+validator accepts up to `168h`. A bound derived from the default would
+fire on every healthy job of any tier legally configured above it —
+anchoring to the default instead of to the limit is precisely the mistake
+the rest of this section exists to avoid.
+
+So it anchors to the limit, plus an hour. The extra hour is not slop: a
+lease is created before its job starts and outlives it while cleaning up,
+so a job that runs its full 168-hour ceiling leaves a lease slightly
+older than that, and a bound set to exactly the maximum would fire on it.
+This is a backstop rather than a tight bound — the thirty-minute check
+does the real work, and this one says only that something has outlived
+any ceiling this configuration could have permitted.
+
+The egress sandbox is watched on both counts for the same reason. Its
+rediscovery runs every five minutes, and a pass it cannot complete
+closes every gateway on this host to all egress — correct, because a
+policy that cannot be shown to be current is worse than none, and also
+every running job losing its network at once. So one check asks whether
+the last pass failed, and the other asks whether passes are still
+arriving at all: thirty minutes is six intervals, which no healthy
+instance misses. `egress_sandbox` is `null` on an instance that
+maintains no policy, and neither check fires there.
+
+The disk check is that reasoning applied to a measurement rather than a
+state. `disk_pressure.level` is rewritten only by a measurement that
+succeeded, so a probe that keeps failing leaves the last reading in place
+indefinitely — and the probe runs a container to do its measuring, which
+is precisely what stops working when a disk is full. Watching the level
+alone would report "normal" straight through the failure it exists to
+catch; the timestamp is what says whether the level is an answer or a
+souvenir.
+
+Where the output goes is the host's to decide: mail from `cron`, a
+systemd timer's failure state, a ping to whatever the machine already
+alerts with. Runpool does not choose a monitoring stack, and does not
+ship this as a script — a file under `deploy/` that nothing exercises is
+a claim with nothing behind it.
+
+Rates and history are not here and are not missing. How long jobs took,
+how many failed, how long they queued — the provider holds all of it for
+the exact runs this host served, in its own interface. What is durable
+on this side is in the store: the attempt trail, the audit log, and
+evidence, which is never pruned.
+
 ## Shared-daemon operations
 
 `runpool status` prints the configured topology and the scheduling picture —

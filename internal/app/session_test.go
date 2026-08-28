@@ -546,3 +546,116 @@ func TestAnUnrelatedOutageDoesNotAgeTheConflict(t *testing.T) {
 			"next conflict is judged against time this binding spent not conflicting")
 	}
 }
+
+// driftingSession answers every poll with the same message id carrying
+// different work. The store keys a delivery on that id and refuses a
+// second one whose payload differs, so this is a binding that can reach
+// its provider, is handed something on every poll, and can never turn
+// any of it into an attempt.
+type driftingSession struct {
+	mu       sync.Mutex
+	receives int
+	polled   chan struct{}
+	once     sync.Once
+}
+
+func (s *driftingSession) Receive(context.Context) (*githubactions.Message, error) {
+	s.mu.Lock()
+	s.receives++
+	n := s.receives
+	s.mu.Unlock()
+	if s.polled != nil && n >= 2 {
+		s.once.Do(func() { close(s.polled) })
+	}
+	// One id, two payloads: the second poll is the drift.
+	return &githubactions.Message{
+		ID:       1,
+		Assigned: []assignment.WorkloadAssignment{demand("job-drift", "app", int64(n))},
+	}, nil
+}
+
+func (s *driftingSession) Acknowledge(context.Context, int) error { return nil }
+func (s *driftingSession) SetCapacity(int)                        {}
+func (s *driftingSession) Initial() *githubactions.Statistics     { return nil }
+func (s *driftingSession) Close(context.Context) error            { return nil }
+
+// TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy.
+//
+// The poll that carries a message records contact the moment it
+// succeeds, which is right: the provider answered. But a delivery this
+// controller cannot persist is left for redelivery, and redelivery
+// arrives through another poll, which records contact again. A binding
+// wedged that way refreshes its own health forever while nothing it is
+// offered ever becomes an attempt — so it is not in the queue either,
+// because nothing was ever recorded to queue.
+//
+// It read as a binding in perfect health from every angle an operator
+// has: contact fresh, no error, no queued work, no discrepancy. The
+// acquisition failure beside it already says so for exactly this reason;
+// these two branches did not.
+func TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.pollBackoff = time.Millisecond
+
+	drifting := &driftingSession{polled: make(chan struct{})}
+	h.bind.session = drifting
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.srv.loop(ctx, h.bind)
+	}()
+	select {
+	case <-drifting.polled:
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("the loop never reached a second poll, so nothing drifted and this proves nothing")
+	}
+
+	// Waiting for the record rather than for a poll count: recording a
+	// failure is the loop's next step after the drift, and cancelling
+	// between the two would read as the failure never being recorded --
+	// recordProviderFailure returns early on a cancelled context, so the
+	// test would be measuring its own teardown.
+	contact := awaitProviderFailure(t, h)
+	cancel()
+	<-done
+
+	if contact.LastError == "" {
+		t.Fatal("a binding that cannot persist anything it is handed recorded no failure; " +
+			"it reports as reaching its provider, and the work it was offered is not " +
+			"queued either, so nothing an operator reads shows it is stuck")
+	}
+	if contact.LastContact.After(contact.LastErrorAt) {
+		t.Errorf("failure at %v predates contact at %v; every redelivery refreshes the "+
+			"contact, so a binding stuck forever still reads as healthy",
+			contact.LastErrorAt, contact.LastContact)
+	}
+}
+
+// awaitProviderFailure returns the binding's contact once a failure has
+// been recorded against it, or the last one read if none arrives.
+func awaitProviderFailure(t *testing.T, h *harness) store.ProviderContact {
+	t.Helper()
+	var contact store.ProviderContact
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := h.srv.store.Tx(t.Context(), func(tx *store.Tx) error {
+			bindings, err := tx.Bindings()
+			for _, b := range bindings {
+				if b.ID == h.bind.bindingID {
+					contact = b.Contact
+				}
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if contact.LastError != "" || time.Now().After(deadline) {
+			return contact
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

@@ -42,3 +42,4 @@ status two readers summarise differently.
 | 2026-08-23 | [The launch proves its own gateway](2026-08-23-the-launch-proves-its-own-gateway.md) — a capsule cannot start under a deny set that is not the one in force | implemented |
 | 2026-08-27 | [A resolution reaches the writer](2026-08-27-the-resolution-reaches-the-writer.md) — the controller applies operator decisions so resolving one attempt does not stop every tenant's CI | implemented |
 | 2026-08-27 | [An adopted capsule is read in its own dictionary](2026-08-27-an-adopted-capsule-is-read-in-its-own-dictionary.md) — a state word is trusted only under the protocol the capsule declares; its exit code is trusted from every version | implemented |
+| 2026-08-28 | [The status document is the metrics interface](2026-08-28-the-status-document-is-the-metrics-interface.md) — no endpoint, no exporter; `status --json` is the machine-readable account and the host decides when to look | implemented |

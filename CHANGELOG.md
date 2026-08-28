@@ -55,6 +55,28 @@ a version speaks for are listed in
   attempt consumes; and `govulncheck`, which fetches its vulnerability
   index on every run and would, if retried, print two spurious attempts
   over a real finding.
+- **A binding that cannot persist what its provider hands it no longer
+  reports as healthy.** The poll that carries a message records contact when
+  it succeeds, and a delivery that could not be persisted was left for
+  redelivery — which arrives through another poll, which records contact
+  again. A binding wedged that way refreshed its own health forever while
+  nothing it was offered ever became an attempt, so the work was not queued
+  either: it read as a binding in perfect health from every angle an
+  operator has. The failure is now recorded, as the acquisition failure
+  beside it already was.
+- **The absence of a metrics endpoint is a decision, and the runbook now
+  says what to watch instead.** `observability.metrics.enabled` was refused
+  with the word "yet", which is a promise nobody had a date for. There is no
+  endpoint and there will not be one at this scope: `runpool status --json`
+  is the machine-readable account, versioned for exactly this, and deciding
+  when a person has to look belongs to the host. The runbook's new "Watching
+  an instance" names the ten conditions that need one and gives a command
+  that prints a line per condition and nothing when there is nothing to look
+  at. The field is still accepted — configuration parsing is strict and the
+  shipped example writes it, so removing it would fail the startup of every
+  deployment that copied that example — and is planned for removal in a major
+  version. See
+  [the decision record](docs/adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 
 ## v1.1.0 — 2026-08-28
 
