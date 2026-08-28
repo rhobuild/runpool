@@ -21,9 +21,9 @@ import (
 	"github.com/rhobuild/runpool/internal/doctor"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/engine/docker"
+	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/lease"
 	"github.com/rhobuild/runpool/internal/netsandbox"
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 )
 

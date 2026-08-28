@@ -28,7 +28,7 @@ What you observed, not the command you typed.
 Most of this repository's CI is strong enough that a committed test is
 better evidence than pasted output. One surface is not: the provider
 contracts never run on a pull request, because they reach protected
-fixtures. For anything under internal/platform/githubactions this
+fixtures. For anything under internal/githubactions this
 section is the only record of the observation that will ever exist.
 
 Link the workflow run and its evidence artifact where one was produced.

@@ -26,7 +26,7 @@ import (
 	"github.com/actions/scaleset"
 
 	"github.com/rhobuild/runpool/internal/credential"
-	"github.com/rhobuild/runpool/internal/platform/githubactions"
+	"github.com/rhobuild/runpool/internal/githubactions"
 )
 
 const (
@@ -106,7 +106,7 @@ func testCtx(t *testing.T) context.Context {
 }
 
 // newWrapper builds the production adapter the org/repo tests exercise,
-// so internal/platform/githubactions is qualified by the same live suite
+// so internal/githubactions is qualified by the same live suite
 // that pins the upstream contract.
 func newWrapper(t *testing.T, configURL, token string) *githubactions.Client {
 	t.Helper()

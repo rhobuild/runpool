@@ -62,7 +62,7 @@ per-package gate would fail on the mechanics packages below, which are
 deliberately thin here and proved elsewhere.
 
 **Mechanics are covered live.** `internal/engine/docker`,
-`internal/platform/githubactions`, the daemon-facing half of
+`internal/githubactions`, the daemon-facing half of
 `internal/capsule` and the socket-facing half of `internal/gateway` are
 thin translations of an external API. A unit test there asserts the mock,
 so they are proved by the suites that run against a real daemon and a real
