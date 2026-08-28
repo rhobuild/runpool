@@ -389,10 +389,18 @@ a real leak visible.
 `log.format` is `json` or `text`; `log.level` is `debug`, `info`, `warn`
 or `error`.
 
-`metrics.enabled` **must be false.** There is no metrics endpoint.
-Capacity, credits and disk pressure are reported by `runpool status` and
-the structured log; accepting `true` would advertise a scrape target
-that is not there.
+`metrics.enabled` **must be false**, and this is settled rather than
+pending. Runpool exposes no metrics endpoint and will not at this scope:
+`runpool status --json` is the machine-readable account, versioned by
+its own `api_version`, and the host decides when a person has to look —
+[the runbook](../runbook.md) shows what to evaluate, and
+[the decision record](../adrs/2026-08-28-the-status-document-is-the-metrics-interface.md)
+says what was rejected and why. The field is still accepted because
+configuration parsing is strict and the shipped example writes it, so
+removing it would fail the startup of every deployment that copied that
+example; it is planned for removal in a major version. A scrapeable
+surface, if one is ever justified, would be a new field rather than this
+one changing meaning.
 
 ### network
 

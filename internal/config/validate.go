@@ -312,12 +312,15 @@ func Validate(c *Config) error {
 		}
 	}
 
-	// There is no metrics endpoint yet: budget, credits and pressure
-	// are reported through status and the structured log. Accepting
-	// `enabled: true` would have an operator wire an alert to a port
-	// nothing listens on.
+	// There is no metrics endpoint, and there is not going to be one at
+	// this scope: `runpool status --json` is the machine-readable
+	// account, versioned for exactly this, and the host decides when a
+	// person has to look. See the decision record beside the runbook's
+	// watching section. The field is still parsed because strict
+	// decoding would otherwise fail the startup of every deployment
+	// that copied the shipped example, where it is written as false.
 	if c.Observability.Metrics.Enabled {
-		v.errf("observability.metrics.enabled", "must be false; there is no metrics endpoint — capacity, credits and disk pressure are reported by `runpool status` and the structured log")
+		v.errf("observability.metrics.enabled", "must be false; Runpool exposes no metrics endpoint — `runpool status --json` is the machine-readable account, and the runbook's \"Watching an instance\" shows what to evaluate")
 	}
 
 	if f := c.Observability.Log.Format; f != LogFormatJSON && f != LogFormatText {

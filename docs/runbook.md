@@ -28,6 +28,71 @@ Commands that change something take `--apply` or `--confirm`, preview
 without it, and take the singleton lock the controller holds — so they
 report that the controller is running rather than acting behind it.
 
+## Watching an instance
+
+There is no metrics endpoint and no exporter, by decision — see
+[the record](adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
+`runpool status --json` is the machine-readable account, and it carries
+an `api_version` so a script that reads it is written once. Six
+conditions are the ones that need a person, and all six are in that
+document:
+
+| Condition | Where it shows | Why it needs a person |
+| --- | --- | --- |
+| Disk pressure at either emergency level | `disk_pressure.level` | Admission is closed; hard means freeing space by hand |
+| An attempt held for manual review | `manual_review` | The product holds undecidable work for a person rather than guessing; a person who is never told defeats that |
+| A binding that stopped reaching its provider | `bindings[].last_error_at` at or after `last_contact_at` | The provider sends nothing and says nothing; CI queues invisibly |
+| A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
+| The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
+| An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
+
+This prints one line per condition and nothing at all when there is
+nothing to look at, which is what makes it a cron job: `cron` mails the
+operator only when a command writes output.
+
+```bash
+docker compose exec -T controller runpool status --json | jq -r '
+  if .served != true then
+    "not serving: \(.detail // "no detail")"
+  else
+    [ (if ((.disk_pressure.level // "normal") | test("emergency")) then
+         "disk pressure is \(.disk_pressure.level); admission is closed" else empty end),
+      (if ((.manual_review // []) | length) > 0 then
+         "\((.manual_review | length)) attempt(s) held for a person" else empty end),
+      (.bindings[]? | select(.last_error_at and (.last_contact_at == null or .last_error_at >= .last_contact_at))
+         | "binding \(.target_id) has not reached its provider since \(.last_error_at)"),
+      (if ((.discrepancies // []) | length) > 0 then
+         "\((.discrepancies | length)) discrepancy between the books and the daemon" else empty end),
+      (if ((.engine_error // "") != "") then
+         "the container engine is unreadable: \(.engine_error)" else empty end),
+      (if ((.scheduling.queued // 0) > 0 and (.scheduling.available // 0) > 0) then
+         "\(.scheduling.queued) queued with \(.scheduling.available) free: the queue is not draining"
+       else empty end)
+    ] | .[]
+  end'
+```
+
+An instance that has not run yet reports that, rather than passing for
+healthy — a monitoring script that treats a missing answer as a good one
+is the failure this replaces.
+
+Two things it deliberately does not report. A queue with no free credits
+is a busy instance, not a stuck one. And a binding that failed and then
+reconnected is a binding that recovered, which is why the comparison is
+against `last_contact_at` rather than the presence of an error.
+
+Where the output goes is the host's to decide: mail from `cron`, a
+systemd timer's failure state, a ping to whatever the machine already
+alerts with. Runpool does not choose a monitoring stack, and does not
+ship this as a script — a file under `deploy/` that nothing exercises is
+a claim with nothing behind it.
+
+Rates and history are not here and are not missing. How long jobs took,
+how many failed, how long they queued — the provider holds all of it for
+the exact runs this host served, in its own interface. What is durable
+on this side is in the store: the attempt trail, the audit log, and
+evidence, which is never pruned.
+
 ## Shared-daemon operations
 
 `runpool status` prints the configured topology and the scheduling picture —

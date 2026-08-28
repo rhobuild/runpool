@@ -176,7 +176,7 @@ not a second adapter, and this matrix does not pretend otherwise.
 | Restricted egress (`public-internet-only`) | Implemented and tested live; direct egress denied, proxy HTTP and CONNECT limited to allowed addresses on ports 80/443 |
 | Open egress (`unsafe-open-egress`) | Implemented; the name is the warning, and it is logged loudly at startup |
 | IPv6 for capsules | Not implemented. The sandbox denies it and the validator refuses a configuration claiming otherwise |
-| Metrics endpoint | Not implemented. `runpool status` and the structured log are the interface |
+| Metrics endpoint | Not implemented, and decided against at this scope. `runpool status --json` is the machine-readable account and the runbook's "Watching an instance" says what to evaluate; the [decision record](../adrs/2026-08-28-the-status-document-is-the-metrics-interface.md) says what was rejected |
 | Standby / handover for a second controller | Not implemented. A second controller gets the lock error and stops |
 | Shared Docker daemon | Implemented with explicit reserves, restricted egress, ownership-verified cleanup and per-launch uplink recovery, covered by the shared controller E2E on the reference host |
 | Dedicated Docker daemon | Implemented and recommended when the shared compromise domain is unacceptable |
