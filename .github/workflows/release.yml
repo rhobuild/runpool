@@ -131,6 +131,24 @@ jobs:
             on { print }
           ' CHANGELOG.md)
 
+          # A changelog is read inside the repository, where a link to
+          # docs/runbook.md resolves. A release page is not there. Pin
+          # every relative link to this tag, so a version's page reaches
+          # the documentation as it stood for that version rather than
+          # as it stands today.
+          section=$(printf '%s\n' "$section" | sed -E \
+            "s#\]\((docs|build|deploy|scripts|test|internal|cmd|\.github)/#](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${VERSION}/\1/#g")
+
+          # Anything still relative is a path this step does not know how
+          # to pin, and a broken link on the page a version is read from.
+          # Failing here costs a maintainer one line; not failing costs
+          # every reader of that release.
+          stray=$(printf '%s\n' "$section" | grep -oE '\]\([^)]*\)' | grep -vE '\]\((https?://|#)' || true)
+          if [ -n "$stray" ]; then
+            echo "the changelog entry links to ${stray}, which a release page cannot resolve" >&2
+            exit 1
+          fi
+
           # Every entry opens with a paragraph saying what the release
           # is, then groups the detail under `###` headings. They go to
           # different places on the release page: the summary above the
