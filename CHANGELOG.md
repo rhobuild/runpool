@@ -7,6 +7,19 @@ a version speaks for are listed in
 
 ## Unreleased
 
+### Isolation and execution
+
+- **A capsule adopted across a controller replacement is read under the
+  protocol it declares, not the one this build speaks.** Both bumps this
+  protocol has had moved what an existing word means, and a word read under
+  the wrong version is understood rather than refused — `waiting` from an
+  older supervisor reads as proof the runner never started, and returns to
+  the queue an assignment its capsule is forking a runner for. A capsule
+  whose protocol this controller does not speak now holds its attempt for a
+  person. Its exit code is still trusted from every version, and is frozen:
+  it is the only account a stopped capsule leaves. See
+  [the ADR](docs/adrs/2026-08-27-an-adopted-capsule-is-read-in-its-own-dictionary.md).
+
 ### Operations
 
 - **Resolving a held attempt no longer stops the controller.** `runpool

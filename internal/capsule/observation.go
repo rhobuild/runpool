@@ -28,6 +28,23 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 		return obs, err
 	}
 
+	// Its dictionary, not ours. A controller replaced while capsules run
+	// adopts them, and the launch that would have checked their protocol
+	// belonged to the controller before it. Both bumps this protocol has
+	// had moved what an existing word means -- version 3 split `starting`
+	// out of `waiting`, which a version 2 supervisor still answers for
+	// the whole preamble -- so a word read under the wrong version is not
+	// refused anywhere: it is understood, wrongly, and `waiting` read as
+	// proof the runner never started requeues an assignment the capsule
+	// is forking a runner for.
+	//
+	// Unreadable rather than assumed. An operator deciding one attempt is
+	// the outcome for a capsule this controller cannot interview, which is
+	// what holding it says.
+	if err := m.confirmProtocol(ctx, string(prepared.RuntimeID)); err != nil {
+		return assignment.ObservedUnavailable, err
+	}
+
 	code, out, err := m.dock.Exec(ctx, string(prepared.RuntimeID), []string{supervisorPath, "state"})
 	if err != nil {
 		// The cause travels. This is the inspection an ambiguous start is
@@ -42,6 +59,23 @@ func (m *Launcher) InspectExecution(ctx context.Context, prepared PreparedRuntim
 			fmt.Errorf("capsule state unreadable (exit %d): %s", code, out)
 	}
 	return classifySupervisorState(protocol.State(strings.TrimSpace(out)))
+}
+
+// confirmProtocol refuses to read a running capsule's state under a
+// version it does not speak.
+//
+// One read, and only where a state word is about to be trusted: the exit
+// code of a capsule that has already stopped carries no version and
+// needs none, because it is the one value the protocol pins across them.
+func (m *Launcher) confirmProtocol(ctx context.Context, outerID string) error {
+	code, out, err := m.dock.Exec(ctx, outerID, []string{"cat", protocolFile})
+	if err != nil {
+		return fmt.Errorf("capsule control protocol unreadable: %w", err)
+	}
+	if verdict := protocolVerdict(code, out); verdict != nil {
+		return fmt.Errorf("cannot read this capsule's state: %w", verdict)
+	}
+	return nil
 }
 
 // SupervisorAbortedExitCode is the status the capsule supervisor exits

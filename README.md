@@ -11,33 +11,7 @@
 Runpool is a Docker-native control plane for autoscaling ephemeral CI
 runners on a single, capacity-bounded host. It translates provider demand
 into durable assignments, isolated per-job execution capsules, and optional
-repository-scoped cache lanes—without requiring Kubernetes.
-
-> [!IMPORTANT]
-> A version is release-qualified only after a no-skip qualification run on
-> the exact platform frozen before its candidate in
-> [`build/platform.lock.json`](build/platform.lock.json). Each release
-> carries the record that run produced, bound to its commit and to the image
-> digests it publishes; [release readiness](docs/release-readiness.md) lists
-> the gates and the evidence each one leaves.
-
-## Why Runpool
-
-- **Clean execution:** every workload gets a fresh runner, workspace, Docker
-  daemon data root, and control filesystem.
-- **Bounded capacity:** runner, inner daemon, child containers, and egress
-  gateway share an aggregate cgroup budget.
-- **Durable delivery:** assignments are persisted before broker
-  acknowledgement; redelivery is idempotent and ambiguous execution is held
-  for operator review.
-- **Restricted egress:** the default profile provides kernel-enforced
-  no-route isolation plus a policy-enforcing DNS and HTTP relay.
-- **Safe ownership:** cleanup acts only on resources carrying the expected
-  instance labels; Runpool never performs daemon-wide pruning.
-- **Provider-neutral lifecycle core:** delivery, attempt, lease, cache, and
-  cleanup state use opaque provider keys. GitHub-specific configuration and
-  metadata remain at the composition and adapter boundary; GitHub Actions is
-  the only implemented provider.
+repository-scoped cache lanes — without requiring Kubernetes.
 
 ## Architecture
 
@@ -59,11 +33,34 @@ while scheduling and disk budgets are healthy. See the
 [architecture guide](docs/architecture.md) for package boundaries, identity,
 recovery, and capacity semantics.
 
+## Why Runpool
+
+- **Clean execution:** every workload gets a fresh runner, workspace, Docker
+  daemon data root, and control filesystem.
+- **Bounded capacity:** runner, inner daemon, child containers, and egress
+  gateway share an aggregate cgroup budget.
+- **Durable delivery:** assignments are persisted before broker
+  acknowledgement; redelivery is idempotent and ambiguous execution is held
+  for operator review.
+- **Restricted egress:** the default profile provides kernel-enforced
+  no-route isolation plus a policy-enforcing DNS and HTTP relay.
+- **Safe ownership:** cleanup acts only on resources carrying the expected
+  instance labels; Runpool never performs daemon-wide pruning.
+- **Provider-neutral lifecycle core:** delivery, attempt, lease, cache, and
+  cleanup state use opaque provider keys. GitHub-specific configuration and
+  metadata remain at the composition and adapter boundary; GitHub Actions is
+  the only implemented provider.
+
 ## Security boundary
 
 Runpool is a resource-management, environment-hygiene, and network-policy
-boundary for CI workloads approved by the operator. It is **not** a hostile
-code sandbox:
+boundary for CI workloads approved by the operator.
+
+> [!WARNING]
+> **Runpool is not a hostile code sandbox.** It bounds and cleans up what an
+> approved workload does; it does not contain code you would not have run.
+
+Where that boundary ends:
 
 - the controller holds the Docker socket, which is host-root authority;
 - capsules run a privileged inner Docker daemon;
@@ -106,14 +103,19 @@ docker build -f build/capsule/Dockerfile -t runpool-capsule:dev .
 docker build -f build/controller/Dockerfile -t runpool:dev .
 ```
 
-`runpool-capsule:dev` is the exact name a development build looks for. A
-release binary carries its capsule by digest and refuses to be pointed
-elsewhere; from source, this tag is the pairing.
+> [!NOTE]
+> `runpool-capsule:dev` is the exact name a development build looks for. A
+> release binary carries its capsule by digest and refuses to be pointed
+> elsewhere; from source, this tag is the pairing.
 
 Then a configuration, a credential, and the state directory:
 
 ```bash
-RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token RUNPOOL_HOST_TOPOLOGY=dedicated-daemon RUNPOOL_STATE_DIR="$PWD/state" ./runpool doctor
+RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> \
+RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token \
+RUNPOOL_HOST_TOPOLOGY=dedicated-daemon \
+RUNPOOL_STATE_DIR="$PWD/state" \
+./runpool doctor
 ```
 
 `RUNPOOL_STATE_DIR` is `$PWD/state` here rather than the default
@@ -140,12 +142,23 @@ The reference Compose deployment asks for a released digest and refuses to
 start with no image at all; that it is a digest rather than a moving tag is
 yours to hold, and [deployment](docs/deployment.md) covers verifying one. The
 images above are how a source checkout runs.
-Do not use a production credential for local experimentation.
+
+> [!CAUTION]
+> Do not use a production credential for local experimentation. A token that
+> can reach real repositories reaches them from a host you are still testing.
 
 ## Deployment
 
 Runpool provides a canonical Docker Compose manifest for its headless
 controller: no domain, reverse-proxy route, or public port is required.
+
+> [!IMPORTANT]
+> A version is release-qualified only after a no-skip qualification run on the
+> exact platform frozen before its candidate in
+> [`build/platform.lock.json`](build/platform.lock.json). Each release carries
+> the record that run produced, bound to its commit and to the image digests it
+> publishes; [release readiness](docs/release-readiness.md) lists the gates and
+> the evidence each one leaves.
 
 | Platform | Entry point |
 | --- | --- |

@@ -262,3 +262,57 @@ func TestAwaitStateStopsWhenTheContainerHasExited(t *testing.T) {
 		t.Errorf("the wait took %s; a container the daemon says is gone is not polled to the deadline", elapsed)
 	}
 }
+
+// TestAnAdoptedCapsuleIsReadInItsOwnDictionary: a controller replaced
+// while capsules run adopts them, and the launch that would have checked
+// their protocol belonged to the controller before it.
+//
+// Both bumps this protocol has had moved what an existing word means —
+// version 3 split `starting` out of `waiting`, which a version 2
+// supervisor still answers for the whole start preamble. A word read
+// under the wrong version is refused nowhere: it is understood, wrongly,
+// and `waiting` taken as proof the runner never started requeues an
+// assignment whose capsule is forking a runner for it.
+//
+// So the version is confirmed before the word is trusted, and a capsule
+// this controller cannot interview is unavailable rather than guessed
+// at: an attempt held for a person is the outcome, which is what the
+// lease machine does with that observation.
+func TestAnAdoptedCapsuleIsReadInItsOwnDictionary(t *testing.T) {
+	asked := map[string]int{}
+	daemon := &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusRunning}, nil
+		},
+		exec: func(_ string, cmd []string) (int, string, error) {
+			switch {
+			case len(cmd) == 2 && cmd[0] == "cat":
+				asked["protocol"]++
+				return 0, "2", nil // a capsule from the release before this one
+			default:
+				asked["state"]++
+				return 0, string(protocol.StateWaiting), nil
+			}
+		},
+	}
+	m := &Launcher{dock: daemon}
+
+	obs, err := m.InspectExecution(t.Context(), PreparedRuntime{RuntimeID: "capsule-1"})
+	if err == nil {
+		t.Fatal("a capsule speaking another protocol was interviewed and believed")
+	}
+	if obs != assignment.ObservedUnavailable {
+		t.Errorf("observation = %s; want %s — the word was read under this build's meanings",
+			obs, assignment.ObservedUnavailable)
+	}
+	if !strings.Contains(err.Error(), "control protocol") {
+		t.Errorf("the reason reads %q; an operator holding this attempt needs to know why", err)
+	}
+	if asked["state"] != 0 {
+		t.Error("the state was asked for before the version was confirmed; " +
+			"the answer would have been read under the wrong dictionary")
+	}
+	if asked["protocol"] != 1 {
+		t.Errorf("the protocol was read %d times; want once", asked["protocol"])
+	}
+}
