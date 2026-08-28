@@ -16,6 +16,19 @@ a version speaks for are listed in
   gate checked, carried from the step that checked them rather than read a
   second time — and follows with the digest to deploy, the grouped detail, and
   the provenance and the command that verifies it.
+- **A capsule that died before it could explain itself now carries what it
+  said.** An operator's own capsule image is built by deriving from the
+  published one, and the published one stays root deliberately: the
+  supervisor is PID 1, boots the inner Docker daemon, and drops the runner
+  to uid 1001 itself. A derived image ending `USER runner` cannot write the
+  root-owned control surface the launcher mounts for it — so it cannot write
+  the abort that would have said so either, and every attempt on that tier
+  was held with an exit code and the words "the capsule image and this
+  controller are not a pair", which sends an operator to re-check a digest
+  that was correct. The reason was in the container's log the whole time,
+  and the refusal now quotes it — in the controller's log, where the
+  refusal is reported. What the held attempt itself records is unchanged:
+  still `capsule_incompatible`, so `runpool attempts` reads as before.
 - **A step that fetches over the network is tried again when it fails.**
   Four release cycles were lost to services answering badly and nothing
   asking twice — a digest verification that could not reach Docker Hub, a

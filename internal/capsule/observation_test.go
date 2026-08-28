@@ -263,6 +263,61 @@ func TestAwaitStateStopsWhenTheContainerHasExited(t *testing.T) {
 	}
 }
 
+// TestAReadinessWaitOnADeadContainerSaysWhy is the sibling of
+// TestACapsuleThatDiedSaysWhy, and exists because it was missing.
+//
+// awaitState backs every readiness wait -- the capsule's own and the
+// gateway's -- so it is at least as likely a place to meet a container
+// that died as the protocol read is. The two diagnose the same shape of
+// failure through the same helper, and only one of them was covered:
+// reverting the awaitState call site alone broke no test at all, which
+// is exactly the sibling this repository's own discipline says to check.
+func TestAReadinessWaitOnADeadContainerSaysWhy(t *testing.T) {
+	const denial = `level=ERROR msg="capsule boot failed" error="mkdir /run/runpool-docker: permission denied"`
+	d := &fakeDaemon{
+		exec: func(string, []string) (int, string, error) {
+			return 0, "", errors.New("container is not running")
+		},
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
+		},
+		logs: func(string, int) (string, error) { return denial + "\n", nil },
+	}
+	err := (&Launcher{dock: d}).awaitState(t.Context(), "capsule-1", protocol.StateWaiting)
+	if err == nil {
+		t.Fatal("a container that had already exited was reported as still becoming ready")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("error = %q; a readiness wait that meets a dead container has to carry "+
+			"what that container said, for the same reason the protocol read does", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error = %q; it is one line, like its sibling", err)
+	}
+}
+
+// TestACapsuleThatSaidNothingIsNotQuoted: a log that was read and was
+// empty adds nothing, and an empty quotation reads as a capsule that
+// said something blank rather than one that said nothing at all.
+func TestACapsuleThatSaidNothingIsNotQuoted(t *testing.T) {
+	d := &fakeDaemon{
+		exec: func(string, []string) (int, string, error) {
+			return 0, "", errors.New("container is not running")
+		},
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: 127}, nil
+		},
+		logs: func(string, int) (string, error) { return "\n  \n\n", nil },
+	}
+	err := (&Launcher{dock: d}).awaitState(t.Context(), "capsule-1", protocol.StateWaiting)
+	if err == nil {
+		t.Fatal("a container that had already exited was reported as still becoming ready")
+	}
+	if strings.Contains(err.Error(), "last said") {
+		t.Errorf("error = %q; blank lines are not something the capsule said", err)
+	}
+}
+
 // TestAnAdoptedCapsuleIsReadInItsOwnDictionary: a controller replaced
 // while capsules run adopts them, and the launch that would have checked
 // their protocol belonged to the controller before it.

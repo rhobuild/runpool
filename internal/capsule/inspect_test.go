@@ -118,3 +118,75 @@ func TestACapsuleThatDiedIsRefusedAsIncompatible(t *testing.T) {
 			"not spending it", elapsed.Round(time.Millisecond), protocolTimeout)
 	}
 }
+
+// TestACapsuleThatDiedSaysWhy: the exit code is what an operator can act
+// on only if it names something. 79 does not.
+//
+// The case this was written for is an operator's derived capsule image
+// ending `USER runner`. The published capsule stays root deliberately —
+// the supervisor is PID 1, boots the inner daemon and drops the runner
+// to uid 1001 itself — and the control surface it writes is a root-owned
+// tmpfs this launcher mounts. Under any other user the supervisor's
+// first write fails, the abort it would have written fails onto the same
+// unwritable tmpfs, and what is left is a container that exited 79 and
+// an error reading "the capsule image and this controller are not a
+// pair" — which sends an operator to re-check a digest that was correct.
+//
+// The permission denial was in the container log the whole time.
+func TestACapsuleThatDiedSaysWhy(t *testing.T) {
+	const denial = `level=ERROR msg="capsule boot failed" error="mkdir /run/runpool-docker: permission denied"`
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return -1, "", errors.New("container is not running")
+		},
+		logs: func(string, int) (string, error) {
+			return "level=INFO msg=\"capsule starting\"\n" + denial + "\n", nil
+		},
+	}}
+
+	err := m.awaitProtocol(t.Context(), "runner-1")
+	if !errors.Is(err, ErrIncompatibleImage) {
+		t.Fatalf("error = %v; want ErrIncompatibleImage", err)
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("error = %q; it has to carry what the capsule said, or the only "+
+			"account of a derived image that cannot write its own control surface "+
+			"is an exit code that names nothing", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error = %q; it is recorded as the evidence beside a held attempt, "+
+			"and a multi-line value there is one field that reads as several", err)
+	}
+}
+
+// TestACapsuleWhoseLogsCannotBeReadStillReportsTheExit: the tail is an
+// addition to a diagnosis and never the diagnosis. A daemon that will
+// not answer for the logs must not cost the error that sent us here —
+// the path is already failing, and this is the second thing to fail on
+// it.
+func TestACapsuleWhoseLogsCannotBeReadStillReportsTheExit(t *testing.T) {
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: 127}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return -1, "", errors.New("container is not running")
+		},
+		logs: func(string, int) (string, error) {
+			return "", errors.New("daemon is unreachable")
+		},
+	}}
+
+	err := m.awaitProtocol(t.Context(), "runner-1")
+	if !errors.Is(err, ErrIncompatibleImage) || !strings.Contains(err.Error(), "127") {
+		t.Fatalf("error = %v; want the exit code and ErrIncompatibleImage, unchanged "+
+			"by a log read that failed", err)
+	}
+	if strings.Contains(err.Error(), "last said") {
+		t.Errorf("error = %q; a log that could not be read has nothing to add, and "+
+			"an empty quotation reads as a capsule that said nothing", err)
+	}
+}
