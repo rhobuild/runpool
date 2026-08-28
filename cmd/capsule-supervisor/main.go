@@ -157,10 +157,7 @@ func supervise(log *slog.Logger) int {
 		log.Error("capsule run failed", "error", err)
 		state := terminalFailure(currentState(), err)
 		setState(state)
-		if strings.HasPrefix(string(state), protocol.AbortedPrefix) {
-			return exitAborted
-		}
-		return 1
+		return failureExit(state)
 	}
 	reported := runnerExit(code)
 	if reported != code {
@@ -716,6 +713,28 @@ func terminalFailure(state protocol.State, err error) protocol.State {
 		return protocol.State(protocol.FailedPrefix + err.Error())
 	}
 	return protocol.State(protocol.AbortedPrefix + err.Error())
+}
+
+// failureExit is the code that carries the state's own decision out to
+// the controller, which cannot see the state file.
+//
+// terminalFailure already decided the only thing that matters -- whether
+// the runner was ever handed the job -- and this must not decide it
+// again. It did: the exit was chosen by re-reading the prefix of the
+// string terminalFailure had just built, so the two could disagree.
+//
+// What a disagreement costs is not symmetric. ClassifyExit reads the
+// reserved code as ObservedCreated, which is the account that the job
+// never started, and an attempt with that account is returned to the
+// queue. So reporting a failure that happened after fork/exec as an
+// abort runs a workload twice -- a deploy, a publish, a release -- with
+// no review entry and nobody asked. The other direction holds a job that
+// never ran for a person, which is a delay.
+func failureExit(state protocol.State) int {
+	if strings.HasPrefix(string(state), protocol.AbortedPrefix) {
+		return exitAborted
+	}
+	return 1
 }
 
 func currentState() protocol.State {
