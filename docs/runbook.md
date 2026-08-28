@@ -310,14 +310,14 @@ decision, it is stuck on an object. Clear the obstruction and the
 periodic reconciler converges the lease on its own, without a restart.
 
 ```bash
-docker compose exec controller runpool status --json
+docker compose exec controller runpool status
 ```
 
-`--json`, because the objects are what you need and only that form names
-them: `leases[].resources[]` carries each one's kind, name and state,
-while the text report gives a count. Nor will they be in
-`discrepancies` — that list is for objects belonging to no live lease,
-and a quarantined lease is live.
+A quarantined lease lists what it still holds, each object's kind, name
+and state, because those are the work. Do not look in `discrepancies`:
+that list is for objects belonging to no live lease, and a quarantined
+lease is live, so nothing of its will ever appear there. `--json` carries
+the same objects under `leases[].resources[]` for a script.
 
 Find why the daemon will not remove the object — a container still
 running, a volume still mounted, a network with an endpoint attached —
