@@ -182,9 +182,13 @@ jobs:
 ```
 
 The label is `tiers[].scaleSetName`, which defaults to `runpool-<tier
-id>`. It is a name, not a label set: `runs-on: [self-hosted, linux, x64]`
-does not reach a scale set, because GitHub matches one by its name and
-nothing else. `runpool doctor` prints the name for every tier a
+id>`. It is the only label Runpool gives a scale set. GitHub can carry
+several on one — the ability was added after this project shipped — and
+Runpool does not use it, so a tier is reached by that one name and
+nothing else. `runs-on: [self-hosted, linux, x64]` still reaches no scale
+set of any kind: unlike a classic self-hosted runner, a scale-set runner
+receives no default labels at all, so none of those three words belongs
+to anything here. `runpool doctor` prints the name for every tier a
 deployment serves, so the string in configuration and the string in a
 workflow can be compared without reading either. A complete example
 workflow is in [`deploy/workflows/example.yml`](../deploy/workflows/example.yml).

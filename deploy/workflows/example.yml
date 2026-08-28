@@ -1,13 +1,18 @@
 # The workflow side of a Runpool deployment, in full.
 #
-# `runs-on` names the scale set, not a set of labels. Runpool creates one
-# scale set per (target, tier) under `tiers[].scaleSetName`, which
-# defaults to `runpool-<tier id>`; `runpool doctor` prints the name for
-# every tier a deployment serves, beside the provider id where the set
-# already exists.
+# `runs-on` names the scale set. Runpool creates one per (target, tier)
+# under `tiers[].scaleSetName`, which defaults to `runpool-<tier id>`,
+# and gives it that one name as its only label; `runpool doctor` prints
+# the name for every tier a deployment serves, beside the provider id
+# where the set already exists.
 #
-# `runs-on: [self-hosted, linux, x64]` does not reach a scale set. GitHub
-# matches a scale set by its name and nothing else.
+# GitHub can carry several labels on a scale set — the ability was added
+# after this project shipped — and Runpool does not use it, so the name
+# is what reaches a tier.
+#
+# `runs-on: [self-hosted, linux, x64]` reaches no scale set of any kind:
+# unlike a classic self-hosted runner, a scale-set runner receives no
+# default labels, so none of those three words belongs to anything.
 name: example
 
 on:
