@@ -17,12 +17,13 @@ the word "yet", which is a promise with a date nobody set. Closing it
 needed one question answered: what can an operator of one host not find
 out today.
 
-The answer is nothing, across eight conditions: disk pressure at either
-emergency level, an attempt held for manual review, a binding that has
-stopped reaching its provider, a queue that is not draining while credits
-are free, a disagreement between the books and the daemon, an unreadable
-engine, a lease stuck in quarantine, and a default capsule image that
-cannot be resolved. It is computed from the store and the configuration
+The answer is nothing, across nine conditions: disk pressure at either
+emergency level, a disk measurement that has stopped arriving, an attempt
+held for manual review, a binding that has stopped reaching its provider,
+a queue that is not draining while credits are free, a disagreement
+between the books and the daemon, an unreadable engine, a live lease that
+has stopped moving, and a default capsule image that cannot be
+resolved. It is computed from the store and the configuration
 by a read-only open, not from controller memory, which is why
 `runpool healthcheck` already works the same way.
 
@@ -30,7 +31,7 @@ Three of those eight were not in the first list drawn up for this
 decision, and two of them are worth recording, because one was not a gap
 in a list at all.
 
-A **quarantined lease** was: it is not terminal, so it holds an admission
+A **lease that has stopped moving** was: it is not terminal, so it holds an admission
 credit, and it is deliberately not a discrepancy because the lease is
 live. It is in the document — `leases[].state` — and the first list
 simply did not name it. Worse, a host wedged entirely on quarantined
@@ -104,6 +105,19 @@ the reference says so rather than implying arrival.
 
 A future scrapeable surface, if one is ever justified, is a new field
 with its own name — not this one waking up.
+
+What is watched is a shape rather than a list of names, and that is part
+of the decision rather than an implementation detail of a script. An
+enumerated set of states to worry about loses to a state machine: a lease
+comes to rest in quarantine, and it also comes to rest when the commit
+that would have released it keeps failing, and the next way will not be
+on a list written today. So the check is "not terminal, not running work,
+and older than the longest a healthy one is bounded to" — and a second,
+looser one for a lease that outlived the job ceiling in any state at all.
+The disk is watched the same way: its level is only rewritten by a
+measurement that succeeded, and the probe measures by running a
+container, so watching the level alone reports "normal" straight through
+a full disk. What is watched is the timestamp.
 
 Rates and durations are out of this decision's scope rather than swept
 into it by omission. How long jobs took, how many failed and how long

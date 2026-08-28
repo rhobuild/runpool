@@ -33,8 +33,8 @@ report that the controller is running rather than acting behind it.
 There is no metrics endpoint and no exporter, by decision — see
 [the record](adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 `runpool status --json` is the machine-readable account, and it carries
-an `api_version` so a script that reads it is written once. Eight
-conditions are the ones that need a person, and all eight are in that
+an `api_version` so a script that reads it is written once. Nine
+conditions are the ones that need a person, and all nine are in that
 document:
 
 | Condition | Where it shows | Why it needs a person |
@@ -45,7 +45,8 @@ document:
 | A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
 | The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
 | An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
-| A lease stuck in quarantine | `leases[].state` | An object the daemon will not remove; it is not a discrepancy, because the lease is live — and it holds an admission credit, so a host wedged this way loses capacity silently |
+| A live lease that has stopped moving | `leases[].terminal`, `state`, `created_at` | Quarantine is one way a lease comes to rest; a finalization that fails after its resources are already gone is another. Both hold an admission credit, so a host wedged this way loses capacity silently |
+| A disk measurement that has stopped arriving | `disk_pressure.measured_at` | The probe runs a container to measure, so it fails exactly when the disk is full — and a failed measurement writes nothing, leaving the last `level` reading "normal" indefinitely |
 | A capsule image that cannot be resolved | `capsule_image_error` | Every tier that names no `capsuleImage` of its own would launch the build's default, and this says what that default is not |
 
 This prints one line per condition and nothing at all when there is
@@ -70,8 +71,14 @@ docker compose exec -T controller runpool status --json | jq -r '
       (if ((.scheduling.queued // 0) > 0 and (.scheduling.available // 0) > 0) then
          "\(.scheduling.queued) queued with \(.scheduling.available) free: the queue is not draining"
        else empty end),
-      (if ([.leases[]? | select(.state == "quarantined")] | length) > 0 then
-         "\([.leases[]? | select(.state == "quarantined")] | length) lease(s) stuck in quarantine, each holding a credit"
+      (.leases[]? | select(.terminal == false and .state != "workload_running"
+                           and (now - (.created_at | fromdateiso8601)) > 1800)
+         | "lease \(.id) has been \(.state) for over 30m and still holds a credit"),
+      (.leases[]? | select(.terminal == false
+                           and (now - (.created_at | fromdateiso8601)) > 43200)
+         | "lease \(.id) has been live for over 12h in state \(.state)"),
+      (if ((now - ((.disk_pressure.measured_at // "1970-01-01T00:00:00Z") | fromdateiso8601)) > 900) then
+         "the disk was last measured at \(.disk_pressure.measured_at // "never"), so the level below is that old"
        else empty end),
       (if ((.capsule_image_error // "") != "") then
          "the default capsule image cannot be resolved: \(.capsule_image_error)"
@@ -89,12 +96,34 @@ is a busy instance, not a stuck one. And a binding that failed and then
 reconnected is a binding that recovered, which is why the comparison is
 against `last_contact_at` rather than the presence of an error.
 
-The quarantine check earns its place by covering the first one's blind
-spot. A quarantined lease is not terminal, so it counts toward `active`
-and reduces `available` — and a host wedged entirely on quarantined
-leases has `available` at zero, which is exactly the condition under
-which "the queue is not draining" stays quiet. Without this line, the
-worse the wedge, the less the check has to say about it.
+The lease checks earn their place by covering the first one's blind spot.
+A live lease is not terminal, so it counts toward `active` and reduces
+`available` — and a host wedged on them has `available` at zero, which is
+exactly the condition under which "the queue is not draining" stays
+quiet. Without these lines, the worse the wedge, the less the rest of the
+list has to say about it.
+
+**Both lease checks ask about shape rather than about a named state, and
+that is deliberate.** A list of states to worry about keeps losing to a
+state machine: quarantine is one way a lease comes to rest, a
+finalization that fails after its resources are already gone is another,
+and the next one will not be on any list written today. So the first
+check is "not terminal, not running work, and older than thirty
+minutes" — thirty because a capsule's whole preparation is bounded at
+fifteen, so nothing healthy sits in any other state that long. The second
+is "not terminal and older than twelve hours", which is above the
+eight-hour default job ceiling and catches a lease that outlived it in
+any state at all, `workload_running` included. **Raise the twelve hours
+if any tier sets a longer `jobTimeout`.**
+
+The disk check is that reasoning applied to a measurement rather than a
+state. `disk_pressure.level` is rewritten only by a measurement that
+succeeded, so a probe that keeps failing leaves the last reading in place
+indefinitely — and the probe runs a container to do its measuring, which
+is precisely what stops working when a disk is full. Watching the level
+alone would report "normal" straight through the failure it exists to
+catch; the timestamp is what says whether the level is an answer or a
+souvenir.
 
 Where the output goes is the host's to decide: mail from `cron`, a
 systemd timer's failure state, a ping to whatever the machine already
