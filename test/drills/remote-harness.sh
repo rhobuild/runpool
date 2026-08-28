@@ -88,13 +88,60 @@ printf '%s\n' "$status_report" | head -3
 echo "restore: instance identity and audit marker survived"
 
 echo "== drill: upgrade (migration) and integrity =="
-# 'upgrade' here is: the new binary opens existing state and migrates
-# forward; the seed helper (built from this same tree) does exactly that
-# on open, and verify proves the data survived migration. Rollback for a
-# failed upgrade is the restore above: there are no down scripts, so the
-# backup taken before the migration is the only way back.
+# The same binary on both ends proves the state survived a round trip; it
+# cannot prove a migration, because there is nothing between the two
+# versions to migrate. So the old end is a database the released schema
+# wrote, carried in the tree, and the new end is the image built here.
 docker run --rm -v "$vol":/state -v "$dir/drill-seed":/drill-seed:ro "$bb" /drill-seed verify /state >/dev/null
 echo "upgrade: current schema opens the restored state and the marker survives"
+
+released_db=internal/store/testdata/v1.0.0.db
+if [ ! -f "$released_db" ]; then
+  echo "upgrade drill: $released_db is missing; the old end of this comparison is gone"; exit 1
+fi
+old_vol="$vol-released"
+docker volume create "$old_vol" >/dev/null
+trap 'docker volume rm "$old_vol" >/dev/null 2>&1 || true; cleanup' EXIT
+docker run --rm -v "$old_vol":/state -v "$PWD/$released_db":/seed.db:ro "$bb" \
+  cp /seed.db /state/runpool.db
+before=$(docker run --rm -v "$old_vol":/state:ro "$bb" ls /state | tr '\n' ' ')
+
+# Opening it read-write is the migration, and only the helper does that:
+# `status` is a reporting command, opens read-only, and refuses a
+# database that predates the build rather than moving it -- which is what
+# it says when asked, and why it cannot stand in here.
+if ! version=$(docker run --rm -v "$old_vol":/state \
+    -v "$dir/drill-seed":/drill-seed:ro "$bb" /drill-seed open /state 2>&1); then
+  echo "upgrade drill: the current build refused a database the released schema wrote:"
+  echo "$version"; exit 1
+fi
+echo "upgrade: the released database opened at schema $version"
+
+after=$(docker run --rm -v "$old_vol":/state:ro "$bb" ls /state | tr '\n' ' ')
+echo "upgrade: released state before [$before] after [$after]"
+
+# A schema that moved leaves a copy to roll back to, and the release it
+# came from must then refuse the migrated database rather than read it
+# under a vocabulary it does not have. Both are conditional on a
+# migration having happened, which is what arms them when 000002 lands.
+if printf '%s' "$after" | grep -q 'pre-migration'; then
+  # At the path that image looks in, not at ours: mounted anywhere else
+  # it reports an instance that has not run and exits zero, which reads
+  # as a refusal and is not one.
+  released_out=$(docker run --rm -v "$old_vol":/var/lib/runpool/state \
+    ghcr.io/rhobuild/runpool:v1.0.0 status 2>&1) && {
+    echo "upgrade drill: the released build read a database this one migrated:"
+    printf '%s\n' "$released_out" | head -3; exit 1
+  }
+  case "$released_out" in
+    *"schema"*) ;;
+    *) echo "upgrade drill: v1.0.0 failed for some other reason:"
+       printf '%s\n' "$released_out" | head -3; exit 1 ;;
+  esac
+  echo "upgrade: the schema moved, a pre-migration copy exists, and v1.0.0 refuses the result"
+else
+  echo "upgrade: no migration pending for the released schema"
+fi
 
 echo "== drill: uninstall =="
 # Uninstall must remove everything the instance owns — including a
