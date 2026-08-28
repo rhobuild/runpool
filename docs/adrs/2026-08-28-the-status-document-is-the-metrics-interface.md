@@ -17,21 +17,18 @@ the word "yet", which is a promise with a date nobody set. Closing it
 needed one question answered: what can an operator of one host not find
 out today.
 
-Asking it properly took two answers. The first was a list of six
-conditions, and an independent review found two it was missing — which
-is the point of asking rather than asserting.
+The answer is nothing, across eight conditions: disk pressure at either
+emergency level, an attempt held for manual review, a binding that has
+stopped reaching its provider, a queue that is not draining while credits
+are free, a disagreement between the books and the daemon, an unreadable
+engine, a lease stuck in quarantine, and a default capsule image that
+cannot be resolved. It is computed from the store and the configuration
+by a read-only open, not from controller memory, which is why
+`runpool healthcheck` already works the same way.
 
-The answer now is nothing, across seven conditions: disk pressure at
-either emergency level, an attempt held for manual review, a binding
-that has stopped reaching its provider, a queue that is not draining
-while credits are free, a disagreement between the books and the daemon,
-an unreadable engine, and a lease stuck in quarantine. It is computed
-from the store and the configuration by a read-only open, not from
-controller memory, which is why `runpool healthcheck` already works the
-same way.
-
-The two that were missing are worth recording, because one of them was
-not a gap in the list.
+Three of those eight were not in the first list drawn up for this
+decision, and two of them are worth recording, because one was not a gap
+in a list at all.
 
 A **quarantined lease** was: it is not terminal, so it holds an admission
 credit, and it is deliberately not a discrepancy because the lease is
@@ -107,3 +104,12 @@ the reference says so rather than implying arrival.
 
 A future scrapeable surface, if one is ever justified, is a new field
 with its own name — not this one waking up.
+
+Rates and durations are out of this decision's scope rather than swept
+into it by omission. How long jobs took, how many failed and how long
+they queued are the provider's records for the exact runs this host
+served, and what is durable on this side is the attempt trail, the audit
+log and evidence, which is never pruned. Turning that into rates would be
+a command that reads the store and prints them — a separate decision,
+made when something needs them, and not a thing an endpoint would have
+been the answer to.

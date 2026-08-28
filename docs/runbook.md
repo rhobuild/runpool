@@ -33,8 +33,8 @@ report that the controller is running rather than acting behind it.
 There is no metrics endpoint and no exporter, by decision — see
 [the record](adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 `runpool status --json` is the machine-readable account, and it carries
-an `api_version` so a script that reads it is written once. Seven
-conditions are the ones that need a person, and all seven are in that
+an `api_version` so a script that reads it is written once. Eight
+conditions are the ones that need a person, and all eight are in that
 document:
 
 | Condition | Where it shows | Why it needs a person |
@@ -46,6 +46,7 @@ document:
 | The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
 | An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
 | A lease stuck in quarantine | `leases[].state` | An object the daemon will not remove; it is not a discrepancy, because the lease is live — and it holds an admission credit, so a host wedged this way loses capacity silently |
+| A capsule image that cannot be resolved | `capsule_image_error` | Every tier that names no `capsuleImage` of its own would launch the build's default, and this says what that default is not |
 
 This prints one line per condition and nothing at all when there is
 nothing to look at, which is what makes it a cron job: `cron` mails the
@@ -71,6 +72,9 @@ docker compose exec -T controller runpool status --json | jq -r '
        else empty end),
       (if ([.leases[]? | select(.state == "quarantined")] | length) > 0 then
          "\([.leases[]? | select(.state == "quarantined")] | length) lease(s) stuck in quarantine, each holding a credit"
+       else empty end),
+      (if ((.capsule_image_error // "") != "") then
+         "the default capsule image cannot be resolved: \(.capsule_image_error)"
        else empty end)
     ] | .[]
   end'

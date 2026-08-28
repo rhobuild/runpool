@@ -31,7 +31,7 @@ a version speaks for are listed in
   endpoint and there will not be one at this scope: `runpool status --json`
   is the machine-readable account, versioned for exactly this, and deciding
   when a person has to look belongs to the host. The runbook's new "Watching
-  an instance" names the seven conditions that need one and gives a command
+  an instance" names the eight conditions that need one and gives a command
   that prints a line per condition and nothing when there is nothing to look
   at. The field is still accepted — configuration parsing is strict and the
   shipped example writes it, so removing it would fail the startup of every
