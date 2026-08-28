@@ -131,10 +131,10 @@ A tier is a named resource envelope with its own parallelism limit.
 | --- | --- |
 | `id` | Lowercase slug; targets reference it |
 | `parallelism` | Maximum active leases in the tier, `1..10000`; default `1` |
-| `resources.cpu` | CPU limit, `> 0` |
-| `resources.memory` | Memory limit, `> 0` |
+| `resources.cpu` | CPU limit, `> 0`; default `2` |
+| `resources.memory` | Memory limit, `> 0`; default `4GiB` |
 | `resources.swap` | Additional swap above memory, `>= 0B`; default `0B` |
-| `resources.pids` | Process ceiling, `>= 1` |
+| `resources.pids` | Process ceiling, `>= 1`; default `1024` |
 | `capsuleImage` | Capsule image for this tier's jobs, digest-qualified; default is the image this build ships |
 | `jobTimeout` | How long Runpool waits for a capsule that stopped reporting, `>= 1m`; default `8h` |
 
@@ -187,11 +187,18 @@ An operator's image therefore derives from the published one:
 
 ```dockerfile
 FROM ghcr.io/rhobuild/runpool/capsule@sha256:<digest>
-USER root
 RUN apt-get update && apt-get install -y --no-install-recommends <packages> \
  && rm -rf /var/lib/apt/lists/*
-USER runner
 ```
+
+**Do not end it with a `USER` directive.** The published image is root on
+purpose: the supervisor is PID 1 and needs root to boot the inner Docker
+daemon, and it drops the runner to uid 1001 itself once the job is handed
+over — which the image's last `USER` cannot say. A derived image that
+ends as another user cannot write its own control surface, so it cannot
+report why it stopped either: every attempt on that tier is held as
+`capsule_incompatible`, which reads as a version mismatch and sends you
+back to a digest that was right.
 
 The supervisor, its entrypoint, and the `/run/runpool` control surface are
 the parts that may not be replaced. Everything else — packages, language
@@ -343,13 +350,13 @@ refuses one rather than accepting a value that does nothing.
 
 | Field | Meaning |
 | --- | --- |
-| `global.maxManagedBytes` | The cache budget the watermarks are a fraction of |
-| `global.highWatermarkPercent` | Where collection starts, `1 <= low < high <= 99` |
-| `global.lowWatermarkPercent` | What collection collects down to |
-| `global.softEmergencyFreeBytes` | Free space at which admission closes |
-| `global.hardEmergencyFreeBytes` | Free space at which everything fails closed; must be below the soft threshold |
-| `defaults.repositoryMaxBytes` | Per-project ceiling; may not exceed the global budget |
-| `defaults.unusedTTL` | How long a free lane survives unused, `> 0` |
+| `global.maxManagedBytes` | The cache budget the watermarks are a fraction of; default `150GiB` |
+| `global.highWatermarkPercent` | Where collection starts, `1 <= low < high <= 99`; default `80` |
+| `global.lowWatermarkPercent` | What collection collects down to; default `65` |
+| `global.softEmergencyFreeBytes` | Free space at which admission closes; default `20GiB` |
+| `global.hardEmergencyFreeBytes` | Free space at which everything fails closed; must be below the soft threshold; default `10GiB` |
+| `defaults.repositoryMaxBytes` | Per-project ceiling; may not exceed the global budget; default `15GiB` |
+| `defaults.unusedTTL` | How long a free lane survives unused, `> 0`; default `720h` |
 
 What each pressure level means operationally is in
 [the runbook](../runbook.md).

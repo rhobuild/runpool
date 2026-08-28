@@ -113,8 +113,12 @@ elsewhere; from source, this tag is the pairing.
 Then a configuration, a credential, and the state directory:
 
 ```bash
-RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token RUNPOOL_HOST_TOPOLOGY=dedicated-daemon RUNPOOL_STATE_DIR=/var/lib/runpool/state ./runpool doctor
+RUNPOOL_GITHUB_URL=https://github.com/<owner>/<repo> RUNPOOL_GITHUB_TOKEN_FILE=/run/secrets/runpool/token RUNPOOL_HOST_TOPOLOGY=dedicated-daemon RUNPOOL_STATE_DIR="$PWD/state" ./runpool doctor
 ```
+
+`RUNPOOL_STATE_DIR` is `$PWD/state` here rather than the default
+`/var/lib/runpool/state`, which the deployed controller uses from inside
+its container and which a shell on the host cannot create without root.
 
 `doctor` proves the host and the credential, and prints the `runs-on`
 label for every tier it would serve. Then `./runpool serve`, and a
@@ -132,8 +136,10 @@ a job gets: its own Docker daemon, and egress through the relay.
 shapes exist, what a runner group has to grant, and which credential to
 use — and the [runbook](docs/runbook.md) covers operating it.
 
-The reference Compose deployment requires a released digest and refuses to
-start without one; the images above are how a source checkout runs.
+The reference Compose deployment asks for a released digest and refuses to
+start with no image at all; that it is a digest rather than a moving tag is
+yours to hold, and [deployment](docs/deployment.md) covers verifying one. The
+images above are how a source checkout runs.
 Do not use a production credential for local experimentation.
 
 ## Deployment

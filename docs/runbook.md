@@ -313,12 +313,18 @@ periodic reconciler converges the lease on its own, without a restart.
 docker compose exec controller runpool status
 ```
 
-The `discrepancies` the report lists are where the books and the daemon
-disagree, and a quarantined lease's resources are named in its own entry.
+A quarantined lease lists what it still holds, each object's kind, name
+and state, because those are the work. Do not look in `discrepancies`:
+that list is for objects belonging to no live lease, and a quarantined
+lease is live, so nothing of its will ever appear there. `--json` carries
+the same objects under `leases[].resources[]` for a script.
+
 Find why the daemon will not remove the object — a container still
 running, a volume still mounted, a network with an endpoint attached —
 and remove the reason. The next reconciliation pass retries the release
-and the credit comes back.
+and the credit comes back. That pass runs about once a minute, and only
+takes a lease nothing has touched for two minutes, so a quarantine that
+clears is not instant: give it a few minutes before looking again.
 
 A quarantined lease is never swept as an orphan and never pruned by
 retention: both would take the resources of a job that may still be

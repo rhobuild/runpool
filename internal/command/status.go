@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"time"
@@ -160,14 +161,7 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 		fmt.Fprintf(streams.Out, " (showing the %d most recent)", len(released))
 	}
 	fmt.Fprintln(streams.Out)
-	for _, l := range live {
-		resources := snap.Resources[l.ID]
-		project := ""
-		if a, ok := snap.Attempts[l.ID]; ok {
-			project = a.TenantKey + "/" + a.ProjectKey
-		}
-		fmt.Fprintf(streams.Out, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))
-	}
+	renderLeases(streams.Out, live, snap)
 
 	if len(review) > 0 {
 		fmt.Fprintf(streams.Out, "\nmanual review (%d) — resolve with `runpool attempts resolve`\n", len(review))
@@ -243,6 +237,35 @@ func configuredStatusConfig(environ func(string) string) *config.Config {
 	return &config.Config{
 		Host:  config.Host{Topology: config.HostTopology(topology)},
 		Tiers: []config.Tier{{ID: tierID, Parallelism: parallelism}},
+	}
+}
+
+// renderLeases writes the live leases, and for a quarantined one the
+// objects it still holds.
+//
+// Named for that state and no other, because there the objects are the
+// work: a quarantined lease is stuck on an object rather than on a
+// decision, and clearing it means finding that object. A count says how
+// many there are to look for, which is not the same as saying which, and
+// the runbook sent an operator here for exactly that. They are not in
+// `discrepancies` either -- that list is objects belonging to no live
+// lease, and a quarantined lease is live.
+//
+// Every lease listing its own would bury the report a busy host prints.
+func renderLeases(w io.Writer, live []store.Lease, snap store.Snapshot) {
+	for _, l := range live {
+		resources := snap.Resources[l.ID]
+		project := ""
+		if a, ok := snap.Attempts[l.ID]; ok {
+			project = a.TenantKey + "/" + a.ProjectKey
+		}
+		fmt.Fprintf(w, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))
+		if l.State != store.LeaseQuarantined {
+			continue
+		}
+		for _, r := range resources {
+			fmt.Fprintf(w, "      %-10s %-30s %s\n", r.Kind, r.Name, r.State)
+		}
 	}
 }
 

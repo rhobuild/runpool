@@ -389,3 +389,50 @@ func TestNoDocCommentBelongsToAnotherDeclaration(t *testing.T) {
 		t.Error(f)
 	}
 }
+
+// TestTheDeploymentSaysWhichHealthModeItWires: the deployment guide's
+// platform checklist tells an operator what the reference Compose file
+// asks the controller for, and the two are separate files.
+//
+// The checklist once asked for both liveness and readiness while the
+// manifest wired liveness alone, so a platform maintainer building
+// against the checklist would have wired a mode the reference does not
+// use. Which of the two is right is a decision; that they say the same
+// thing is not.
+func TestTheDeploymentSaysWhichHealthModeItWires(t *testing.T) {
+	compose, err := os.ReadFile(repoPath("deploy", "compose", "compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest yaml.Node
+	if err := yaml.Unmarshal(compose, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	modes := map[string]bool{}
+	for _, test := range valuesOf(&manifest, "test") {
+		for _, mode := range []string{"liveness", "readiness"} {
+			if strings.Contains(test, "--mode="+mode) {
+				modes[mode] = true
+			}
+		}
+	}
+	if len(modes) == 0 {
+		t.Fatal("the reference manifest wires no health mode, so this proves nothing")
+	}
+
+	guide, err := os.ReadFile(repoPath("docs", "deployment.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The checklist item is the sentence naming the healthcheck command.
+	for _, mode := range []string{"liveness", "readiness"} {
+		named := strings.Contains(string(guide), "`"+mode+"` only")
+		if wired := modes[mode]; named && !wired {
+			t.Errorf("deployment.md says the reference asks for %q only, and compose.yaml does not wire it", mode)
+		}
+	}
+	if modes["readiness"] && strings.Contains(string(guide), "`liveness` only") {
+		t.Error("deployment.md says the reference asks for liveness only; compose.yaml also wires readiness")
+	}
+}
