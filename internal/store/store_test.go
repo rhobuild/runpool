@@ -2523,3 +2523,79 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 			"observation is one fact, not two", after-before)
 	}
 }
+
+// TestADatabaseWrittenByTheFirstReleaseStillOpens: the first migration
+// this project ships will meet databases it did not write, and nothing
+// has ever exercised that.
+//
+// testdata/v1.0.0.db was written by the schema v1.0.0 shipped — the
+// baseline is immutable, its fingerprint pinned to a constant, so a
+// database this tree creates today is that one. **It is not
+// regenerated.** Rewriting it with whatever tree is current turns the
+// old end of the comparison into the new one, which is the defect this
+// exists to answer: the lifecycle drill builds one binary for both ends,
+// so its upgrade step has never migrated anything.
+//
+// Today this asserts that a released database still opens and still
+// carries its data. The moment a 000002 lands it asserts the migration:
+// the version is the count of migrations this build has, the data
+// written before it survived, and the pre-migration copy the runbook
+// tells an operator to roll back to was taken.
+func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
+	dir := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "v1.0.0.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runpool.db"), fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, DefaultRetryBudget)
+	if err != nil {
+		t.Fatalf("a database written by v1.0.0 was refused: %v", err)
+	}
+	defer s.Close()
+
+	version, err := s.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != len(migrations) {
+		t.Errorf("the opened database is at schema %d and this build has %d migrations; "+
+			"the pending ones did not apply", version, len(migrations))
+	}
+
+	// The data is the point: a migration that empties the books passes
+	// every check about versions.
+	if err := s.Tx(t.Context(), func(tx *Tx) error {
+		bindings, err := tx.Bindings()
+		if err != nil {
+			return err
+		}
+		if len(bindings) != 1 || bindings[0].TargetID != "app" {
+			t.Errorf("the restored books hold %d bindings; the fixture wrote one", len(bindings))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A backup exists exactly when something migrated, which is what the
+	// runbook tells an operator to roll back to.
+	backups, err := filepath.Glob(filepath.Join(dir, "pre-migration-v*.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := version > 1
+	if migrated && len(backups) == 0 {
+		t.Error("the schema moved and no pre-migration copy was taken; a rollback has nothing to restore")
+	}
+	if !migrated && len(backups) > 0 {
+		t.Errorf("nothing migrated and %v was written", backups)
+	}
+}
