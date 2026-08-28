@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -744,6 +745,15 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 	var mu sync.Mutex
 	served := map[uint64]*http.Transport{}
 
+	// installed counts the policies that have actually landed. The
+	// readers below wait on it rather than on a fixed number of their
+	// own iterations, because a reader here never blocks: it is a map
+	// read and an atomic load, so on a host with fewer cores than this
+	// test has goroutines the installer can be starved for the whole run
+	// and every reader finish having seen one generation. That is what
+	// the guard at the end catches, and catching it is the test failing
+	// rather than the code.
+	var installed atomic.Uint64
 	stop := make(chan struct{})
 	var installers sync.WaitGroup
 	installers.Add(1)
@@ -756,15 +766,27 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 			default:
 			}
 			install(fmt.Sprintf("10.%d.0.0/16", i%256))
+			installed.Add(1)
 		}
 	}()
 
+	// The deadline is the whole test's, not one reader's: it bounds a
+	// starved installer into a failure that says so instead of a hang.
+	deadline := time.Now().Add(30 * time.Second)
 	var readers sync.WaitGroup
 	for range 8 {
 		readers.Add(1)
 		go func() {
 			defer readers.Done()
-			for range 400 {
+			// At least 400 reads, and not finished until the policy has
+			// moved twice under this reader. Twice and not once: one
+			// install may have landed before the first read, which would
+			// leave the reader having seen a single generation again.
+			from := installed.Load()
+			for reads := 0; reads < 400 || installed.Load() < from+2; reads++ {
+				if time.Now().After(deadline) {
+					return
+				}
 				got := r.transportInForce()
 				mu.Lock()
 				if prev, seen := served[got.gen]; seen && prev != got.transport {
@@ -773,6 +795,11 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 				}
 				served[got.gen] = got.transport
 				mu.Unlock()
+				// Nothing in this loop blocks, so nothing yields. On a
+				// host with fewer cores than this test has goroutines,
+				// that is enough to keep the installer off a processor
+				// for the whole run.
+				runtime.Gosched()
 			}
 		}()
 	}
@@ -781,8 +808,9 @@ func TestConcurrentReadersNeverSplitThePoolFromItsGeneration(t *testing.T) {
 	installers.Wait()
 
 	if len(served) < 2 {
-		t.Fatalf("only %d generation(s) were observed; the policy never moved under the readers "+
-			"and the race this rules out was never given a chance", len(served))
+		t.Fatalf("only %d generation(s) were observed in %s; the policy never moved under the "+
+			"readers and the race this rules out was never given a chance",
+			len(served), 30*time.Second)
 	}
 }
 
