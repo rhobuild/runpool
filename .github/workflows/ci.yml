@@ -231,7 +231,7 @@ jobs:
       - name: Build the controller image
         # Built but not pushed: publishing is a release decision, and a
         # pull request must never be able to publish.
-        run: docker build -f build/controller/Dockerfile -t runpool:ci .
+        run: scripts/ci/retry.sh docker build -f build/controller/Dockerfile -t runpool:ci .
       - name: Verify the runtime layer carries no shell
         run: |
           if docker run --rm --entrypoint sh runpool:ci -c true 2>/dev/null; then

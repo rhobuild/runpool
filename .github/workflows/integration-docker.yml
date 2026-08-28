@@ -113,7 +113,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build the capsule image from the pinned inputs
-        run: docker build -f build/capsule/Dockerfile -t runpool-capsule:dev .
+        run: scripts/ci/retry.sh docker build -f build/capsule/Dockerfile -t runpool-capsule:dev .
       - name: Run the capsule, egress and budget contracts
         run: |
           dir=$(mktemp -d)

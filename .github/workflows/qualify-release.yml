@@ -141,7 +141,7 @@ jobs:
         env:
           CAPSULE_IMAGE: ${{ inputs.capsule_image }}
         run: |
-          docker pull "$CAPSULE_IMAGE"
+          scripts/ci/retry.sh docker pull "$CAPSULE_IMAGE"
           docker tag "$CAPSULE_IMAGE" runpool-capsule:dev
 
       - name: Run the Docker contracts

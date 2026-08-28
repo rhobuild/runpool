@@ -5,6 +5,17 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## Unreleased
+
+### Operations
+
+- A command that reaches a registry is tried again when it fails. Four
+  release cycles were lost to registries answering badly and nothing asking
+  twice — a digest verification that could not reach Docker Hub, a base image
+  fetched through a 502, a module proxy that reset mid-download, and a push
+  accepted layer by layer and then called an unknown blob — each costing a
+  manual re-run, one of them after the tag was already cut.
+
 ## v1.1.0 — 2026-08-28
 
 A capsule adopted across a controller replacement is read under its own

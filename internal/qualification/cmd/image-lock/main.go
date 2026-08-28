@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/imagelock"
 )
@@ -140,12 +141,33 @@ const platformTemplate = `{{range .Manifest.Manifests}}{{if .Platform}}` +
 	`{{if ne .Platform.Architecture "unknown"}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}` +
 	`{{end}}{{end}}`
 
+// inspectAttempts is how many times the registry is asked before its
+// silence is reported as one.
+//
+// Failing closed on an unreachable registry is right -- a digest that
+// could not be verified is not a digest that matched -- but giving up on
+// the first answer made a network blip indistinguishable from drift, and
+// this gate runs on every pull request and on the release path. The
+// distinction it exists to draw is between the lock and the registry,
+// and neither moves in the seconds between two attempts.
+const (
+	inspectAttempts = 3
+	inspectPause    = 2 * time.Second
+)
+
 func inspect(ref, format string) (string, error) {
-	out, err := exec.Command("docker", "buildx", "imagetools", "inspect", ref, "--format", format).Output()
-	if err != nil {
-		return "", err
+	var err error
+	for attempt := 1; ; attempt++ {
+		var out []byte
+		out, err = exec.Command("docker", "buildx", "imagetools", "inspect", ref, "--format", format).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+		if attempt == inspectAttempts {
+			return "", err
+		}
+		time.Sleep(inspectPause)
 	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // errFailed carries the exit status for a run whose failures have
