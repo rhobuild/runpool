@@ -18,8 +18,10 @@ a version speaks for are listed in
   the abort that would have said so either, and every attempt on that tier
   was held with an exit code and the words "the capsule image and this
   controller are not a pair", which sends an operator to re-check a digest
-  that was correct. The reason was in the container's log the whole time.
-  The refusal now quotes it.
+  that was correct. The reason was in the container's log the whole time,
+  and the refusal now quotes it — in the controller's log, where the
+  refusal is reported. What the held attempt itself records is unchanged:
+  still `capsule_incompatible`, so `runpool attempts` reads as before.
 
 ## v1.1.0 — 2026-08-28
 

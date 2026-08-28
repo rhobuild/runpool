@@ -485,13 +485,15 @@ func (m *Launcher) awaitProtocol(ctx context.Context, outerID string) error {
 // prefixed for an error that would otherwise name only an exit code.
 //
 // It exists because the capsule that cannot start is usually the capsule
-// that cannot say so. Its control surface is a root-owned tmpfs this
-// launcher mounts, so an image whose configured user is not root fails
-// its first write, fails again writing the abort that would have
-// explained it, and leaves a container that exited 79 -- from which the
-// only account is "not a pair", sending an operator to re-check a digest
-// that was correct. The reason was in the container log the whole time,
-// and nothing read it.
+// that cannot say so. An image whose configured user is not root fails
+// at boot -- first creating the daemon's socket directory under a
+// root-owned /run, then writing the protocol file into the root-owned
+// tmpfs this launcher mounts -- and then fails again writing the abort
+// that would have explained either, because that goes to the same
+// unwritable tmpfs and its error is discarded. What is left is a
+// container that exited 79, from which the only account is "not a pair",
+// sending an operator to re-check a digest that was correct. The reason
+// was in the container log the whole time, and nothing read it.
 //
 // Best effort by construction: this runs on a path that is already
 // failing, and a log that cannot be read must not replace the error that
@@ -511,10 +513,16 @@ func (m *Launcher) lastWords(ctx context.Context, id string) string {
 	if len(said) == 0 {
 		return ""
 	}
-	// Joined rather than kept as lines: this lands in an error that is
-	// logged and recorded as the evidence an operator reads beside a
-	// held attempt, and a multi-line value there is one field that reads
-	// as several.
+	// Joined rather than kept as lines, because this lands in a
+	// structured log field and a multi-line value there is one field
+	// that reads as several.
+	//
+	// The log is as far as it goes, and that is worth being exact about:
+	// what a held attempt stores is the review reason alone --
+	// `capsule_incompatible` -- so `runpool attempts` is unchanged by
+	// this. The operator who sees the hold still goes to the controller's
+	// log to find out why, and the difference is that the answer is now
+	// there.
 	return "; it last said: " + strings.Join(said, " / ")
 }
 
