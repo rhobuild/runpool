@@ -319,7 +319,13 @@ func ClassifyPolicy(inForce, next []string) PolicyChange {
 // everything, and discovery that cannot be trusted at all does the same
 // for every gateway, because an undiscovered subnet is indistinguishable
 // from one that was never there.
-func (n *Manager) Watch(ctx context.Context) {
+// report is told the outcome of every completed pass, so a failure that
+// closed every gateway is recorded somewhere an operator can read from
+// another process. It is a callback rather than a store this package
+// holds: what is written down is the caller's business, and a policy
+// engine that learned persistence would be one more thing to keep out of
+// the launch path.
+func (n *Manager) Watch(ctx context.Context, report func(context.Context, error)) {
 	if n == nil {
 		return // unsafe-open-egress: there is no policy to maintain
 	}
@@ -331,7 +337,10 @@ func (n *Manager) Watch(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		n.rediscover(ctx)
+		err := n.rediscover(ctx)
+		if report != nil && ctx.Err() == nil {
+			report(ctx, err)
+		}
 	}
 }
 
@@ -453,10 +462,14 @@ func (n *Manager) refresh(ctx context.Context) error {
 }
 
 // rediscover is one pass, separated so a test can drive it directly.
-func (n *Manager) rediscover(ctx context.Context) {
+// rediscover returns what the pass concluded: nil when the set was
+// refreshed, and the failure that closed every gateway otherwise. A pass
+// stopped by its own context returns nil, because a shutdown is not a
+// verdict about the environment.
+func (n *Manager) rediscover(ctx context.Context) error {
 	err := n.refresh(ctx)
 	if err == nil {
-		return
+		return nil
 	}
 	if ctx.Err() != nil {
 		// The pass is being stopped, not failing. Closing every gateway
@@ -466,7 +479,7 @@ func (n *Manager) rediscover(ctx context.Context) {
 		// egress was cut, on an ordinary shutdown, for a thing that
 		// provably did not happen.
 		n.log.Info("sandbox rediscovery stopped", "reason", ctx.Err())
-		return
+		return nil
 	}
 
 	// Discovery failed. The environment may have grown a network this
@@ -474,9 +487,10 @@ func (n *Manager) rediscover(ctx context.Context) {
 	// gateway closes rather than relaying under a set that cannot be
 	// shown to be current.
 	n.log.Error("sandbox rediscovery failed; closing every gateway to all egress", "error", err)
-	if err := n.closeGateways(ctx); err != nil {
-		n.log.Error("could not close every gateway after a failed rediscovery", "error", err)
+	if closeErr := n.closeGateways(ctx); closeErr != nil {
+		n.log.Error("could not close every gateway after a failed rediscovery", "error", closeErr)
 	}
+	return err
 }
 
 // applyPolicy installs a rediscovered set, and decides what a failure

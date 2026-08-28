@@ -45,8 +45,14 @@ type statusDoc struct {
 	SchemaVersion int            `json:"schema_version"`
 	Scheduling    *schedulingDTO `json:"scheduling,omitempty"`
 	DiskPressure  *pressureDTO   `json:"disk_pressure"`
-	Bindings      []bindingDTO   `json:"bindings"`
-	Leases        []leaseDTO     `json:"leases"`
+	// Sandbox is the egress policy's last rediscovery. It is here
+	// because a pass that fails closes every gateway on this host to all
+	// egress -- the right answer to a policy that cannot be shown to be
+	// current, and also every running job losing its network at once. It
+	// is absent on an instance that maintains no policy.
+	Sandbox  *sandboxDTO  `json:"egress_sandbox"`
+	Bindings []bindingDTO `json:"bindings"`
+	Leases   []leaseDTO   `json:"leases"`
 	// ReleasedTotal is how many finished leases the store holds, which the
 	// leases array does not say: that array carries only the most recently
 	// finished, so its length is what was reported and not what exists. A
@@ -98,6 +104,15 @@ type tierCapacityDTO struct {
 	// gates observed, and that should be visible rather than inferred from
 	// a configuration file the reader may not have.
 	CapsuleImage string `json:"capsule_image"`
+}
+
+// sandboxDTO reports the last rediscovery pass. LastPassAt is when one
+// last completed, successful or not, so a loop that stopped reporting is
+// visible as a timestamp that stopped moving -- the same way a disk
+// measurement that stopped arriving is.
+type sandboxDTO struct {
+	LastPassAt string `json:"last_pass_at"`
+	Error      string `json:"error,omitempty"`
 }
 
 type pressureDTO struct {
@@ -188,6 +203,9 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	}
 	if cfg != nil {
 		doc.Scheduling = schedulingStatus(cfg, snap.Leases, snap.Queued, shippedCapsule)
+	}
+	if sb := snap.Sandbox; sb != nil {
+		doc.Sandbox = &sandboxDTO{LastPassAt: rfc3339(time.Unix(sb.At, 0)), Error: sb.Error}
 	}
 	if p := snap.Pressure; p != nil {
 		doc.DiskPressure = &pressureDTO{

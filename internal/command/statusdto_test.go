@@ -39,11 +39,34 @@ func TestStatusDocumentShape(t *testing.T) {
 			t.Errorf("empty collection did not serialize as []: want %s in %s", field, body)
 		}
 	}
+	// Every null the document is allowed to carry, named. A field that
+	// serializes as null and is not on this list is either a collection
+	// that lost its empty slice or a new absence nobody decided was one,
+	// and both read to a consumer as "the daemon could not be asked".
+	// instance_parallelism was on this list before anything asked for
+	// one: it is null whenever no instance-wide ceiling is configured,
+	// which is the default. The comment this replaces called
+	// disk_pressure "the one legitimate null" and was wrong when it was
+	// written -- which is what a spot-check for one field buys, and why
+	// this counts them.
+	nullable := []string{"disk_pressure", "egress_sandbox", "instance_parallelism"}
+	for _, field := range nullable {
+		// Named individually rather than counted: a field that quietly
+		// grew an omitempty would leave the count right and the key
+		// gone, and a consumer told to branch on `served` rather than on
+		// which keys exist would never see the difference.
+		if !strings.Contains(body, `"`+field+`":null`) {
+			t.Errorf("%q is absent from the document rather than null; an absence this "+
+				"document reports has to be a key with null in it, or a consumer "+
+				"cannot tell it from a field that was never specified: %s", field, body)
+		}
+	}
 	if strings.Contains(body, "null,") || strings.HasSuffix(body, "null}") {
-		// disk_pressure is the one legitimate null: an absent
-		// measurement is absent, not empty.
-		if !strings.Contains(body, `"disk_pressure":null`) {
-			t.Errorf("unexpected null in %s", body)
+		nulls := strings.Count(body, ":null")
+		if nulls != len(nullable) {
+			t.Errorf("the document carries %d nulls and %d are accounted for; an "+
+				"unlisted null is an absence nobody decided was one: %s",
+				nulls, len(nullable), body)
 		}
 	}
 	for _, upper := range []string{"InstanceID", "SourceBindingKey", "LeaseID", "AttemptID"} {

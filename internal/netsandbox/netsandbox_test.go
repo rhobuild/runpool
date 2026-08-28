@@ -474,7 +474,7 @@ func TestANilSandboxIsTheOpenProfile(t *testing.T) {
 	if sb != nil || err != nil {
 		t.Errorf("forLaunch on the open profile = (%v, %v); want no policy and no error", sb, err)
 	}
-	n.Watch(t.Context()) // returns rather than ticking forever
+	n.Watch(t.Context(), nil) // returns rather than ticking forever
 }
 
 // TestNewNetworkSandboxFailsServeClosed. The constructor is where the
@@ -1134,5 +1134,41 @@ func TestAConfirmationWaitsForAPassThatHasNotRecordedYet(t *testing.T) {
 	if got := d.payload(); !strings.Contains(got, "192.168.0.0/16") {
 		t.Errorf("the reload carried %q; it has to carry the set the pass recorded, not the "+
 			"one the launch was cut from", got)
+	}
+}
+
+// TestAFailedRediscoveryIsReported: closing every gateway is the right
+// answer to a policy that cannot be shown to be current, and it is also
+// every running job losing its network at once. The pass logs that, and
+// a log is not somewhere `runpool status` can read from -- so the
+// outcome travels out of this package to whoever is willing to write it
+// down.
+//
+// A callback rather than a store held here: what is recorded is the
+// caller's business, and a policy engine that learned persistence would
+// be one more thing to keep out of the launch path.
+func TestAFailedRediscoveryIsReported(t *testing.T) {
+	n := newTestSandbox(t, &fakeDaemon{probeErr: errors.New("the probe could not run")}, nil)
+	got := n.rediscover(t.Context())
+	if got == nil {
+		t.Fatal("a rediscovery that failed reported nothing; every gateway was closed " +
+			"to all egress and the only account of it was a log line")
+	}
+	if !strings.Contains(got.Error(), "the probe could not run") {
+		t.Errorf("reported %v; it has to carry why, which is what an operator acts on", got)
+	}
+}
+
+// TestAStoppedRediscoveryIsNotAVerdict: a pass cancelled by shutdown
+// reports nothing wrong. Recording it would tell an operator that every
+// clean stop was an egress failure, and the one that mattered would be
+// lost among them.
+func TestAStoppedRediscoveryIsNotAVerdict(t *testing.T) {
+	n := newTestSandbox(t, &fakeDaemon{probeErr: errors.New("the probe could not run")}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := n.rediscover(ctx); got != nil {
+		t.Errorf("a rediscovery stopped by shutdown reported %v; a clean stop is not a "+
+			"verdict about the environment", got)
 	}
 }
