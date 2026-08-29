@@ -29,6 +29,7 @@ import (
 	"github.com/rhobuild/runpool/internal/engine"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"unicode/utf8"
 )
 
 const (
@@ -539,7 +540,19 @@ func (m *Launcher) lastWords(ctx context.Context, id string) string {
 	if len(quoted) > logTailBytes {
 		// From the end: the last thing a dying process said is the
 		// reason it died, and the beginning is where a dump would be.
-		quoted = "..." + quoted[len(quoted)-logTailBytes:]
+		//
+		// Advanced to a rune boundary, because the cut is in bytes and
+		// the log is UTF-8. A slice that lands mid-character leaves an
+		// invalid prefix, and this string is about to become a field in
+		// a structured log record -- where invalid UTF-8 is either
+		// replacement characters or an encoder's problem, and in both
+		// cases the operator reads mojibake instead of the reason the
+		// capsule died.
+		cut := len(quoted) - logTailBytes
+		for cut < len(quoted) && !utf8.RuneStart(quoted[cut]) {
+			cut++
+		}
+		quoted = "..." + quoted[cut:]
 	}
 	return "; it last said: " + quoted
 }

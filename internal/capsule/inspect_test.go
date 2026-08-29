@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/engine"
+	"unicode/utf8"
 )
 
 // TestAnUndecidableExecutionIsHeldRatherThanSettled: absence ends an
@@ -226,5 +227,38 @@ func TestACapsuleThatSaidTooMuchIsCutOff(t *testing.T) {
 	if !strings.Contains(err.Error(), reason) {
 		t.Errorf("error = %q; cutting from the end is what keeps the last thing the "+
 			"capsule said, which is the reason it died", err)
+	}
+}
+
+// TestACapsuleCutOffStillReadsAsText: the cap is in bytes and a log is
+// UTF-8, so a cut that lands mid-character leaves an invalid prefix.
+// This string becomes a field in a structured log record, where that is
+// either replacement characters or the encoder's problem -- and either
+// way an operator reads mojibake instead of the reason the capsule died.
+func TestACapsuleCutOffStillReadsAsText(t *testing.T) {
+	const reason = "permiso denegado al crear /run/runpool-docker"
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return -1, "", errors.New("container is not running")
+		},
+		logs: func(string, int) (string, error) {
+			// Multi-byte throughout, so almost every byte offset is
+			// inside a character rather than between two.
+			return strings.Repeat("ñ", 4096) + " " + reason, nil
+		},
+	}}
+
+	err := m.awaitProtocol(t.Context(), "runner-1")
+	if err == nil {
+		t.Fatal("a dead capsule was reported as still declaring a protocol")
+	}
+	if !utf8.ValidString(err.Error()) {
+		t.Errorf("the error is not valid UTF-8; the cut landed inside a character: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("error = %q; the reason the capsule died is the part that has to survive", err)
 	}
 }
