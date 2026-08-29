@@ -169,7 +169,12 @@ func createScaleSetWith(t *testing.T, c *scaleset.Client, spec *scaleset.RunnerS
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := c.DeleteRunnerScaleSet(ctx, created.ID); err != nil {
+		// Absence is success, which is the contract every removal in
+		// this product honours: a test that deleted its own set early --
+		// because leaving it live for the rest of the run was the risk
+		// it was avoiding -- must not then fail on the cleanup finding
+		// it gone.
+		if err := c.DeleteRunnerScaleSet(ctx, created.ID); err != nil && !isGone(err) {
 			t.Errorf("cleanup: delete scale set %d: %v", created.ID, err)
 		}
 	})
@@ -205,4 +210,12 @@ func adoption(t *testing.T) *intentRecorder {
 		}
 	})
 	return r
+}
+
+// isGone reports a removal that found nothing to remove. The upstream
+// client answers a missing scale set with the transport's own 404 rather
+// than a sentinel, so this reads the status it reports.
+func isGone(err error) bool {
+	return strings.Contains(err.Error(), "404") ||
+		strings.Contains(strings.ToLower(err.Error()), "not found")
 }
