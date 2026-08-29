@@ -176,7 +176,10 @@ A tier holds as many credits as its configured parallelism. Running capsules hol
 free credits follow demand, max-min fair; one still-unclaimed credit is
 the tier's rotating discovery credit, which is what keeps a binding
 with no demand signal from going blind to its own queue. The sum a tier
-desires never exceeds it. Capacity that may still be in force at the provider
+desires never exceeds it. All binding loops read the same immutable,
+generation-tagged allocation plan; batch water-filling bounds a rebuild by the
+number of bindings and the logarithm of configured parallelism. Capacity that
+may still be in force at the provider
 is accounted separately: increases reserve before polling, decreases release
 only after a successful poll, and only the current holder's empty poll rotates
 discovery.

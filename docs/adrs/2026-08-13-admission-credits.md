@@ -33,6 +33,13 @@ this order, from one consistent read of the pool:
 3. **One credit, if still unclaimed, is the discovery credit.** It goes
    to a single binding with no demand signal and no running capsule.
 
+The allocator publishes that distribution as an immutable `AllocationPlan`.
+Allocation changes advance its generation and invalidate the cached plan;
+remote poll acknowledgements do not rebuild a desired distribution that did
+not change. Water-filling is performed in batches in O(B log P), where B is the
+number of bindings and P is the configured parallelism, rather than scanning
+every binding once per credit.
+
 The discovery credit rotates. A successful empty long-poll advances it only
 when that poll was made by the holder under the current discovery generation.
 An empty poll from a binding at zero, or from another tier, carries no evidence
@@ -74,3 +81,6 @@ capacity that will not be served must not be announced.
   silent bindings must discover queued work through the rotating credit against
   the real broker. Hermetic tests prove the local protocol; they do not replace
   provider evidence.
+- The supported-scale benchmark covers 10,000 bindings and 10,000 credits in
+  independent-tier and global-limit modes. Rebuilds budget 20 ms, bounded
+  candidate visits, and bounded allocations; cached reads allocate nothing.
