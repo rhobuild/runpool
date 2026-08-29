@@ -203,7 +203,13 @@ These are consequences of the design, not oversights:
   and `runpool status` reports which image each tier runs. **The egress
   gateway is not affected**: the container that applies the network
   policy always runs the capsule this build ships, so extending what a
-  job runs in never replaces what confines it.
+  job runs in never replaces what confines it. A derived capsule that
+  cannot start has its last output quoted into the controller's log, so
+  an operator can read why instead of a bare exit code — bounded to a
+  few lines and two kilobytes, cut from the end. That is the operator's
+  own image writing into the operator's own log, and it is reached only
+  before the runner is authorized to fork, so nothing a job wrote can
+  be in it.
 - The controller is a static binary on distroless with no shell.
 - `actions/scaleset` is a Public Preview dependency: pinned, with live
   contract tests that fail when upstream behaviour drifts.

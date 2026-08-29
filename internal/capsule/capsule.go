@@ -29,6 +29,7 @@ import (
 	"github.com/rhobuild/runpool/internal/engine"
 
 	"github.com/rhobuild/runpool/internal/assignment"
+	"unicode/utf8"
 )
 
 const (
@@ -45,6 +46,17 @@ const (
 	// the last thing it logs, without pasting a boot transcript into an
 	// error an operator reads at a glance.
 	logTailLines = 5
+
+	// And a ceiling in bytes, because the line count is not one. The
+	// daemon's tail bounds newline-delimited records, so a capsule that
+	// wrote one unterminated line -- a dump, a hung cat, a stack trace
+	// with no final newline -- makes "the last five lines" the whole log
+	// it has written, read into this process and folded into one log
+	// record. Only an operator's own derived image can do that today,
+	// and only because nothing but the shape of the call graph keeps
+	// this off a container that has started a job. A ceiling costs one
+	// comparison and does not depend on that staying true.
+	logTailBytes = 2048
 	// protocolFile is where the supervisor writes the version of the
 	// control protocol it speaks, at boot, before it is asked anything.
 	protocolFile = controlDir + "/protocol"
@@ -524,7 +536,25 @@ func (m *Launcher) lastWords(ctx context.Context, id string) string {
 	// this. The operator who sees the hold still goes to the controller's
 	// log to find out why, and the difference is that the answer is now
 	// there.
-	return "; it last said: " + strings.Join(said, " / ")
+	quoted := strings.Join(said, " / ")
+	if len(quoted) > logTailBytes {
+		// From the end: the last thing a dying process said is the
+		// reason it died, and the beginning is where a dump would be.
+		//
+		// Advanced to a rune boundary, because the cut is in bytes and
+		// the log is UTF-8. A slice that lands mid-character leaves an
+		// invalid prefix, and this string is about to become a field in
+		// a structured log record -- where invalid UTF-8 is either
+		// replacement characters or an encoder's problem, and in both
+		// cases the operator reads mojibake instead of the reason the
+		// capsule died.
+		cut := len(quoted) - logTailBytes
+		for cut < len(quoted) && !utf8.RuneStart(quoted[cut]) {
+			cut++
+		}
+		quoted = "..." + quoted[cut:]
+	}
+	return "; it last said: " + quoted
 }
 
 // ErrIncompatibleImage reports a capsule that does not speak this

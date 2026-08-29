@@ -41,7 +41,7 @@ document:
 | --- | --- | --- |
 | Disk pressure at either emergency level | `disk_pressure.level` | Admission is closed; hard means freeing space by hand |
 | An attempt held for manual review | `manual_review` | The product holds undecidable work for a person rather than guessing; a person who is never told defeats that |
-| A binding that stopped reaching its provider | `bindings[].last_error_at` at or after `last_contact_at` | The provider sends nothing and says nothing; CI queues invisibly |
+| A binding whose loop has stopped getting anywhere | `bindings[].last_error_at` at or after `last_contact_at` | Either it cannot reach its provider, or it can and cannot persist what it is handed; both mean nothing it is offered becomes work, and both queue CI invisibly |
 | A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
 | The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
 | An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
@@ -64,7 +64,7 @@ docker compose exec -T controller runpool status --json | jq -r '
       (if ((.manual_review // []) | length) > 0 then
          "\((.manual_review | length)) attempt(s) held for a person" else empty end),
       (.bindings[]? | select(.last_error_at and (.last_contact_at == null or .last_error_at >= .last_contact_at))
-         | "binding \(.target_id) has not reached its provider since \(.last_error_at)"),
+         | "binding \(.target_id) has been failing since \(.last_error_at): \(.last_error // "no detail")"),
       (if ((.discrepancies // []) | length) > 0 then
          "\((.discrepancies | length)) discrepancy between the books and the daemon" else empty end),
       (if ((.engine_error // "") != "") then

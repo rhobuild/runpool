@@ -7,6 +7,17 @@ a version speaks for are listed in
 
 ## Unreleased
 
+Two failures that a host could suffer in silence now report themselves: an
+egress sandbox that closed every gateway, and a binding that can no longer
+turn anything its provider hands it into work. Both looked healthy from
+every angle an operator had. A capsule that dies before it can explain
+itself now carries what it said, the runbook names the ten conditions that
+need a person and gives one command that reports them, and a release page
+says what changed. The schema is unchanged, so an installation moves by
+repointing the image and recreating the container; [the
+runbook](docs/runbook.md) names the commands and what to do if it has to go
+back.
+
 ### Isolation and egress
 
 - **An egress sandbox that closed itself says so.** Rediscovery runs every
@@ -74,8 +85,8 @@ a version speaks for are listed in
   that prints a line per condition and nothing when there is nothing to look
   at. The field is still accepted — configuration parsing is strict and the
   shipped example writes it, so removing it would fail the startup of every
-  deployment that copied that example — and is planned for removal in a major
-  version. See
+  deployment that copied that example — and removing it would be a
+  major-version break, which classifies the change rather than schedules it. See
   [the decision record](docs/adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 
 ## v1.1.0 — 2026-08-28

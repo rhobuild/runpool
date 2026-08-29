@@ -40,6 +40,17 @@ type WorkloadAssignment struct {
 // Validate reports whether the assignment can be made durable. An
 // assignment with no workload key cannot be deduplicated or recovered,
 // and recording it anyway plants a row nothing can recognise again.
+//
+// The refusal names the owner and the repository deliberately, and that
+// is a disclosure rather than an oversight: this error is recorded
+// against the binding and read back by `runpool status`, and a binding
+// may serve a whole organization, so the name of a private repository
+// elsewhere in that organization can end up in it. It stays because a
+// run id is unique within a repository and not across one -- without the
+// pair, the error identifies nothing an operator can go and look at. The
+// same reader already sees the same pair as `leases[].project` for every
+// workload that was admitted normally, and reaching either needs the
+// state directory, which is host-root equivalent.
 func (a WorkloadAssignment) Validate() error {
 	if a.SourceWorkloadKey == "" {
 		return fmt.Errorf("assignment for %s/%s (run %d) carries no workload key and cannot be made durable",

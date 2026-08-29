@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
@@ -411,5 +412,77 @@ func TestAnUnresolvableImageStillReportsWhatTheBuildShips(t *testing.T) {
 			t.Errorf("tier %s reports an empty capsule image; want what the build ships, "+
 				"which is what capsule_image_error says the entries carry", tier.ID)
 		}
+	}
+}
+
+// TestTheTextFormSaysTheGatewaysAreClosed.
+//
+// A rediscovery that failed closed every gateway on this host to all
+// egress, which is every running job losing its network at once. The
+// decision record that made this reportable names it as the case the
+// whole change exists for -- and it was reportable in `--json` only.
+//
+// `runpool status` with no flag is what the runbook calls the first
+// command, and what an operator types. Being told nothing by it is being
+// told the wrong thing.
+func TestTheTextFormSaysTheGatewaysAreClosed(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.SetSandboxPass(store.SandboxPass{
+			At:    time.Now().Add(-90 * time.Second).Unix(),
+			Error: "host discovery: the probe could not run",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	var out bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, false, ""); err != nil {
+		t.Fatalf("status refused to answer: %v", err)
+	}
+	body := out.String()
+	if !strings.Contains(body, "every gateway closed to all egress") {
+		t.Errorf("the text form does not say the gateways are closed:\n%s", body)
+	}
+	if !strings.Contains(body, "the probe could not run") {
+		t.Errorf("the text form does not say why they closed, which is what an operator "+
+			"acts on:\n%s", body)
+	}
+	if !strings.Contains(body, "docs/runbook.md") {
+		t.Errorf("the text form does not point anywhere, unlike every other condition it "+
+			"reports at this severity:\n%s", body)
+	}
+}
+
+// TestTheTextFormSaysThePolicyIsInForce: the other half. Silence would
+// be indistinguishable from an instance whose rediscovery has stopped
+// running altogether, which is its own condition.
+func TestTheTextFormSaysThePolicyIsInForce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.SetSandboxPass(store.SandboxPass{At: time.Now().Unix()})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	var out bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, false, ""); err != nil {
+		t.Fatalf("status refused to answer: %v", err)
+	}
+	if body := out.String(); !strings.Contains(body, "egress policy: in force") {
+		t.Errorf("the text form says nothing about a policy that is in force, so an "+
+			"operator cannot tell it from one whose passes stopped:\n%s", body)
 	}
 }

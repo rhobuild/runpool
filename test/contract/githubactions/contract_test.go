@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,8 +170,15 @@ func createScaleSetWith(t *testing.T, c *scaleset.Client, spec *scaleset.RunnerS
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// Absence is success only for a set this run deleted on purpose.
+		// Every other test here leaves its set to this cleanup and never
+		// touches it, so a set missing at cleanup is a set something
+		// else removed -- which is worth a failure, and would be
+		// swallowed by tolerating absence for all of them.
 		if err := c.DeleteRunnerScaleSet(ctx, created.ID); err != nil {
-			t.Errorf("cleanup: delete scale set %d: %v", created.ID, err)
+			if !deletedEarly(created.ID) || !isGone(err) {
+				t.Errorf("cleanup: delete scale set %d: %v", created.ID, err)
+			}
 		}
 	})
 	if created.ID == 0 {
@@ -205,4 +213,41 @@ func adoption(t *testing.T) *intentRecorder {
 		}
 	})
 	return r
+}
+
+// deleteNow removes a scale set the moment a test is done with it,
+// rather than leaving it to the cleanup. One test needs that: it holds a
+// label real workflows ask for, so its window is the risk.
+//
+// The removal is recorded so the shared cleanup can tell a set this run
+// deleted from one that went missing.
+func deleteNow(t *testing.T, c *scaleset.Client, set *scaleset.RunnerScaleSet) {
+	t.Helper()
+	earlyMu.Lock()
+	early[set.ID] = true
+	earlyMu.Unlock()
+	if err := c.DeleteRunnerScaleSet(testCtx(t), set.ID); err != nil {
+		t.Errorf("delete scale set %d: %v", set.ID, err)
+	}
+}
+
+var (
+	earlyMu sync.Mutex
+	early   = map[int]bool{}
+)
+
+func deletedEarly(id int) bool {
+	earlyMu.Lock()
+	defer earlyMu.Unlock()
+	return early[id]
+}
+
+// isGone reports a removal that found nothing to remove. The upstream
+// client has no typed status on this error -- it formats the response
+// into the message as `status="404 Not Found"` alongside an activity id
+// and a request id, both GitHub-issued hex. So this anchors on the
+// status field: matching a bare "404" would read one out of a GUID and
+// call a real failure an absence.
+func isGone(err error) bool {
+	return strings.Contains(err.Error(), `status="404`)
 }

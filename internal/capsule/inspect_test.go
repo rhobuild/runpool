@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/engine"
+	"unicode/utf8"
 )
 
 // TestAnUndecidableExecutionIsHeldRatherThanSettled: absence ends an
@@ -188,5 +189,88 @@ func TestACapsuleWhoseLogsCannotBeReadStillReportsTheExit(t *testing.T) {
 	if strings.Contains(err.Error(), "last said") {
 		t.Errorf("error = %q; a log that could not be read has nothing to add, and "+
 			"an empty quotation reads as a capsule that said nothing", err)
+	}
+}
+
+// TestACapsuleThatSaidTooMuchIsCutOff.
+//
+// The daemon's tail bounds newline-delimited records, not bytes, so a
+// capsule that wrote one unterminated line makes "the last five lines"
+// the whole log it has written. That reaches this process's memory and
+// one structured log record, and neither wants a megabyte.
+//
+// Cut from the end, because the last thing a dying process said is the
+// reason it died.
+func TestACapsuleThatSaidTooMuchIsCutOff(t *testing.T) {
+	const reason = "mkdir /run/runpool-docker: permission denied"
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return -1, "", errors.New("container is not running")
+		},
+		logs: func(string, int) (string, error) {
+			// One line, no newline in it, far past the ceiling.
+			return strings.Repeat("x", 64<<10) + " " + reason, nil
+		},
+	}}
+
+	err := m.awaitProtocol(t.Context(), "runner-1")
+	if err == nil {
+		t.Fatal("a dead capsule was reported as still declaring a protocol")
+	}
+	if len(err.Error()) > logTailBytes+512 {
+		t.Errorf("the error is %d bytes; one unterminated line put the whole log in it, "+
+			"and this lands in memory and in a log record", len(err.Error()))
+	}
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("error = %q; cutting from the end is what keeps the last thing the "+
+			"capsule said, which is the reason it died", err)
+	}
+}
+
+// TestACapsuleCutOffStillReadsAsText: the cap is in bytes and a log is
+// UTF-8, so a cut that lands mid-character leaves an invalid prefix.
+// This string becomes a field in a structured log record, where that is
+// either replacement characters or the encoder's problem -- and either
+// way an operator reads mojibake instead of the reason the capsule died.
+func TestACapsuleCutOffStillReadsAsText(t *testing.T) {
+	const reason = "permiso denegado al crear /run/runpool-docker"
+
+	// Four lengths, one byte apart. The cut is at a fixed distance from
+	// the end, so shifting the total by one byte shifts the cut by one
+	// byte -- and with two-byte characters throughout, at least two of
+	// these four land inside a character rather than between two.
+	//
+	// One length would not do it, and that is not hypothetical: the
+	// first version of this test used one, its total happened to put the
+	// cut on an even offset, and it passed against the raw byte slice it
+	// was written to catch.
+	for pad := range 4 {
+		t.Run(fmt.Sprintf("pad=%d", pad), func(t *testing.T) {
+			m := &Launcher{dock: &fakeDaemon{
+				status: func(string) (engine.ContainerState, error) {
+					return engine.ContainerState{Status: engine.StatusExited, ExitCode: SupervisorAbortedExitCode}, nil
+				},
+				exec: func(string, []string) (int, string, error) {
+					return -1, "", errors.New("container is not running")
+				},
+				logs: func(string, int) (string, error) {
+					return strings.Repeat("ñ", 4096) + strings.Repeat("x", pad) + " " + reason, nil
+				},
+			}}
+
+			err := m.awaitProtocol(t.Context(), "runner-1")
+			if err == nil {
+				t.Fatal("a dead capsule was reported as still declaring a protocol")
+			}
+			if !utf8.ValidString(err.Error()) {
+				t.Errorf("the error is not valid UTF-8; the cut landed inside a character")
+			}
+			if !strings.Contains(err.Error(), reason) {
+				t.Errorf("error = %q; the reason the capsule died is the part that has to survive", err)
+			}
+		})
 	}
 }

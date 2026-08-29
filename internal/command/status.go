@@ -135,6 +135,22 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 		fmt.Fprintf(streams.Out, "capsule image: unresolved (%s)\n", doc.CapsuleImageError)
 	}
 
+	if sb := snap.Sandbox; sb != nil {
+		// Said in the text form too, and this one most of all: a
+		// rediscovery that failed closed every gateway on this host to
+		// all egress, which is every running job losing its network at
+		// once. An operator who types `runpool status` and is told
+		// nothing has been told the wrong thing.
+		if sb.Error != "" {
+			fmt.Fprintf(streams.Out, "\negress policy: every gateway closed to all egress %s (%s)\n",
+				ago(time.Now(), time.Unix(sb.At, 0)), sb.Error)
+			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what closed them and what to do")
+		} else {
+			fmt.Fprintf(streams.Out, "\negress policy: in force, rechecked %s\n",
+				ago(time.Now(), time.Unix(sb.At, 0)))
+		}
+	}
+
 	if p := snap.Pressure; p != nil {
 		fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
 			p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),

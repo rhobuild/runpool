@@ -398,7 +398,9 @@ its own `api_version`, and the host decides when a person has to look —
 says what was rejected and why. The field is still accepted because
 configuration parsing is strict and the shipped example writes it, so
 removing it would fail the startup of every deployment that copied that
-example; it is planned for removal in a major version. A scrapeable
+example. Removing it would be a major-version break, which is a
+classification and not a plan: nothing schedules it, and this reference
+will say so if anything ever does. A scrapeable
 surface, if one is ever justified, would be a new field rather than this
 one changing meaning.
 

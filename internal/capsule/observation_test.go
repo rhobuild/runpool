@@ -371,3 +371,41 @@ func TestAnAdoptedCapsuleIsReadInItsOwnDictionary(t *testing.T) {
 		t.Errorf("the protocol was read %d times; want once", asked["protocol"])
 	}
 }
+
+// TestInspectingAStartedCapsuleReadsNoLogs.
+//
+// lastWords is safe today for one reason: every path that reaches it
+// runs inside prepare(), strictly before Start() authorizes the runner
+// to fork, so the container whose log it reads has never executed a
+// job's code. That is true of the call graph and of nothing else. There
+// is no type that distinguishes a prepared runtime from a started one,
+// and the architecture suite checks which packages may import which --
+// it has no vocabulary for which method may be called when.
+//
+// So a future diagnostic added to a path that runs after Start would
+// compile, pass every other test here, and quietly begin reading
+// job-controlled output into an error and a log record. This is the test
+// that would not pass.
+//
+// InspectExecution is the path that matters: it is what observes a
+// capsule that has been running, including one adopted from a replaced
+// controller.
+func TestInspectingAStartedCapsuleReadsNoLogs(t *testing.T) {
+	m := &Launcher{dock: &fakeDaemon{
+		status: func(string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: engine.StatusExited, ExitCode: 1}, nil
+		},
+		exec: func(string, []string) (int, string, error) {
+			return 0, ProtocolVersion, nil
+		},
+		logs: func(string, int) (string, error) {
+			t.Error("the capsule's log was read while observing a capsule that has run. " +
+				"Everything in that log is the job's to write, and it would reach an " +
+				"error string and the controller's log")
+			return "", nil
+		},
+	}}
+
+	// The verdict does not matter; that no log was read does.
+	_, _ = m.InspectExecution(t.Context(), PreparedRuntime{RuntimeID: "capsule-1"})
+}

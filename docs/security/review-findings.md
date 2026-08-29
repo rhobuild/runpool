@@ -9,13 +9,23 @@ answers. This file records what came back.
 
 ## State
 
-One external review has been conducted, against `c8ac420`. It reported no
-finding that blocks the release boundary, and one finding recorded below.
+Two reviews have been conducted.
 
-That finding was resolved after the review ended, and the resolution is held
-by the regression tests its entry names rather than re-confirmed by the
-reviewer. A review covers the commit it read: a later tree is covered only to
-the extent it has not moved.
+The first was external, against `c8ac420`. It reported no finding that blocks
+the release boundary, and one finding recorded below. That finding was
+resolved after the review ended, and the resolution is held by the regression
+tests its entry names rather than re-confirmed by the reviewer.
+
+The second was internal, before `v1.2.0`, against the tree at `88244d4` — six
+reviews, one per boundary surface plus the build and release chain and the
+question of what reaches an operator-readable surface. It was run because two
+of the eight changes since `v1.1.0` land on surfaces the scope names: the
+capsule envelope, and egress. Every surface came back safe to release. Four
+findings are recorded below; none blocks the boundary, and each is either
+resolved with the test that holds it or accepted with the reasoning.
+
+A review covers the commit it read: a later tree is covered only to the extent
+it has not moved.
 
 ## Recording a finding
 
@@ -79,3 +89,79 @@ outcome reads as unexamined.
   Resolved rather than accepted deliberately. The promise is the one protection
   the design states against the one surface it admits a job can forge; narrowing
   the sentence to fit the code was the cheaper repair and the worse one.
+
+### RP-SEC-002 — a quoted log was bounded in lines, not in bytes
+
+- **Reported** — 2026-08-28, internal review of the capsule envelope at `88244d4`.
+- **Surface** — the capsule envelope.
+- **Claim** — a capsule that cannot start has its last output quoted into the
+  controller's log. The daemon's tail bounds newline-delimited records and not
+  bytes, so a capsule writing one unterminated line makes "the last five lines"
+  the whole log it has written, read into the controller's memory and folded
+  into one log record.
+- **Assessment** — reproduces. Only an operator's own derived capsule image can
+  reach it, and that operator is trusted by the threat model, so the reviewer
+  rated it low and not release-blocking. It compounds with RP-SEC-003.
+- **Disposition** — `resolved`. The quotation is capped at two kilobytes, cut
+  from the end because the last thing a dying process said is the reason it
+  died. `TestACapsuleThatSaidTooMuchIsCutOff` fails without the cap.
+
+### RP-SEC-003 — the pre-start gate was the call graph and nothing else
+
+- **Reported** — 2026-08-28, internal review of the capsule envelope at `88244d4`.
+- **Surface** — the capsule envelope.
+- **Claim** — reading a container's log is safe only because every path that
+  does it runs before the runner is authorized to fork, so nothing a job wrote
+  can be in it. That is true of the call graph and of nothing else: no type
+  distinguishes a prepared runtime from a started one, and the architecture
+  suite checks which packages may import which — it has no vocabulary for which
+  method may be called when, and structurally cannot. A diagnostic added later
+  to a path that runs after the start would compile and pass every test.
+- **Assessment** — the invariant holds as shipped; the reviewer traced every
+  path and found none that breaks it. What was missing was anything that would
+  notice it breaking.
+- **Disposition** — `resolved`. `TestInspectingAStartedCapsuleReadsNoLogs` fails
+  if the path that observes a capsule which has run reads its log.
+  `docs/security/threat-model.md` records the exposure that remains: an
+  operator's own image writing into the operator's own log.
+
+### RP-SEC-004 — an assignment refusal names a private repository
+
+- **Reported** — 2026-08-28, internal review of data and credential flow at `88244d4`.
+- **Surface** — admission, reaching an operator-readable surface.
+- **Claim** — the refusal of an assignment with no workload key names its owner
+  and repository. That error is now recorded against the binding and read back
+  by `runpool status`, and a binding may serve a whole organization, so a
+  private repository name from elsewhere in that organization can be persisted
+  and shown.
+- **Assessment** — reproduces, and reaches only a reader who already holds the
+  state directory, which is host-root equivalent. The same reader already sees
+  the same owner and repository as `leases[].project` for every workload
+  admitted normally, so this extends an accepted disclosure to one rare
+  additional path rather than opening a new one. Rated low.
+- **Disposition** — `accepted`. Removing the names was tried and reverted: a
+  GitHub run id is unique within a repository and not across one, so without
+  the pair the error identifies nothing an operator can go and look at.
+  `TestAnAssignmentWithoutAWorkloadKeyIsRefused` states that requirement and
+  refused the change. Accepted by the maintainer on 2026-08-28. It stops being
+  acceptable if `status --json` ever becomes readable by anything less trusted
+  than the host's operator, or if `leases[].project` stops carrying the same
+  pair — either would remove the reason this is a disclosure already made.
+
+### RP-SEC-005 — a fixture scale set claimed a label real jobs ask for
+
+- **Reported** — 2026-08-28, internal review of data and credential flow at `88244d4`.
+- **Surface** — not a product surface: the live contract suite's own fixtures.
+- **Claim** — a contract test registers a scale set labelled `self-hosted` in
+  the fixture organization's default runner group. It opens no session, so a
+  job in that organization dispatched with `runs-on: self-hosted` during the
+  window could be assigned to it and wait unserved — which the provider's own
+  stranded-grant handling calls unrecoverable from this side.
+- **Assessment** — reproduces in principle. The window was the test's remaining
+  runtime, and the risk is starvation of an unrelated job rather than exposure
+  or execution.
+- **Disposition** — `resolved`. The set is deleted the moment the answer it
+  exists for is in hand, rather than at the end of the test, which is the
+  smallest window that still answers the question. The shared cleanup treats a
+  set already gone as success, the same contract every removal in this product
+  honours.

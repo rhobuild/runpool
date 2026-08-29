@@ -185,6 +185,18 @@ func TestAScaleSetMayClaimTheSelfHostedLabel(t *testing.T) {
 		RunnerGroupID: group.ID,
 		Labels:        []scaleset.Label{{Name: "self-hosted"}, {Name: name}},
 	})
+
+	// Deleted here rather than left to the cleanup, and this is the
+	// whole of why: every other set this suite creates carries only
+	// random names nothing else could ask for, and this one deliberately
+	// carries the word a fleet migrating from classic runners has
+	// written across its workflows. It has no session, so a job assigned
+	// to it is a job that waits and is never served -- which the
+	// provider's own stranded-grant handling calls unrecoverable from
+	// this side. The answer is already in `created`; the set does not
+	// have to outlive the assertion to give it.
+	deleteNow(t, c, created)
+
 	if got := labelNames(created); !slices.Contains(got, "self-hosted") {
 		t.Errorf("labels = %v; the service dropped or refused %q, which it is entitled "+
 			"to reserve — and runpool would not have to refuse it itself",
