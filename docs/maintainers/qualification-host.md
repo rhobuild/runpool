@@ -118,9 +118,12 @@ su - runner -c 'cd ~/actions-runner && ./config.sh --url <repository> \
 cd /home/runner/actions-runner && ./svc.sh install runner && ./svc.sh start
 ```
 
-Put it in a runner group restricted to this repository, and never let it accept
-pull-request jobs: a pull request is code from outside, and this agent runs it
-next to a privileged daemon.
+Registered against the repository rather than the organization, which is
+what confines it: runner groups are an organization-level feature and do
+not exist for a repository-scoped runner, so there is no group to put this
+one in and nothing else can select it. Never let it accept pull-request
+jobs: a pull request is code from outside, and this agent runs it next to
+a privileged daemon.
 
 ## Capturing and freezing the reference
 

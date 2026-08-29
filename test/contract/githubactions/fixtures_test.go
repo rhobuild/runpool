@@ -13,11 +13,16 @@ import (
 // must carry it, by the environment variable naming each.
 //
 // It is written out rather than derived because the mapping is a fact
-// about the fixture organisation, not about this tree: identity and the
-// organization cache probe both targets, and label routing dispatches
-// into the first only.
+// about the fixture organisation, not about this tree: the organization
+// cache probe is the only one that needs both targets, because what it
+// proves is that a JIT runner is not bound to the repository that caused
+// it. Identity and label routing dispatch into the first alone.
+//
+// An entry claiming more than a test needs is worse than no check at
+// all: it fails a qualification for a fixture nothing reads, which
+// nothing keeps in sync, for a gap that does not exist.
 var installedFixtures = map[string][]string{
-	"identity.yml":           {envRepoA, envRepoB},
+	"identity.yml":           {envRepoA},
 	"organization-cache.yml": {envRepoA, envRepoB},
 	"label-routing.yml":      {envRepoA},
 }
@@ -36,10 +41,35 @@ var installedFixtures = map[string][]string{
 // It is also the check a maintainer can run before cutting a tag, which
 // is the point: the fixtures live in other repositories, and nothing in
 // this one can otherwise say whether they are there.
+//
+// Scope, said out loud because the name does not say it: this covers the
+// fixtures this package reads. The controller end-to-end suite keeps its
+// own, in a third repository under a different filename and behind
+// separate credentials, and it is not checked here. That gap is worse
+// than the one this closes -- the e2e job runs after the live contracts,
+// so a fixture missing there surfaces later than the one that cost this
+// cycle, not earlier.
 func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 	_, token := target(t, envOrgURL, envOrgToken)
 	rest := newRESTClient(token)
 	ctx := testCtx(t)
+
+	// Resolved before the loop, and that is not tidiness: t.Skip runs
+	// Goexit, so a skip decided inside the loop abandons every fixture
+	// after it -- in a test whose whole promise is naming all of them at
+	// once.
+	repos := map[string]string{}
+	for _, which := range []string{envRepoA, envRepoB} {
+		repo := os.Getenv(which)
+		if repo == "" {
+			if os.Getenv(envQualify) != "" {
+				t.Fatalf("release qualification requires %s; the fixtures it carries "+
+					"cannot be checked", which)
+			}
+			t.Skipf("%s not set; the fixture check is opt-in", which)
+		}
+		repos[which] = repo
+	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.yml"))
 	if err != nil {
@@ -52,7 +82,7 @@ func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 	checked := 0
 	for _, path := range files {
 		name := filepath.Base(path)
-		repos, mapped := installedFixtures[name]
+		carriedBy, mapped := installedFixtures[name]
 		if !mapped {
 			t.Errorf("testdata/%s is versioned here and no test says which repository "+
 				"carries it. A fixture nothing installs is one a suite skips or fails "+
@@ -65,15 +95,8 @@ func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 		}
 		want := sha256.Sum256(body)
 
-		for _, which := range repos {
-			repo := os.Getenv(which)
-			if repo == "" {
-				if os.Getenv(envQualify) != "" {
-					t.Fatalf("release qualification requires %s; the fixtures it names "+
-						"cannot be checked", which)
-				}
-				t.Skipf("%s not set; the fixture check is opt-in", which)
-			}
+		for _, which := range carriedBy {
+			repo := repos[which]
 			checked++
 			got, err := rest.installedFixtureDigest(ctx, repo, ".github/workflows/"+name)
 			if err != nil {
