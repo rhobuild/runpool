@@ -85,8 +85,8 @@ back.
   that prints a line per condition and nothing when there is nothing to look
   at. The field is still accepted — configuration parsing is strict and the
   shipped example writes it, so removing it would fail the startup of every
-  deployment that copied that example — and is planned for removal in a major
-  version. See
+  deployment that copied that example — and removing it would be a
+  major-version break, which classifies the change rather than schedules it. See
   [the decision record](docs/adrs/2026-08-28-the-status-document-is-the-metrics-interface.md).
 
 ## v1.1.0 — 2026-08-28

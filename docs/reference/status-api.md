@@ -68,12 +68,20 @@ absent state, because the attempt it was asked about cannot exist.
 | `engine_error` | string, optional | Why the daemon could not be asked |
 | `capsule_image_error` | string, optional | Why the shipped capsule image could not be resolved. It concerns only the tiers that name no `capsule_image` of their own: those report what the build ships rather than what a launch would run, while a tier naming its own image reports that one |
 
-Each binding reports what its own loop last managed with its provider:
-`last_contact_at` when a provider call last succeeded, and `last_error`
-with `last_error_at` for what it cannot do now. A success clears the
+Each binding reports what its own loop last managed: `last_contact_at`
+when a provider call last succeeded, and `last_error` with
+`last_error_at` for what the loop cannot do now. A success clears the
 error, and a failure leaves the last success alone, so the pair says both
-how long a binding has been unreachable and what it is failing at. All
-three are absent on a binding that has not served yet.
+how long a binding has been failing and what at. All three are absent on
+a binding that has not served yet.
+
+`last_error` is not only about the provider. A loop that reaches its
+provider perfectly well and cannot persist what it is handed is a loop
+that turns nothing into work, and it records the failure here for the
+same reason: the poll that carried the message refreshed
+`last_contact_at`, so without this the binding would report as healthy
+forever while nothing it was offered ever became an attempt. Read the
+error text for which it is.
 
 They are reported because nothing else in this document distinguishes an
 instance with no work to do from one reaching nothing: both hold no

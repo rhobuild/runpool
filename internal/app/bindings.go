@@ -295,7 +295,7 @@ func (s *Controller) recordProviderContact(ctx context.Context, b *binding) {
 // A failure is written whenever it is new or different, and otherwise on
 // the same heartbeat as a success: what an operator needs is what is
 // wrong and how long it has been wrong, and neither answer improves by
-// rewriting the same sentence every five seconds.
+// rewriting the same sentence on every poll.
 func (s *Controller) recordProviderFailure(ctx context.Context, b *binding, cause error) {
 	if ctx.Err() != nil {
 		return
