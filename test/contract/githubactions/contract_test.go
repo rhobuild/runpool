@@ -215,22 +215,6 @@ func adoption(t *testing.T) *intentRecorder {
 	return r
 }
 
-// deleteNow removes a scale set the moment a test is done with it,
-// rather than leaving it to the cleanup. One test needs that: it holds a
-// label real workflows ask for, so its window is the risk.
-//
-// The removal is recorded so the shared cleanup can tell a set this run
-// deleted from one that went missing.
-func deleteNow(t *testing.T, c *scaleset.Client, set *scaleset.RunnerScaleSet) {
-	t.Helper()
-	earlyMu.Lock()
-	early[set.ID] = true
-	earlyMu.Unlock()
-	if err := c.DeleteRunnerScaleSet(testCtx(t), set.ID); err != nil {
-		t.Errorf("delete scale set %d: %v", set.ID, err)
-	}
-}
-
 var (
 	earlyMu sync.Mutex
 	early   = map[int]bool{}

@@ -9,6 +9,19 @@ import (
 	"github.com/actions/scaleset"
 )
 
+// deleteNow removes a scale set the moment an observation is complete.
+// The removal is recorded so shared cleanup can distinguish it from a
+// scale set that disappeared unexpectedly.
+func deleteNow(t *testing.T, c *scaleset.Client, set *scaleset.RunnerScaleSet) {
+	t.Helper()
+	earlyMu.Lock()
+	early[set.ID] = true
+	earlyMu.Unlock()
+	if err := c.DeleteRunnerScaleSet(testCtx(t), set.ID); err != nil {
+		t.Errorf("delete scale set %d: %v", set.ID, err)
+	}
+}
+
 // TestObservationCustomLabelsAreReturnedWithoutName records the labels
 // returned when the caller supplies the complete custom set.
 func TestObservationCustomLabelsAreReturnedWithoutName(t *testing.T) {
