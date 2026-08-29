@@ -146,3 +146,45 @@ func TestTheRetryHelperKeepsTryingUntilSomethingWorks(t *testing.T) {
 			"or three identical errors are indistinguishable from one", out)
 	}
 }
+
+// TestTheRetryHelperDoesNotIsolateStdoutBetweenAttempts pins a property
+// that is a hazard rather than a feature, because the alternative is a
+// caller assuming the opposite.
+//
+// The helper runs its command with this process's stdout. It does not
+// buffer, and it must not: a wrapped `docker build` streams, and a
+// helper that swallowed that until the command finished would turn every
+// build's progress into a wall of text at the end, or nothing at all if
+// the step timed out.
+//
+// The consequence is that a command which writes to stdout and then
+// fails leaves that output in front of whatever the successful attempt
+// writes. Every caller today captures into `$(...)` and immediately
+// gates on `sha256:*` or an exact digest equality, so a polluted capture
+// is rejected rather than believed — and the commands in question only
+// print after a complete, decoded answer, so it does not arise in
+// practice. Both of those are assumptions about somebody else's
+// behaviour. This is the test that says so out loud, so the next caller
+// validates its capture instead of inheriting a guarantee that was never
+// made.
+func TestTheRetryHelperDoesNotIsolateStdoutBetweenAttempts(t *testing.T) {
+	helper := repoPath("scripts", "ci", "retry.sh")
+	ledger := filepath.Join(t.TempDir(), "runs")
+
+	// Writes a marker, then fails until the third attempt.
+	cmd := exec.Command(helper, "sh", "-c",
+		"echo ran >> "+ledger+"; echo PARTIAL; [ $(wc -l < "+ledger+") -ge 3 ] && echo FINAL")
+	cmd.Env = append(os.Environ(), "RETRY_PAUSE=0", "RETRY_ATTEMPTS=3")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the command should have succeeded on its third attempt: %v", err)
+	}
+	if n := strings.Count(string(out), "PARTIAL"); n != 3 {
+		t.Errorf("stdout carried %d partial writes, want 3. If the helper has started "+
+			"isolating attempts, that is a stronger guarantee than callers were given "+
+			"and this test should say so instead", n)
+	}
+	if !strings.Contains(string(out), "FINAL") {
+		t.Errorf("the successful attempt's output is missing from %q", out)
+	}
+}
