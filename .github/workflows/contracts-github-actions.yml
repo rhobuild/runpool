@@ -110,6 +110,28 @@ jobs:
           permission-contents: read
           permission-organization-self-hosted-runners: write
 
+      # Before the suite, because the suite is eight minutes long and a
+      # fixture that is not installed is knowable in five seconds. The
+      # last release cycle was spent finding one of these from a single
+      # test, after the tag had been cut.
+      - name: Verify the installed fixtures
+        env:
+          RUNPOOL_CONTRACT_ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
+          RUNPOOL_CONTRACT_ORG_TOKEN: ${{ steps.org-token.outputs.token }}
+          RUNPOOL_CONTRACT_REPO_A: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+          RUNPOOL_CONTRACT_REPO_B: ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
+          RUNPOOL_CONTRACT_QUALIFY: ${{ inputs.qualify && '1' || '' }}
+        run: |
+          check=TestEveryFixtureThisSuiteReadsIsInstalled
+          # `go test -run` that matches nothing exits 0, so a rename of
+          # the function would leave this step green and this gate gone.
+          # The name has to appear in the output, not only in the flag.
+          go test ./test/contract/githubactions/ -count=1 -run "$check" -v | tee fixture-check.log
+          grep -q "^=== RUN   $check\$" fixture-check.log || {
+            echo "$check did not run; it was renamed or removed, and this step was gating nothing" >&2
+            exit 1
+          }
+
       - name: Run the upstream contracts
         # The suite creates its own scale sets and removes them through
         # t.Cleanup, including on failure, so a run leaves the fixture
