@@ -5,7 +5,7 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## Unreleased
+## v1.2.0 — 2026-08-28
 
 Two failures that a host could suffer in silence now report themselves: an
 egress sandbox that closed every gateway, and a binding that can no longer
