@@ -5,7 +5,7 @@
 // or failing closed. Keeping it pure is what makes every transition,
 // including the hysteresis on recovery, enumerable in a hermetic test.
 //
-// The levels, worst first:
+// The measured levels, worst first:
 //
 //	hard_emergency  free space below the hard floor: fail closed. New
 //	                work is refused, nothing that holds state is
@@ -16,6 +16,10 @@
 //	high            managed cache bytes crossed the high watermark:
 //	                GC runs until the low watermark.
 //	normal          none of the above.
+//
+// Before the first successful measurement the level is unknown. Unknown
+// closes admission without claiming that the host is under pressure: no
+// measurement is not evidence that the daemon has room for another job.
 //
 // Recovery is hysteretic so the actions do not flap at a boundary: an
 // emergency exits only after free space clears the floor by the same
@@ -28,7 +32,8 @@ import "fmt"
 type Level int
 
 const (
-	Normal Level = iota
+	Unknown Level = iota
+	Normal
 	High
 	SoftEmergency
 	HardEmergency
@@ -36,6 +41,8 @@ const (
 
 func (l Level) String() string {
 	switch l {
+	case Unknown:
+		return "unknown"
 	case Normal:
 		return "normal"
 	case High:
@@ -50,7 +57,7 @@ func (l Level) String() string {
 
 // ParseLevel is the inverse of String, for the persisted level.
 func ParseLevel(s string) (Level, error) {
-	for _, l := range []Level{Normal, High, SoftEmergency, HardEmergency} {
+	for _, l := range []Level{Unknown, Normal, High, SoftEmergency, HardEmergency} {
 		if l.String() == s {
 			return l, nil
 		}
@@ -156,8 +163,9 @@ func Next(prev Level, f Facts, t Thresholds) Level {
 
 // AdmissionClosed says whether new work may start at this level. The
 // distinction from GC posture is deliberate: high pressure garbage
-// collects but keeps admitting; the emergencies do not.
-func (l Level) AdmissionClosed() bool { return l >= SoftEmergency }
+// collects but keeps admitting; the emergencies and an unmeasured host
+// do not.
+func (l Level) AdmissionClosed() bool { return l == Unknown || l >= SoftEmergency }
 
 // WantsGC says whether this level obliges a collection pass, and
 // Aggressive whether that pass may take free lanes before their TTL.

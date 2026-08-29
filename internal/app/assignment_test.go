@@ -111,6 +111,9 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	config.ApplyDefaults(monitorCfg)
 	h.probe = &fakeProbe{free: engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}}
 	h.srv.disk = newDiskMonitor(monitorCfg, log, st, h.probe, cacheMgr, h.srv.alloc, "probe-image")
+	if err := h.srv.disk.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// The default launch records the claim and leaves the lease running,
 	// so a test decides its outcome explicitly.
 	h.srv.launch = func(_ *binding, lease store.Lease) {

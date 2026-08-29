@@ -183,9 +183,14 @@ count before new work can enter. With no global limit, tiers remain independent.
 
 A monitor measures the daemon's filesystem from inside it and the
 daemon-accounted size of every cache lane, and a pure state machine
-decides the level: normal, high, soft emergency, hard emergency.
+decides the level: unknown, normal, high, soft emergency, hard emergency.
 Recovery is hysteretic. High collects garbage; soft closes admission
-and collects aggressively; hard fails closed and deletes nothing.
+and collects aggressively; hard fails closed and deletes nothing. Unknown
+also closes admission: construction holds the allocator, startup performs a
+fresh measurement before provider sessions are built, and a failed probe
+persists unavailable facts rather than inheriting an old normal verdict.
+Transitions that close admission take effect before their store write;
+transitions that open it are persisted first.
 
 The host topology is part of configuration, not an installation assumption.
 `shared-daemon` requires a positive reserve for colocated platform and

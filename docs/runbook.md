@@ -39,14 +39,14 @@ document:
 
 | Condition | Where it shows | Why it needs a person |
 | --- | --- | --- |
-| Disk pressure at either emergency level | `disk_pressure.level` | Admission is closed; hard means freeing space by hand |
+| Disk pressure unknown or at either emergency level | `disk_pressure.level` | Admission is closed; unknown means the daemon could not be measured, hard means freeing space by hand |
 | An attempt held for manual review | `manual_review` | The product holds undecidable work for a person rather than guessing; a person who is never told defeats that |
 | A binding whose loop has stopped getting anywhere | `bindings[].last_error_at` at or after `last_contact_at` | Either it cannot reach its provider, or it can and cannot persist what it is handed; both mean nothing it is offered becomes work, and both queue CI invisibly |
 | A queue that is not draining | `scheduling.queued` above zero while `available` is too | Work is waiting with credits free, which is not a busy instance |
 | The books and the daemon disagreeing | `discrepancies` | Reconciliation found something it will not act on alone |
 | An unreadable container engine | `engine_error` | The status is being reported without the daemon's half |
 | A live lease that has stopped moving | `leases[].terminal`, `state`, `created_at` | Quarantine is one way a lease comes to rest; a finalization that fails after its resources are already gone is another. Both hold an admission credit, so a host wedged this way loses capacity silently |
-| A disk measurement that has stopped arriving | `disk_pressure.measured_at` | The probe runs a container to measure, so it fails exactly when the disk is full — and a failed measurement writes nothing, leaving the last `level` reading "normal" indefinitely |
+| A disk verdict that has stopped arriving | `disk_pressure.measured_at` | The monitor itself may have stopped; measurement failures continue recording `unknown`, so a stale timestamp is distinct from a probe it cannot complete |
 | A capsule image that cannot be resolved | `capsule_image_error` | Every tier that names no `capsuleImage` of its own would launch the build's default, and this says what that default is not |
 | An egress sandbox that closed itself, or stopped checking | `egress_sandbox.error`, `last_pass_at` | A rediscovery it cannot complete closes every gateway on the host to all egress, which is right and is also every running job losing its network at once |
 
@@ -59,7 +59,7 @@ docker compose exec -T controller runpool status --json | jq -r '
   if .served != true then
     "not serving: \(.detail // "no detail")"
   else
-    [ (if ((.disk_pressure.level // "normal") | test("emergency")) then
+    [ (if ((.disk_pressure.level // "unknown") | test("unknown|emergency")) then
          "disk pressure is \(.disk_pressure.level); admission is closed" else empty end),
       (if ((.manual_review // []) | length) > 0 then
          "\((.manual_review | length)) attempt(s) held for a person" else empty end),
@@ -147,14 +147,14 @@ arriving at all: thirty minutes is six intervals, which no healthy
 instance misses. `egress_sandbox` is `null` on an instance that
 maintains no policy, and neither check fires there.
 
-The disk check is that reasoning applied to a measurement rather than a
-state. `disk_pressure.level` is rewritten only by a measurement that
-succeeded, so a probe that keeps failing leaves the last reading in place
-indefinitely — and the probe runs a container to do its measuring, which
-is precisely what stops working when a disk is full. Watching the level
-alone would report "normal" straight through the failure it exists to
-catch; the timestamp is what says whether the level is an answer or a
-souvenir.
+The disk check separates a failed measurement from a monitor that stopped.
+Outside an emergency, a failed probe records `unknown` with unavailable facts
+and keeps admission closed; a working loop therefore advances `measured_at`
+even when it cannot obtain filesystem facts. During an existing emergency the
+measured level is preserved, so its timestamp also stops when probes fail. A
+stale timestamp therefore means the loop, probe, or store path needs attention.
+The probe runs a container, which is precisely what may fail when the daemon's
+disk is full.
 
 Where the output goes is the host's to decide: mail from `cron`, a
 systemd timer's failure state, a ping to whatever the machine already
@@ -199,10 +199,12 @@ The controller measures once a minute: free space and inodes of the
 Docker daemon's storage filesystem (probed from inside it, so the
 answer is correct however the controller is deployed) and the total
 size of this instance's cache-lane volumes. The verdict is persisted —
-`runpool status` shows it, and a restart resumes under it.
+`runpool status` shows it. Startup begins closed, preserves a persisted
+emergency, and requires a fresh persisted measurement before reopening.
 
 | Level | Meaning | Automatic response | Operator action |
 | --- | --- | --- | --- |
+| `unknown` | The daemon's filesystem or managed volumes could not be measured; numeric facts are `-1` | **Admission stays closed** and the monitor retries | Check controller logs and Docker health; restore the probe and store paths |
 | `normal` | Floors and watermarks respected | — | None |
 | `high` | Managed cache crossed `cache.global.highWatermarkPercent` of `maxManagedBytes` | GC evicts free lanes (TTL, then LRU) down to the low watermark | None required; investigate if it recurs every pass |
 | `soft_emergency` | Filesystem free space under `softEmergencyFreeBytes` or under `host.reserve.freeDisk`, or free inodes under 100k | **Admission closes** (running jobs finish; ready work waits durably) and GC evicts every free lane | Find what is eating the disk — it is usually not the cache. `docker system df`, then `runpool gc` for the managed view |

@@ -41,6 +41,11 @@ type diskPolicy struct {
 	ttl        time.Duration
 }
 
+// pressureWriter is the single durable boundary of a pressure verdict.
+// Keeping it injectable lets the ordering tests fail that write without
+// replacing the store or weakening the monitor's other dependencies.
+type pressureWriter func(context.Context, disk.Level, disk.Level, disk.Facts, string) error
+
 func diskPolicyFrom(cfg *config.Config) diskPolicy {
 	g := cfg.Cache.Global
 	return diskPolicy{
@@ -71,6 +76,7 @@ type diskMonitor struct {
 	gate       admissionGate
 	probeImage string
 	policy     diskPolicy
+	persist    pressureWriter
 
 	// level is the pressure in force. Read on the admission path from
 	// another goroutine, so it is atomic rather than guarded.
@@ -79,85 +85,116 @@ type diskMonitor struct {
 
 func newDiskMonitor(cfg *config.Config, log *slog.Logger, st *store.Store, probe diskProbe,
 	lanes *cache.LaneManager, gate admissionGate, probeImage string) *diskMonitor {
-	return &diskMonitor{
+	m := &diskMonitor{
 		log: log, store: st, probe: probe, lanes: lanes, gate: gate,
 		probeImage: probeImage, policy: diskPolicyFrom(cfg),
 	}
+	m.level.Store(int32(disk.Unknown))
+	m.gate.Hold(true)
+	m.persist = m.persistVerdict
+	return m
 }
 
 func (m *diskMonitor) current() disk.Level { return disk.Level(m.level.Load()) }
 
-// resume loads the persisted level so a restart resumes the emergency
-// that was in force instead of admitting into it. It must run before any
-// binding serves, because it is what holds the credit pool shut.
-func (m *diskMonitor) resume(ctx context.Context) error {
-	return m.store.Tx(ctx, func(tx *store.Tx) error {
-		p, err := tx.Pressure()
-		if err != nil || p == nil {
-			return err
-		}
-		level, err := disk.ParseLevel(p.Level)
-		if err != nil {
-			return err
-		}
-		m.level.Store(int32(level))
-		m.gate.Hold(level.AdmissionClosed())
-		if level != disk.Normal {
-			m.log.Warn("resuming under disk pressure", "level", level.String())
-		}
-		return nil
-	})
+// initialize restores a persisted emergency and obtains a fresh verdict
+// before any provider session can announce capacity. A probe failure is
+// not a startup failure: reconciliation must still be able to adopt work
+// already running, while the unknown verdict keeps new work closed until
+// a later pass succeeds.
+func (m *diskMonitor) initialize(ctx context.Context) error {
+	if err := m.resume(ctx); err != nil {
+		return err
+	}
+	if err := m.pass(ctx); err != nil {
+		m.log.Warn("initial disk verdict unavailable; admission remains closed", "error", err)
+	}
+	return nil
 }
 
-// run is the pressure loop: measure, decide, persist, act.
+// resume restores only a persisted closed verdict. A normal or high row
+// describes an earlier process and cannot prove that the daemon still has
+// room now; opening admission requires a fresh verdict persisted by pass.
+func (m *diskMonitor) resume(ctx context.Context) error {
+	var persisted *store.PressureInfo
+	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
+		p, err := tx.Pressure()
+		persisted = p
+		return err
+	}); err != nil {
+		return err
+	}
+	if persisted == nil {
+		return nil
+	}
+	level, err := disk.ParseLevel(persisted.Level)
+	if err != nil {
+		return err
+	}
+	if !level.AdmissionClosed() {
+		m.log.Info("persisted disk verdict awaits a fresh measurement", "level", level.String())
+		return nil
+	}
+	m.level.Store(int32(level))
+	m.gate.Hold(true)
+	if level != disk.Unknown {
+		m.log.Warn("resuming under disk pressure", "level", level.String())
+	}
+	return nil
+}
+
+// run continues the pressure loop after initialize performed the startup
+// pass. Waiting for the first tick avoids paying for the same daemon probe
+// twice during every start.
 func (m *diskMonitor) run(ctx context.Context) {
 	ticker := time.NewTicker(monitorInterval)
 	defer ticker.Stop()
 	for {
-		m.pass(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			m.pass(ctx)
 		}
 	}
 }
 
-// pass runs one measurement. A failed measurement changes nothing: the
-// level in force stays in force, because losing the probe must not
-// reopen an admission an emergency closed.
-func (m *diskMonitor) pass(ctx context.Context) {
+// pass measures, decides, and commits one verdict. Closing is applied
+// before persistence so a failed store cannot leave unsafe capacity open;
+// opening is persisted first so a restart cannot observe an uncommitted
+// recovery as permission to admit.
+func (m *diskMonitor) pass(ctx context.Context) error {
 	facts, err := m.measure(ctx)
 	if err != nil {
-		m.log.Warn("disk measurement failed; keeping the current pressure level",
+		prev := m.current()
+		if prev != disk.SoftEmergency && prev != disk.HardEmergency {
+			m.level.Store(int32(disk.Unknown))
+			m.gate.Hold(true)
+			unknown := disk.Facts{FreeBytes: -1, FreeInodes: -1, ManagedBytes: -1}
+			if persistErr := m.persist(ctx, prev, disk.Unknown, unknown, err.Error()); persistErr != nil {
+				m.log.Error("cannot persist an unavailable disk verdict", "error", persistErr)
+			}
+		}
+		m.log.Warn("disk measurement failed; admission remains closed",
 			"level", m.current().String(), "error", err)
-		return
+		return err
 	}
 
 	prev := m.current()
 	next := disk.Next(prev, facts, m.policy.thresholds)
-	m.level.Store(int32(next))
-	// Credit follows admission: capacity that will not be served must
-	// not be announced, or the broker assigns work that then waits on a
-	// full disk. Running capsules keep their credit either way.
-	m.gate.Hold(next.AdmissionClosed())
-
-	if err := m.store.Tx(ctx, func(tx *store.Tx) error {
-		if err := tx.SetPressure(store.PressureInfo{
-			Level:        next.String(),
-			FreeBytes:    facts.FreeBytes,
-			FreeInodes:   facts.FreeInodes,
-			ManagedBytes: facts.ManagedBytes,
-		}); err != nil {
-			return err
-		}
-		if next != prev {
-			return tx.RecordAudit("disk-monitor", "pressure_"+next.String(), "host",
-				fmt.Sprintf("was=%s free_bytes=%d managed_bytes=%d", prev, facts.FreeBytes, facts.ManagedBytes))
-		}
-		return nil
-	}); err != nil {
+	requiresDurableOpen := prev.AdmissionClosed() && !next.AdmissionClosed()
+	if !requiresDurableOpen {
+		m.apply(next)
+	}
+	if err := m.persist(ctx, prev, next, facts, ""); err != nil {
 		m.log.Error("cannot persist the pressure verdict", "error", err)
+		if next.WantsGC() {
+			m.collectGarbage(ctx, next)
+		}
+		return err
+	}
+	if requiresDurableOpen {
+		m.apply(next)
 	}
 
 	if next != prev {
@@ -177,6 +214,37 @@ func (m *diskMonitor) pass(ctx context.Context) {
 	if next.WantsGC() {
 		m.collectGarbage(ctx, next)
 	}
+	return nil
+}
+
+// apply changes the in-memory verdict and its allocator gate as one
+// monitor operation. Delivery also reads the level, so storing a closed
+// level first makes the transition safe even before Hold reaches every
+// capacity report.
+func (m *diskMonitor) apply(level disk.Level) {
+	m.level.Store(int32(level))
+	m.gate.Hold(level.AdmissionClosed())
+}
+
+func (m *diskMonitor) persistVerdict(ctx context.Context, prev, next disk.Level, facts disk.Facts, detail string) error {
+	return m.store.Tx(ctx, func(tx *store.Tx) error {
+		if err := tx.SetPressure(store.PressureInfo{
+			Level:        next.String(),
+			FreeBytes:    facts.FreeBytes,
+			FreeInodes:   facts.FreeInodes,
+			ManagedBytes: facts.ManagedBytes,
+		}); err != nil {
+			return err
+		}
+		if next == prev {
+			return nil
+		}
+		auditDetail := fmt.Sprintf("was=%s free_bytes=%d managed_bytes=%d", prev, facts.FreeBytes, facts.ManagedBytes)
+		if detail != "" {
+			auditDetail += " reason=" + detail
+		}
+		return tx.RecordAudit("disk-monitor", "pressure_"+next.String(), "host", auditDetail)
+	})
 }
 
 // measure probes the daemon's filesystem from inside it and weighs this

@@ -7,8 +7,9 @@ import (
 
 // PressureInfo is the disk monitor's last persisted verdict. It is
 // durable so `runpool status` sees the level in force and a restarting
-// controller resumes from it instead of assuming normal — an emergency
-// must survive the process that declared it.
+// controller preserves an emergency instead of assuming normal. An
+// unknown verdict uses -1 for facts the failed measurement could not
+// provide.
 type PressureInfo struct {
 	Level        string
 	FreeBytes    int64

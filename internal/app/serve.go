@@ -333,10 +333,11 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		byBinding:           map[assignment.BindingID]*binding{},
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
-	// Before any binding serves: resuming an emergency is what holds the
-	// credit pool shut, and admitting into one is the failure it prevents.
-	if err := s.disk.resume(ctx); err != nil {
-		return fmt.Errorf("resume disk pressure: %w", err)
+	// Before any binding serves: capacity stays closed until a current
+	// measurement is durable. A failed probe does not prevent adopting
+	// running capsules; the background monitor keeps retrying it.
+	if err := s.disk.initialize(ctx); err != nil {
+		return fmt.Errorf("initialize disk pressure: %w", err)
 	}
 	s.launch = func(b *binding, lease store.Lease) { s.runCapsule(b, lease) }
 	if err := s.buildBindings(ctx, cfg, opts.Environ); err != nil {

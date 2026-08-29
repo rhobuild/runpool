@@ -152,9 +152,14 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	}
 
 	if p := snap.Pressure; p != nil {
-		fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
-			p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
-			ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+		if p.Level == "unknown" {
+			fmt.Fprintf(streams.Out, "\ndisk pressure: unknown (measurement unavailable, checked %s)\n",
+				ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+		} else {
+			fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
+				p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
+				ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+		}
 		if p.Level != "normal" {
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what this level means and what to do")
 		}

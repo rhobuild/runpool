@@ -14,8 +14,10 @@ them under the wrong schema.
   test asserts they have not leaked in.
 - **Collections are always arrays.** An empty one is `[]`, never
   `null`, so a consumer branches on length rather than presence.
-- **`null` means absent, not empty.** `disk_pressure` is `null` before
-  the monitor has run once; `egress_sandbox` is `null` before the first
+- **`null` means absent, not empty.** `disk_pressure` is `null` only for
+  state created before the pressure monitor recorded its first verdict;
+  current controllers record `unknown` when measurement is unavailable.
+  `egress_sandbox` is `null` before the first
   rediscovery pass and for the whole life of an instance that maintains
   no policy; `discrepancies` is `null` when the daemon could not be
   reached, which is different from finding none.
@@ -54,7 +56,7 @@ absent state, because the attempt it was asked about cannot exist.
 | `host_topology` | string | Effective `shared-daemon` or `dedicated-daemon`; `unknown` only when status cannot read configuration |
 | `schema_version` | number | The state schema in use |
 | `scheduling` | object, optional | Present when status can read configuration: `mode`, `instance_parallelism`, `effective_parallelism`, `active`, `available`, `queued`, and `tiers[]` |
-| `disk_pressure` | object or null | `level`, `free_bytes`, `free_inodes`, `managed_bytes`, `measured_at` |
+| `disk_pressure` | object or null | `level` is `unknown`, `normal`, `high`, `soft_emergency`, or `hard_emergency`; `free_bytes`, `free_inodes`, `managed_bytes`, and `measured_at` carry the verdict's facts. All three quantities are `-1` when `level` is `unknown` because no measurement was available |
 | `egress_sandbox` | object or null | `last_pass_at`, and `error` when the last rediscovery failed. A non-empty `error` means every gateway on this host is closed to all egress; a `last_pass_at` that has stopped moving means the pass itself has stopped running |
 | `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, and the provider reach fields below |
 | `leases` | array | `id`, `state`, `terminal`, `attempt_id`, `project`, `runtime_name`, `evidence`, `created_at`, `resources[]`. Every live lease, plus recent finished ones — see below |

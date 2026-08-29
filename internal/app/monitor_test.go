@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,106 @@ import (
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
+
+type recordingAdmissionGate struct{ held bool }
+
+func (g *recordingAdmissionGate) Hold(held bool) { g.held = held }
+
+func newIsolatedDiskMonitor(t *testing.T, probe *fakeProbe) (*diskMonitor, *store.Store, *recordingAdmissionGate) {
+	t.Helper()
+	st, err := store.Open(t.TempDir(), store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	gate := &recordingAdmissionGate{}
+	monitor := newDiskMonitor(defaultedConfig(t),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), st, probe, nil, gate, "probe-image")
+	return monitor, st, gate
+}
+
+// TestANewMonitorClosesAdmissionUntilItMeasures proves the startup
+// default at both boundaries delivery uses: the verdict is unknown and
+// the allocator cannot announce demand before initialization.
+func TestANewMonitorClosesAdmissionUntilItMeasures(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.alloc.SetAssignedDemand(h.bind.key, 1)
+
+	fresh := newDiskMonitor(defaultedConfig(t), h.srv.log, h.store, h.probe,
+		h.srv.cache, h.srv.alloc, "probe-image")
+	if got := fresh.current(); got != disk.Unknown {
+		t.Fatalf("new monitor level = %s; want unknown", got)
+	}
+	if got := h.srv.alloc.Advertised(h.bind.key); got != 0 {
+		t.Fatalf("new monitor advertised %d before measuring; want 0", got)
+	}
+}
+
+func TestFirstMeasurementFailureStaysUnknownAndPersistsIt(t *testing.T) {
+	probe := &fakeProbe{freeErr: errors.New("daemon unavailable")}
+	monitor, st, gate := newIsolatedDiskMonitor(t, probe)
+
+	if err := monitor.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := monitor.current(); got != disk.Unknown || !gate.held {
+		t.Fatalf("after failed initialization level=%s held=%v; want unknown and held", got, gate.held)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		p, err := tx.Pressure()
+		if err != nil {
+			return err
+		}
+		if p == nil || p.Level != disk.Unknown.String() || p.FreeBytes != -1 ||
+			p.FreeInodes != -1 || p.ManagedBytes != -1 {
+			t.Errorf("persisted unavailable verdict = %+v", p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPersistedNormalDoesNotOpenAfterAProbeFailure(t *testing.T) {
+	probe := &fakeProbe{freeErr: errors.New("daemon unavailable")}
+	monitor, st, gate := newIsolatedDiskMonitor(t, probe)
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		return tx.SetPressure(store.PressureInfo{Level: disk.Normal.String(), FreeBytes: 1 << 40})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := monitor.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := monitor.current(); got != disk.Unknown || !gate.held {
+		t.Fatalf("stale normal plus failed probe produced level=%s held=%v; want unknown and held", got, gate.held)
+	}
+}
+
+func TestSuccessfulInitializationPersistsBeforeOpening(t *testing.T) {
+	probe := &fakeProbe{free: engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}}
+	monitor, st, gate := newIsolatedDiskMonitor(t, probe)
+
+	if err := monitor.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := monitor.current(); got != disk.Normal || gate.held {
+		t.Fatalf("successful initialization level=%s held=%v; want normal and open", got, gate.held)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		p, err := tx.Pressure()
+		if err != nil {
+			return err
+		}
+		if p == nil || p.Level != disk.Normal.String() {
+			t.Errorf("persisted verdict = %+v; admission opened without durable normal", p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // TestMeasureWeighsOnlyThisInstancesLanes: the managed figure is what the
 // watermark passes work against, so anything counted into it that a
@@ -40,18 +142,63 @@ func TestMeasureWeighsOnlyThisInstancesLanes(t *testing.T) {
 	}
 }
 
-// TestAFailedMeasurementKeepsTheLevelInForce. Losing the probe must not
-// reopen an admission an emergency closed: the daemon being unreachable
-// is not evidence that the disk drained.
-func TestAFailedMeasurementKeepsTheLevelInForce(t *testing.T) {
+// TestAFailedMeasurementKeepsAnEmergencyInForce. Losing the probe must
+// not replace measured pressure with a weaker unknown verdict or reopen
+// the admission that pressure closed.
+func TestAFailedMeasurementKeepsAnEmergencyInForce(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.disk.level.Store(int32(disk.HardEmergency))
+	h.srv.alloc.SetAssignedDemand(h.bind.key, 1)
+	h.srv.disk.apply(disk.HardEmergency)
 	h.probe.freeErr = errors.New("daemon unreachable")
 
 	h.srv.disk.pass(t.Context())
 
 	if got := h.srv.currentPressure(); got != disk.HardEmergency {
 		t.Errorf("level after a failed pass = %s; want the one already in force", got)
+	}
+	if got := h.srv.alloc.Advertised(h.bind.key); got != 0 {
+		t.Errorf("advertised %d after the emergency probe failed; want 0", got)
+	}
+}
+
+// TestClosingDoesNotDependOnPersistence checks the safety ordering: a
+// full disk closes admission even when the store cannot record that fact.
+func TestClosingDoesNotDependOnPersistence(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.alloc.SetAssignedDemand(h.bind.key, 1)
+	h.probe.free = engine.FilesystemFree{FreeBytes: 0, FreeInodes: 0}
+	h.srv.disk.persist = func(context.Context, disk.Level, disk.Level, disk.Facts, string) error {
+		return errors.New("store unavailable")
+	}
+
+	h.srv.disk.pass(t.Context())
+
+	if got := h.srv.currentPressure(); got != disk.HardEmergency {
+		t.Fatalf("level after a full-disk verdict whose write failed = %s; want hard_emergency", got)
+	}
+	if got := h.srv.alloc.Advertised(h.bind.key); got != 0 {
+		t.Fatalf("advertised %d after the closing write failed; want 0", got)
+	}
+}
+
+// TestOpeningDependsOnPersistence is the converse ordering: a measured
+// recovery cannot reopen admission unless the recovery is durable.
+func TestOpeningDependsOnPersistence(t *testing.T) {
+	h := newHarness(t, 1)
+	h.srv.alloc.SetAssignedDemand(h.bind.key, 1)
+	h.srv.disk.apply(disk.HardEmergency)
+	h.probe.free = engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}
+	h.srv.disk.persist = func(context.Context, disk.Level, disk.Level, disk.Facts, string) error {
+		return errors.New("store unavailable")
+	}
+
+	h.srv.disk.pass(t.Context())
+
+	if got := h.srv.currentPressure(); got != disk.HardEmergency {
+		t.Fatalf("level after a recovery whose write failed = %s; want hard_emergency", got)
+	}
+	if got := h.srv.alloc.Advertised(h.bind.key); got != 0 {
+		t.Fatalf("advertised %d after the recovery write failed; want 0", got)
 	}
 }
 
