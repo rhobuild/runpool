@@ -270,6 +270,14 @@ jobs:
     outputs:
       reference: ${{ steps.index.outputs.reference }}
     steps:
+      # This job assembles an index out of digests other jobs pushed, so
+      # it wants nothing from the tree -- except that the command it
+      # assembles them with now runs through a helper that lives in it.
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download the per-platform digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
