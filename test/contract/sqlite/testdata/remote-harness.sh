@@ -33,7 +33,8 @@ echo "== full durability suite on the named volume =="
 docker run --rm --memory 256m --cpus 1 \
   -v "$vol":/state -v "$dir":/suite:ro --tmpfs /small:rw,size=8m \
   -e RUNPOOL_SQLITE_CONTRACT_DIR=/state -e RUNPOOL_SQLITE_SMALL_DIR=/small \
-  "$img" /suite/sqlite-contract.test -test.v -test.count=1
+  "$img" /suite/sqlite-contract.test -test.v -test.count=1 \
+  -test.run '^(TestPragmas|TestCrashRecovery|TestContention|TestSingletonLock|TestBackupRestore|TestDiskFull|TestMigrationMechanics)$'
 
 echo "== container-kill rounds =="
 for round in 1 2 3; do
@@ -71,6 +72,7 @@ for round in 1 2 3; do
     -e RUNPOOL_SQLITE_VERIFY_DB=/state/kill.db -e RUNPOOL_SQLITE_VERIFY_LOG=/state/kill.log \
     "$img" /suite/sqlite-contract.test -test.run 'TestVerifyExisting' -test.v -test.count=1
   echo "round $round: recovered"
+  echo "RUNPOOL_CASE container-kill-round-$round passed"
 done
 
 echo "SQLite durability suite passed"

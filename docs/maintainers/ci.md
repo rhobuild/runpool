@@ -16,13 +16,15 @@ that is what decides whether it can run on a pull request at all.
 | `ci` | `workflows, scripts and containers` | Workflows, shell scripts and Dockerfiles lint, and the reference deployment resolves | Hosted; needs a daemon for hadolint and `compose config` |
 | `ci` | `known vulnerabilities` | No package in the build has a known vulnerability | Hosted |
 | `ci` | `controller image` | The controller image builds, its runtime layer carries no shell, and it runs | Hosted; needs a daemon |
+| `ci` | `hermetic evidence` | Every hermetic boundary passed and is represented in the qualification evidence schema | Hosted; uploaded for release qualification |
 | `codeql` | `security analysis` | Static security analysis of the built tree | Hosted |
 | `integration-docker` | `moby adapter, cache lanes and disk` | The Docker adapter, cache lanes and disk pressure against a real daemon | Hosted daemon; path-filtered, plus nightly |
 | `integration-docker` | `outer capsule, JIT and the egress sandbox` | A real capsule, its credential channel and the egress sandbox, leaving no managed object behind | Hosted daemon |
 | `integration-docker` | `lifecycle drills` | Install, backup, restore, upgrade and uninstall, end to end | Hosted daemon |
 | `integration-docker` | `sqlite durability` | Durability on a named volume, including the disk-full case, across kills | Hosted daemon |
 | `contracts-github-actions` | `runner scale set API` | The provider adapter against the real scale-set API | Protected `upstream-contracts`; weekly, and during qualification |
-| `controller-e2e` | `real assignment, restart, cache and cleanup` | The exact controller and capsule candidates running real assignments | Self-hosted, protected `release-qualification` |
+| `controller-e2e` | `real assignment, SIGKILL, cache and cleanup (portable)` | The exact controller and capsule candidates running real assignments, including crash adoption, on infrastructure that does not depend on the reference host | Hosted, protected `release-qualification` |
+| `controller-e2e` | `real assignment, SIGKILL, cache and cleanup (reference)` | The same workload on the exact release platform | Self-hosted, protected `release-qualification` |
 | `qualify-release` | `validate release inputs` | The ref is a protected tag, the images are digest-qualified, and the standalone candidate is the tag it claims | Hosted |
 | `qualify-release` | `live contracts on the reference host` | Every live suite, without skips, on the reference host | Self-hosted, protected |
 | `qualify-release` | `release-qualification record` | The evidence supports the claim the record makes | Hosted |
@@ -40,6 +42,26 @@ investigation without blocking the release contract.
 `qualify-release` also calls `ci`, `contracts-github-actions` and
 `controller-e2e` rather than restating them: two definitions of one gate drift,
 and the one that decides a release must be the one every change already passed.
+
+## Qualification evidence
+
+Every suite that contributes to a release emits the same JSON manifest. It
+binds the suite to the commit and workflow run, records its execution interval
+and environment, lists the expected and observed cases, and includes candidate
+image digests where that suite consumes them. Reference-host suites embed the
+full observed platform facts; hosted suites name the pinned runner image.
+
+The expected case inventory lives in `internal/qualification`. A consistency
+test compares each Go suite with that inventory and checks every shell drill
+marker, so adding a test without adding it to qualification fails CI. The
+assembler rejects a missing or duplicate suite, zero executed cases, any skip
+or failure, a missing or unexpected case, inconsistent counters, another
+commit or run, another candidate digest, and reference-host facts that differ
+between jobs. Publication validates the downloaded record again before it
+compares the release build.
+
+Verbose logs remain in the evidence artifact for diagnosis. A non-empty log is
+not proof that a suite ran and is never accepted in place of its manifest.
 
 Checks that are not gates in a Go file live beside the code they check.
 `test/consistency` holds the ones that tie together values in different

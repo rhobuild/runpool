@@ -53,7 +53,7 @@ Taken from what the suites actually request, not from a guess:
 
 | Suite | Asks for |
 | --- | --- |
-| Capsule budget contracts | 2 CPU, 2 GiB memory, 256 MiB swap, 512 PIDs |
+| Capsule budget contracts | 2 CPU, 768 MiB memory, 256 MiB swap, 512 PIDs |
 | Controller end-to-end | 2 CPU and 4 GiB for the tier, 1 CPU and 2 GiB reserved |
 
 Four vCPU and 8 GiB of memory clear both with headroom. Disk needs room for the
@@ -61,9 +61,12 @@ runner image, the dind payload, an inner daemon's data root and the images a
 workload builds: 40 GB is comfortable.
 
 **Swap must exist.** The scheduling and swap envelope gate proves that
-configured swap is enforced inside a real capsule, and `runpool doctor` reads
-`SwapTotal` from the kernel. A host without swap cannot pass that gate — the
-check is not skipped, it fails.
+configured swap is used inside a real capsule: the contract drives tmpfs pages
+past `memory.max` and requires a non-zero `memory.swap.current`. It also drives
+an inner workload into OOM and requires the aggregate capsule cgroup's
+hierarchical `oom_kill` counter to increase. `runpool doctor` reads `SwapTotal`
+from the kernel. A host without swap cannot pass that gate — the check is not
+skipped, it fails.
 
 ## Provisioning
 
@@ -148,6 +151,12 @@ any fact is rejected, and the embedded and reviewed copies are compared by a
 test.
 
 ## The run, and after it
+
+The controller E2E first runs on GitHub's pinned `ubuntu-24.04` image. That
+portable leg keeps the complete assignment, cache, `SIGKILL` adoption and
+cleanup path executable even when this host is unavailable. It cannot qualify
+the release platform: only the reference leg embeds facts identical to the
+frozen lock and to the other live suites.
 
 The freeze and the qualification run happen against the same live host. Tag
 after the lock is committed, let `release.yml` drive the qualification, and

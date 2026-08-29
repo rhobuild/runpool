@@ -32,6 +32,8 @@ concurrency:
 
 env:
   GOTOOLCHAIN: go1.26.7
+  QUALIFICATION_COMMIT: ${{ github.sha }}
+  QUALIFICATION_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   validate-ref:
@@ -154,31 +156,64 @@ jobs:
         env:
           RUNPOOL_CONTRACT_QUALIFY: "1"
         run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/docker-contract.test" ./test/contract/docker
           bash test/contract/docker/remote-harness.sh "$dir" 2>&1 | tee docker-contract.log
+          completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go run ./internal/qualification/cmd/suite-evidence \
+            -suite docker-contract -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+            -started-at "$started" -completed-at "$completed" \
+            -environment release-platform -runner self-hosted \
+            -platform-facts platform-facts.json -log docker-contract.log \
+            > docker-contract.json
 
       - name: Run the capsule, egress and budget contracts
         env:
           RUNPOOL_CONTRACT_QUALIFY: "1"
+          CAPSULE_IMAGE: ${{ inputs.capsule_image }}
         run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/capsule-contract.test" ./test/contract/capsule
           bash test/contract/capsule/remote-harness.sh "$dir" 2>&1 | tee capsule-contract.log
+          completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go run ./internal/qualification/cmd/suite-evidence \
+            -suite capsule-contract -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+            -started-at "$started" -completed-at "$completed" \
+            -environment release-platform -runner self-hosted \
+            -platform-facts platform-facts.json -capsule-image "$CAPSULE_IMAGE" \
+            -log capsule-contract.log > capsule-contract.json
 
       - name: Run the durability suite on a named volume
         run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$dir/sqlite-contract.test" ./test/contract/sqlite
           cp test/contract/sqlite/testdata/remote-harness.sh "$dir/"
           bash "$dir/remote-harness.sh" "$dir" 2>&1 | tee sqlite-contract.log
+          completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go run ./internal/qualification/cmd/suite-evidence \
+            -suite sqlite-durability -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+            -started-at "$started" -completed-at "$completed" \
+            -environment release-platform -runner self-hosted \
+            -platform-facts platform-facts.json -log-format mixed \
+            -log sqlite-contract.log > sqlite-durability.json
 
       - name: Run the lifecycle drills
         run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           dir=$(mktemp -d)
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$dir/drill-seed" ./test/drills/seed
           git ls-files -coz --exclude-standard | tar --no-xattrs -czf "$dir/src.tgz" --null -T -
           bash test/drills/remote-harness.sh "$dir" 2>&1 | tee lifecycle-drills.log
+          completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go run ./internal/qualification/cmd/suite-evidence \
+            -suite lifecycle-drills -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+            -started-at "$started" -completed-at "$completed" \
+            -environment release-platform -runner self-hosted \
+            -platform-facts platform-facts.json -log-format drill \
+            -log lifecycle-drills.log > lifecycle-drills.json
 
       - name: Verify no managed objects were left behind
         if: always()
@@ -223,9 +258,13 @@ jobs:
           path: |
             platform-facts.json
             docker-contract.log
+            docker-contract.json
             capsule-contract.log
+            capsule-contract.json
             sqlite-contract.log
+            sqlite-durability.json
             lifecycle-drills.log
+            lifecycle-drills.json
           retention-days: 90
           if-no-files-found: error
 
@@ -273,6 +312,12 @@ jobs:
           name: live-evidence
           path: evidence/live
 
+      - name: Download the hermetic evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hermetic-evidence
+          path: evidence/hermetic
+
       - name: Download the upstream evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -282,8 +327,14 @@ jobs:
       - name: Download the controller end-to-end evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: controller-e2e-evidence
-          path: evidence/controller-e2e
+          name: controller-e2e-evidence-reference
+          path: evidence/controller-e2e/reference
+
+      - name: Download the portable controller evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: controller-e2e-evidence-portable
+          path: evidence/controller-e2e/portable
 
       - name: Download the standalone candidates
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

@@ -45,6 +45,7 @@ if docker run --rm -v "$vol":/var/lib/runpool/state "$img" serve >/dev/null 2>&1
   echo "install drill: serve started without a credential"; exit 1
 fi
 echo "install: image runs, doctor passes, serve refuses without a credential"
+echo "RUNPOOL_CASE install passed"
 
 echo "== drill: seed state (stands in for a served instance) =="
 # The helper runs inside a container so the files carry the same
@@ -69,6 +70,7 @@ if ! tar -tzf "$dir/state-backup.tgz" | grep -q 'runpool\.db$'; then
   exit 1
 fi
 echo "backup: $(wc -c < "$dir/state-backup.tgz") bytes, database present"
+echo "RUNPOOL_CASE backup passed"
 
 echo "== drill: disaster (wipe) and restore =="
 docker volume rm "$vol" >/dev/null
@@ -86,6 +88,7 @@ status_report=$(docker run --rm -v "$vol":/var/lib/runpool/state -v /var/run/doc
   "$img" status)
 printf '%s\n' "$status_report" | head -3
 echo "restore: instance identity and audit marker survived"
+echo "RUNPOOL_CASE restore passed"
 
 echo "== drill: upgrade (migration) and integrity =="
 # The same binary on both ends proves the state survived a round trip; it
@@ -142,6 +145,7 @@ if printf '%s' "$after" | grep -q 'pre-migration'; then
 else
   echo "upgrade: no migration pending for the released schema"
 fi
+echo "RUNPOOL_CASE upgrade passed"
 
 echo "== drill: uninstall =="
 # Uninstall must remove everything the instance owns — including a
@@ -160,6 +164,7 @@ if [ -n "$left" ]; then
   echo "uninstall drill: owned volumes left behind: $left"; exit 1
 fi
 echo "uninstall: refused the wrong id, removed the owned volume"
+echo "RUNPOOL_CASE uninstall passed"
 
 echo
 echo "lifecycle drills passed: install, backup, restore, upgrade, uninstall"

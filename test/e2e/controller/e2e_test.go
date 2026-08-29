@@ -151,11 +151,11 @@ func TestControllerEndToEnd(t *testing.T) {
 	if _, err := github.waitForStatus(ctx, seed, "in_progress", 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := docker.restart(ctx); err != nil {
+	if err := docker.killAndReplace(ctx, "primary-"+s.runID); err != nil {
 		t.Fatal(err)
 	}
 	seed = awaitSuccess(t, ctx, github, seed)
-	evidence.WorkflowRuns = append(evidence.WorkflowRuns, workflowEvidence{Purpose: "restart_and_seed", ID: seed.ID, URL: seed.HTMLURL})
+	evidence.WorkflowRuns = append(evidence.WorkflowRuns, workflowEvidence{Purpose: "sigkill_adoption_and_seed", ID: seed.ID, URL: seed.HTMLURL})
 
 	reuse := dispatch(t, ctx, github, s, evidence.CacheKey, "reuse", 0)
 	runs = append(runs, reuse)

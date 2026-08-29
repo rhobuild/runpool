@@ -37,6 +37,8 @@ concurrency:
 env:
   # Held equal to go.mod by the consistency suite.
   GOTOOLCHAIN: go1.26.7
+  QUALIFICATION_COMMIT: ${{ github.sha }}
+  QUALIFICATION_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   contracts:
@@ -149,9 +151,19 @@ jobs:
           # find that drift, so it runs there too and not only when a
           # release is being qualified.
           RUNPOOL_CONTRACT_REASSIGNMENT: "1"
+          QUALIFYING: ${{ inputs.qualify && '1' || '' }}
         run: |
           mkdir -p upstream-evidence
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go test -count=1 -v -timeout 40m ./test/contract/githubactions/... 2>&1 | tee upstream-evidence/contract.log
+          if [ -n "$QUALIFYING" ]; then
+            completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            go run ./internal/qualification/cmd/suite-evidence \
+              -suite contracts-github-actions -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+              -started-at "$started" -completed-at "$completed" \
+              -environment github-hosted -runner ubuntu-24.04 \
+              -log upstream-evidence/contract.log > upstream-evidence/suite.json
+          fi
 
       - name: Observe optional upstream behavior
         # These probes inform capabilities Runpool does not expose. Drift is

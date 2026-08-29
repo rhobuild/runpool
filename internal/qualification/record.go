@@ -19,33 +19,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/platform"
 )
 
-// suites are the gates a release-qualification run comprises, each with
-// the evidence file that proves it ran. The record names them so that a
-// reader of the document knows what "qualified" covered on the day it
-// was written -- and the assembly refuses to write a name it holds no
-// evidence for, because the workflow step that runs a suite and the
-// constant that lists it are otherwise two places nothing holds
-// together: a step deleted from the workflow left the published record
-// still naming its suite, and nothing in the repository could tell.
-//
-// hermetic is the one gate with no artifact of its own: it is the
-// required check the branch protection holds every commit to, and the
-// qualification workflow cannot run on a commit that failed it.
-var suites = []struct{ name, evidence string }{
-	{"hermetic", ""},
-	{"docker-contract", "live/docker-contract.log"},
-	{"capsule-contract", "live/capsule-contract.log"},
-	{"sqlite-durability", "live/sqlite-contract.log"},
-	{"lifecycle-drills", "live/lifecycle-drills.log"},
-	{"contracts-github-actions", "upstream/contract.log"},
-	{"controller-e2e", "controller-e2e"},
-}
+const recordSchemaVersion = 2
 
 // Build identifies what is being qualified, and later what is being
 // published. Both ends state it; a release happens where they agree.
@@ -70,7 +51,7 @@ type Record struct {
 	PlatformReference   platform.Facts  `json:"platform_reference"`
 	PlatformObserved    platform.Facts  `json:"platform_observed"`
 	StandaloneArtifacts []string        `json:"standalone_artifacts"`
-	Suites              []string        `json:"suites"`
+	Suites              []SuiteEvidence `json:"suites"`
 }
 
 // controllerE2E is the subset of the end-to-end record this reads: the
@@ -107,12 +88,12 @@ func Assemble(ref platform.Reference, evidenceDir string, build Build, at time.T
 	if err != nil {
 		return Record{}, err
 	}
-	names, err := provenSuites(evidenceDir)
+	suiteEvidence, err := provenSuites(evidenceDir, build, observed)
 	if err != nil {
 		return Record{}, err
 	}
 	return Record{
-		SchemaVersion:       1,
+		SchemaVersion:       recordSchemaVersion,
 		Commit:              build.Commit,
 		ControllerImage:     build.ControllerImage,
 		CapsuleImage:        build.CapsuleImage,
@@ -122,7 +103,7 @@ func Assemble(ref platform.Reference, evidenceDir string, build Build, at time.T
 		PlatformReference:   qualified.Platform,
 		PlatformObserved:    observed,
 		StandaloneArtifacts: checksums,
-		Suites:              names,
+		Suites:              suiteEvidence,
 	}, nil
 }
 
@@ -130,6 +111,9 @@ func Assemble(ref platform.Reference, evidenceDir string, build Build, at time.T
 // published. A record naming another commit or another digest is a
 // record of a qualification that happened, of something else.
 func (r Record) CoversBuild(build Build) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
 	for _, field := range []struct{ name, recorded, publishing string }{
 		{"commit", r.Commit, build.Commit},
 		{"controller_image", r.ControllerImage, build.ControllerImage},
@@ -151,12 +135,49 @@ func (r Record) CoversBuild(build Build) error {
 	return nil
 }
 
+func (r Record) validate() error {
+	if r.SchemaVersion != recordSchemaVersion {
+		return fmt.Errorf("release-qualification record schema is %d; require %d", r.SchemaVersion, recordSchemaVersion)
+	}
+	if r.QualifiedAt == "" {
+		return fmt.Errorf("release-qualification record states no qualification time")
+	}
+	if _, err := time.Parse(time.RFC3339, r.QualifiedAt); err != nil {
+		return fmt.Errorf("release-qualification record has invalid qualification time %q: %w", r.QualifiedAt, err)
+	}
+	if len(r.StandaloneArtifacts) == 0 {
+		return fmt.Errorf("release-qualification record lists no standalone artifact")
+	}
+	if len(r.Suites) != len(suiteDefinitions) {
+		return fmt.Errorf("release-qualification record contains %d suites; require %d", len(r.Suites), len(suiteDefinitions))
+	}
+	recordedBuild := Build{
+		Commit: r.Commit, ControllerImage: r.ControllerImage, CapsuleImage: r.CapsuleImage, Run: r.Run,
+	}
+	seen := make([]SuiteID, 0, len(r.Suites))
+	for _, evidence := range r.Suites {
+		if slices.Contains(seen, evidence.SuiteID) {
+			return fmt.Errorf("release-qualification record contains suite %s more than once", evidence.SuiteID)
+		}
+		seen = append(seen, evidence.SuiteID)
+		if err := ValidateSuiteEvidence(evidence, recordedBuild, r.PlatformObserved); err != nil {
+			return fmt.Errorf("release-qualification record: %w", err)
+		}
+	}
+	for _, definition := range suiteDefinitions {
+		if !slices.Contains(seen, definition.id) {
+			return fmt.Errorf("release-qualification record contains no suite %s", definition.id)
+		}
+	}
+	return nil
+}
+
 // readControllerE2E requires exactly one end-to-end record, covering the
 // images under qualification. A second record is a second run, and which
 // one the release is authorized against would be whichever the directory
 // happened to list first.
 func readControllerE2E(evidenceDir string, build Build) error {
-	pattern := filepath.Join(evidenceDir, "controller-e2e", "controller-e2e-*.json")
+	pattern := filepath.Join(evidenceDir, "controller-e2e", "reference", "controller-e2e-*.json")
 	found, err := filepath.Glob(pattern)
 	if err != nil {
 		return err
@@ -211,23 +232,29 @@ func readJSON(path string, into any) error {
 	return nil
 }
 
-// provenSuites returns the suite names the evidence directory can stand
-// behind, refusing to assemble when any is missing or empty: a record is
-// the artifact a release keeps, and a suite it names without evidence is
-// a claim about a run that may never have happened.
-func provenSuites(evidenceDir string) ([]string, error) {
-	names := make([]string, 0, len(suites))
-	for _, s := range suites {
-		if s.evidence != "" {
-			info, err := os.Stat(filepath.Join(evidenceDir, s.evidence))
-			if err != nil {
-				return nil, fmt.Errorf("suite %s: no evidence at %s: %w", s.name, s.evidence, err)
-			}
-			if info.Mode().IsRegular() && info.Size() == 0 {
-				return nil, fmt.Errorf("suite %s: evidence %s is empty, which is a run that produced nothing", s.name, s.evidence)
-			}
+// provenSuites decodes and validates every suite manifest. A log is retained
+// for diagnosis, but it is not evidence by itself: only the common manifest
+// states which cases executed and binds them to this build and host.
+func provenSuites(evidenceDir string, build Build, observed platform.Facts) ([]SuiteEvidence, error) {
+	evidence := make([]SuiteEvidence, 0, len(suiteDefinitions))
+	for _, definition := range suiteDefinitions {
+		path := filepath.Join(evidenceDir, definition.evidencePath)
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("suite %s: open evidence %s: %w", definition.id, definition.evidencePath, err)
 		}
-		names = append(names, s.name)
+		manifest, decodeErr := DecodeSuiteEvidence(file)
+		closeErr := file.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("suite %s: decode evidence %s: %w", definition.id, definition.evidencePath, decodeErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("suite %s: close evidence %s: %w", definition.id, definition.evidencePath, closeErr)
+		}
+		if err := validateSuiteEvidence(manifest, definition, build, observed); err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, manifest)
 	}
-	return names, nil
+	return evidence, nil
 }

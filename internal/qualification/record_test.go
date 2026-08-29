@@ -84,6 +84,49 @@ func frozenReference() platform.Reference {
 
 func evidence() string { return filepath.Join("testdata", "evidence") }
 
+func updateEvidenceFixtures(t *testing.T) {
+	t.Helper()
+	var observed platform.Facts
+	body, err := os.ReadFile(filepath.Join(evidence(), "live", "platform-facts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &observed); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range suiteDefinitions {
+		environment := definition.environment
+		if definition.requiresFacts {
+			facts := observed
+			environment.Facts = &facts
+		}
+		cases := make([]CaseEvidence, 0, len(definition.expectedCases))
+		for _, id := range definition.expectedCases {
+			cases = append(cases, CaseEvidence{ID: id, Outcome: CasePassed, DurationMilliseconds: 10})
+		}
+		manifest, err := NewSuiteEvidence(definition.id, testBuild(), environment,
+			qualifiedAt().Add(-time.Minute), qualifiedAt(), cases)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(evidence(), definition.evidencePath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := EncodeSuiteEvidence(file, manifest); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // evidenceCopy is a writable copy of the fixture tree, for the cases
 // that need one piece of evidence to be wrong.
 func evidenceCopy(t *testing.T) string {
@@ -120,6 +163,9 @@ func rewriteJSON(t *testing.T, path string, edit func(map[string]any)) {
 // with the golden file, between this build and the one that reads an
 // older record.
 func TestTheRecordIsTheDocumentItPromises(t *testing.T) {
+	if *update {
+		updateEvidenceFixtures(t)
+	}
 	document, err := Assemble(frozenReference(), evidence(), testBuild(), qualifiedAt())
 	if err != nil {
 		t.Fatalf("assembling from complete evidence failed: %v", err)
@@ -199,7 +245,7 @@ func TestTheReferenceFactsAreTheReviewedOnesNotTheHostsOwn(t *testing.T) {
 // does not support the claim the record would make.
 func TestAssembleRefusesWhatItCannotStandBehind(t *testing.T) {
 	e2ePath := func(dir string) string {
-		return filepath.Join(dir, "controller-e2e", "controller-e2e-1.json")
+		return filepath.Join(dir, "controller-e2e", "reference", "controller-e2e-1.json")
 	}
 	for name, testCase := range map[string]struct {
 		reference platform.Reference
@@ -249,7 +295,7 @@ func TestAssembleRefusesWhatItCannotStandBehind(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				second := filepath.Join(dir, "controller-e2e", "controller-e2e-2.json")
+				second := filepath.Join(dir, "controller-e2e", "reference", "controller-e2e-2.json")
 				if err := os.WriteFile(second, body, 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -342,10 +388,9 @@ func TestTheRecordItAssemblesIsTheRecordItVerifies(t *testing.T) {
 // passes while doing its job backwards, and it needs both sides blank,
 // which is why a case that blanks one of them proves nothing.
 func TestAnUnstatedIdentityIsNotAMatch(t *testing.T) {
-	covering := Record{
-		Commit:          testBuild().Commit,
-		ControllerImage: controllerImage,
-		CapsuleImage:    capsuleImage,
+	covering, err := Assemble(frozenReference(), evidence(), testBuild(), qualifiedAt())
+	if err != nil {
+		t.Fatal(err)
 	}
 	for field, blank := range map[string]func(*Record, *Build){
 		"commit": func(r *Record, b *Build) { r.Commit, b.Commit = "", "" },
@@ -365,6 +410,36 @@ func TestAnUnstatedIdentityIsNotAMatch(t *testing.T) {
 		if !strings.Contains(err.Error(), field) {
 			t.Errorf("refused with %q; the reason has to name the identity that is missing", err)
 		}
+	}
+}
+
+func TestPublicationRevalidatesTheDownloadedRecord(t *testing.T) {
+	record, err := Assemble(frozenReference(), evidence(), testBuild(), qualifiedAt())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Record){
+		"unknown schema": func(r *Record) { r.SchemaVersion++ },
+		"missing suite":  func(r *Record) { r.Suites = r.Suites[1:] },
+		"duplicate suite": func(r *Record) {
+			r.Suites[len(r.Suites)-1] = r.Suites[0]
+		},
+		"suite changed after assembly": func(r *Record) {
+			r.Suites[0].Cases[0].Outcome = CaseSkipped
+		},
+		"no artifacts": func(r *Record) { r.StandaloneArtifacts = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			broken := record
+			broken.Suites = append([]SuiteEvidence(nil), record.Suites...)
+			for i := range broken.Suites {
+				broken.Suites[i].Cases = append([]CaseEvidence(nil), record.Suites[i].Cases...)
+			}
+			mutate(&broken)
+			if err := broken.CoversBuild(testBuild()); err == nil {
+				t.Fatalf("publication accepted a record with %s", name)
+			}
+		})
 	}
 }
 
@@ -395,20 +470,15 @@ func TestTheEmbeddedReferenceIsTheOneARecordIsBuiltFrom(t *testing.T) {
 	}
 }
 
-// TestASuiteWithoutEvidenceIsNotNamed: the record is a release asset,
-// and its suite list was a constant stamped unconditionally -- assembly
-// opened three evidence paths and never the live logs, so a suite step
-// deleted from the workflow left the published record still naming it,
-// with nothing anywhere able to tell. Each named suite now requires the
-// artifact that proves it ran, and an empty artifact is a run that
-// produced nothing.
+// TestASuiteWithoutEvidenceIsNotNamed: the record is a release asset, so a
+// missing or empty manifest cannot be replaced by a diagnostic log.
 func TestASuiteWithoutEvidenceIsNotNamed(t *testing.T) {
 	for name, breakIt := range map[string]func(dir string) error{
-		"the drill log is missing": func(dir string) error {
-			return os.Remove(filepath.Join(dir, "live", "lifecycle-drills.log"))
+		"the drill manifest is missing": func(dir string) error {
+			return os.Remove(filepath.Join(dir, "live", "lifecycle-drills.json"))
 		},
-		"the upstream log is empty": func(dir string) error {
-			return os.WriteFile(filepath.Join(dir, "upstream", "contract.log"), nil, 0o600)
+		"the upstream manifest is empty": func(dir string) error {
+			return os.WriteFile(filepath.Join(dir, "upstream", "suite.json"), nil, 0o600)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

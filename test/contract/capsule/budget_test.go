@@ -52,7 +52,7 @@ func TestLeaseResourceBudget(t *testing.T) {
 	}
 
 	tier := config.Resources{
-		Memory: 2 << 30,
+		Memory: 768 << 20,
 		Swap:   256 << 20,
 		CPU:    2_000_000_000,
 		PIDs:   512,
@@ -164,6 +164,84 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if _, err := dock.ContainerStatus(ctx, gwID); err != nil {
 		t.Errorf("the gateway did not survive its own PID ceiling: %v", err)
 	}
+
+	// Limits written into cgroup files are configuration evidence. Force
+	// anonymous-like tmpfs pages past memory.max and require the kernel to
+	// account non-zero swap before calling the swap envelope enforced.
+	const pressureImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+	outerID := string(prepared.RuntimeID)
+	innerDocker := func(arguments ...string) (int, string, error) {
+		command := append([]string{"docker", "--host=" + innerDockerSocket}, arguments...)
+		return dock.Exec(ctx, outerID, command)
+	}
+	if code, out, err := innerDocker("pull", pressureImage); err != nil || code != 0 {
+		t.Fatalf("pull the locked memory-pressure image through the inner daemon: exit %d, %v: %s", code, err, out)
+	}
+	pressureName := "runpool-contract-pressure-" + short
+	t.Cleanup(func() { _, _, _ = innerDocker("rm", "-f", pressureName) })
+	memoryMiB := capsuleLimits.memory >> 20
+	code, out, err = innerDocker("run", "-d", "--name", pressureName,
+		"--tmpfs", "/pressure:rw,size="+strconv.FormatInt(memoryMiB+16, 10)+"m",
+		pressureImage, "sh", "-c",
+		"dd if=/dev/zero of=/pressure/blob bs=1M count="+strconv.FormatInt(memoryMiB, 10)+
+			" status=none && touch /pressure/ready && sleep 120")
+	if err != nil || code != 0 {
+		t.Fatalf("start memory pressure: exit %d, %v: %s", code, err, out)
+	}
+	waitForInnerFile(t, ctx, innerDocker, pressureName, "/pressure/ready")
+	var swapCurrent int64
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		swapCurrent = readCgroupCounter(ctx, t, dock, outerID, "memory.swap.current", "")
+		if swapCurrent > 0 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if swapCurrent == 0 {
+		t.Fatal("memory.swap.current remained zero after memory pressure exceeded memory.max; configured swap was not exercised")
+	}
+	t.Logf("capsule used %d bytes of swap under %d bytes of memory pressure", swapCurrent, capsuleLimits.memory)
+	if code, out, err := innerDocker("rm", "-f", pressureName); err != nil || code != 0 {
+		t.Fatalf("release memory pressure: exit %d, %v: %s", code, err, out)
+	}
+
+	// An inner workload that exhausts the aggregate envelope must be charged
+	// to the capsule's cgroup. Mark the pressure process as the preferred OOM
+	// victim so the property under test is deterministic: the workload dies,
+	// while supervisor and daemon remain available to report the hierarchical
+	// memory.events counter.
+	oomBefore := readCgroupCounter(ctx, t, dock, outerID, "memory.events", "oom_kill")
+	totalMiB := (capsuleLimits.memory + capsuleLimits.swap) >> 20
+	code, out, err = innerDocker("run", "--rm",
+		"--tmpfs", "/pressure:rw,size="+strconv.FormatInt(totalMiB+256, 10)+"m",
+		pressureImage, "sh", "-c",
+		"echo 1000 > /proc/self/oom_score_adj && exec dd if=/dev/zero of=/pressure/blob bs=1M count="+
+			strconv.FormatInt(totalMiB+128, 10)+" status=none")
+	if err != nil {
+		t.Fatalf("drive the inner OOM boundary: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("an inner workload wrote past memory+swap without being killed: %s", out)
+	}
+	state, err := dock.ContainerStatus(ctx, outerID)
+	if err != nil {
+		t.Fatalf("inspect the capsule after inner OOM: %v", err)
+	}
+	if state.Status == engine.StatusRunning {
+		oomAfter := readCgroupCounter(ctx, t, dock, outerID, "memory.events", "oom_kill")
+		if oomAfter <= oomBefore {
+			t.Fatalf("inner workload exited %d but capsule oom_kill stayed at %d; the failure was not attributed to this cgroup: %s",
+				code, oomBefore, out)
+		}
+		t.Logf("capsule oom_kill increased from %d to %d after inner workload exit %d", oomBefore, oomAfter, code)
+	} else if !state.OOMKilled || state.ExitCode != 137 {
+		t.Fatalf("capsule stopped after inner pressure as status=%s exit=%d oom_killed=%t; require an attributed kernel OOM",
+			state.Status, state.ExitCode, state.OOMKilled)
+	} else {
+		t.Logf("kernel attributed the inner pressure to the capsule: status=%s exit=%d oom_killed=%t",
+			state.Status, state.ExitCode, state.OOMKilled)
+	}
 }
 
 type cgroupLimits struct {
@@ -196,4 +274,48 @@ func readCgroupLimits(ctx context.Context, t *testing.T, dock *docker.Client, id
 		swap:   read("memory.swap.max"),
 		pids:   read("pids.max"),
 	}
+}
+
+func readCgroupCounter(ctx context.Context, t *testing.T, dock *docker.Client, id, file, key string) int64 {
+	t.Helper()
+	code, out, err := dock.Exec(ctx, id, []string{"cat", "/sys/fs/cgroup/" + file})
+	if err != nil || code != 0 {
+		t.Fatalf("read %s from %s: exit %d, %v", file, id[:12], code, err)
+	}
+	if key == "" {
+		value, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		if err != nil {
+			t.Fatalf("%s in %s is %q: %v", file, id[:12], strings.TrimSpace(out), err)
+		}
+		return value
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != key {
+			continue
+		}
+		value, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			t.Fatalf("%s %s in %s is %q: %v", file, key, id[:12], fields[1], err)
+		}
+		return value
+	}
+	t.Fatalf("%s in %s has no %s counter: %s", file, id[:12], key, out)
+	return 0
+}
+
+func waitForInnerFile(t *testing.T, ctx context.Context,
+	innerDocker func(...string) (int, string, error), container, path string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		code, _, err := innerDocker("exec", container, "test", "-f", path)
+		if err == nil && code == 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	code, out, err := innerDocker("logs", container)
+	t.Fatalf("inner pressure did not reach %s: logs exit %d, %v: %s", path, code, err, out)
 }

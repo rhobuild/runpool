@@ -248,3 +248,51 @@ jobs:
           fi
       - name: Verify the image runs
         run: docker run --rm runpool:ci version
+
+  qualification-evidence:
+    name: hermetic evidence
+    if: always()
+    needs: [build, lint, vulnerabilities, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every hermetic boundary
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          IMAGE_RESULT: ${{ needs.image.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          VULNERABILITIES_RESULT: ${{ needs.vulnerabilities.result }}
+        run: |
+          for result in "$BUILD_RESULT" "$LINT_RESULT" "$VULNERABILITIES_RESULT" "$IMAGE_RESULT"; do
+            [ "$result" = success ] || { echo "a hermetic boundary ended as $result"; exit 1; }
+          done
+
+      - name: Check out the tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Record the hermetic boundary
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          observed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go run ./internal/qualification/cmd/suite-evidence \
+            -suite hermetic -commit "$GITHUB_SHA" -run "$RUN_URL" \
+            -started-at "$observed" -completed-at "$observed" \
+            -environment github-hosted -runner ubuntu-24.04 -log-format cases \
+            -case build=passed -case lint=passed -case vulnerabilities=passed -case image=passed \
+            > suite.json
+
+      - name: Keep the hermetic evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermetic-evidence
+          path: suite.json
+          retention-days: 90
+          if-no-files-found: error

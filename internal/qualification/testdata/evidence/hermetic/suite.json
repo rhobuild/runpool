@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "suite_id": "hermetic",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "started_at": "2026-08-18T09:13:07Z",
+  "completed_at": "2026-08-18T09:14:07Z",
+  "environment": {
+    "kind": "github-hosted",
+    "runner": "ubuntu-24.04"
+  },
+  "expected_cases": [
+    "build",
+    "lint",
+    "vulnerabilities",
+    "image"
+  ],
+  "cases": [
+    {
+      "id": "build",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "lint",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "vulnerabilities",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "image",
+      "outcome": "passed",
+      "duration_ms": 10
+    }
+  ],
+  "summary": {
+    "expected": 4,
+    "executed": 4,
+    "passed": 4,
+    "failed": 0,
+    "skipped": 0
+  },
+  "outcome": "passed"
+}

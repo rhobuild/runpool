@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "commit": "0123456789abcdef0123456789abcdef01234567",
   "controller_image": "ghcr.io/rhobuild/runpool@sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
@@ -62,12 +62,668 @@
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  runpool-completions.tar.gz"
   ],
   "suites": [
-    "hermetic",
-    "docker-contract",
-    "capsule-contract",
-    "sqlite-durability",
-    "lifecycle-drills",
-    "contracts-github-actions",
-    "controller-e2e"
+    {
+      "schema_version": 1,
+      "suite_id": "hermetic",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "github-hosted",
+        "runner": "ubuntu-24.04"
+      },
+      "expected_cases": [
+        "build",
+        "lint",
+        "vulnerabilities",
+        "image"
+      ],
+      "cases": [
+        {
+          "id": "build",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "lint",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "vulnerabilities",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "image",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 4,
+        "executed": 4,
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "docker-contract",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "release-platform",
+        "runner": "self-hosted",
+        "facts": {
+          "os": "debian",
+          "os_version": "13",
+          "os_codename": "trixie",
+          "arch": "amd64",
+          "kernel": "6.12.48+deb13-amd64",
+          "engine": "29.7.2",
+          "api": "1.53",
+          "cgroup_version": "2",
+          "cgroup_driver": "systemd",
+          "storage_driver": "overlayfs",
+          "backing_filesystem": "extfs",
+          "rootless": false,
+          "containerd": "2.2.0",
+          "runc": "1.4.2",
+          "buildx": "v0.32.0",
+          "compose": "2.42.0",
+          "iptables": "iptables v1.8.11 (nf_tables)",
+          "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+        }
+      },
+      "expected_cases": [
+        "TestContainerLifecycle",
+        "TestRemoveIsIdempotent",
+        "TestPullOnMissingImage",
+        "TestExec",
+        "TestExecHonoursItsContext",
+        "TestExecWithInput",
+        "TestOwnershipQueries",
+        "TestResourceLimits",
+        "TestOOMState",
+        "TestOwnedIDByName",
+        "TestOwnedRemovalRefusesForeignNetworkAndVolume",
+        "TestTheDaemonSpellingSelectsTheEntry",
+        "TestHostInfo",
+        "TestEnsureOwnedVolume",
+        "TestCreateVolumeRefusesATakenName",
+        "TestCacheLaneVolumes",
+        "TestFilesystemProbe",
+        "TestOwnedVolumeUsage",
+        "TestContainerDiskFull",
+        "TestCleanupSurvivesCancellation",
+        "TestContainerRemovalSparesNamedVolumes"
+      ],
+      "cases": [
+        {
+          "id": "TestContainerLifecycle",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestRemoveIsIdempotent",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestPullOnMissingImage",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestExec",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestExecHonoursItsContext",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestExecWithInput",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOwnershipQueries",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestResourceLimits",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOOMState",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOwnedIDByName",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOwnedRemovalRefusesForeignNetworkAndVolume",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestTheDaemonSpellingSelectsTheEntry",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestHostInfo",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestEnsureOwnedVolume",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCreateVolumeRefusesATakenName",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCacheLaneVolumes",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestFilesystemProbe",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOwnedVolumeUsage",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestContainerDiskFull",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCleanupSurvivesCancellation",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestContainerRemovalSparesNamedVolumes",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 21,
+        "executed": 21,
+        "passed": 21,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "capsule-contract",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "release-platform",
+        "runner": "self-hosted",
+        "facts": {
+          "os": "debian",
+          "os_version": "13",
+          "os_codename": "trixie",
+          "arch": "amd64",
+          "kernel": "6.12.48+deb13-amd64",
+          "engine": "29.7.2",
+          "api": "1.53",
+          "cgroup_version": "2",
+          "cgroup_driver": "systemd",
+          "storage_driver": "overlayfs",
+          "backing_filesystem": "extfs",
+          "rootless": false,
+          "containerd": "2.2.0",
+          "runc": "1.4.2",
+          "buildx": "v0.32.0",
+          "compose": "2.42.0",
+          "iptables": "iptables v1.8.11 (nf_tables)",
+          "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+        }
+      },
+      "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_cases": [
+        "TestLeaseResourceBudget",
+        "TestNetworkSandboxBypass",
+        "TestCapsuleLifecycle",
+        "TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks",
+        "TestPrepareWaitsForAProvenDaemon",
+        "TestAbortBeforeStartExitsWithTheReservedCode"
+      ],
+      "cases": [
+        {
+          "id": "TestLeaseResourceBudget",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestNetworkSandboxBypass",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCapsuleLifecycle",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestPrepareWaitsForAProvenDaemon",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestAbortBeforeStartExitsWithTheReservedCode",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 6,
+        "executed": 6,
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "sqlite-durability",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "release-platform",
+        "runner": "self-hosted",
+        "facts": {
+          "os": "debian",
+          "os_version": "13",
+          "os_codename": "trixie",
+          "arch": "amd64",
+          "kernel": "6.12.48+deb13-amd64",
+          "engine": "29.7.2",
+          "api": "1.53",
+          "cgroup_version": "2",
+          "cgroup_driver": "systemd",
+          "storage_driver": "overlayfs",
+          "backing_filesystem": "extfs",
+          "rootless": false,
+          "containerd": "2.2.0",
+          "runc": "1.4.2",
+          "buildx": "v0.32.0",
+          "compose": "2.42.0",
+          "iptables": "iptables v1.8.11 (nf_tables)",
+          "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+        }
+      },
+      "expected_cases": [
+        "TestPragmas",
+        "TestCrashRecovery",
+        "TestContention",
+        "TestSingletonLock",
+        "TestBackupRestore",
+        "TestDiskFull",
+        "TestMigrationMechanics",
+        "container-kill-round-1",
+        "container-kill-round-2",
+        "container-kill-round-3"
+      ],
+      "cases": [
+        {
+          "id": "TestPragmas",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCrashRecovery",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestContention",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestSingletonLock",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestBackupRestore",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestDiskFull",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestMigrationMechanics",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "container-kill-round-1",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "container-kill-round-2",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "container-kill-round-3",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 10,
+        "executed": 10,
+        "passed": 10,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "lifecycle-drills",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "release-platform",
+        "runner": "self-hosted",
+        "facts": {
+          "os": "debian",
+          "os_version": "13",
+          "os_codename": "trixie",
+          "arch": "amd64",
+          "kernel": "6.12.48+deb13-amd64",
+          "engine": "29.7.2",
+          "api": "1.53",
+          "cgroup_version": "2",
+          "cgroup_driver": "systemd",
+          "storage_driver": "overlayfs",
+          "backing_filesystem": "extfs",
+          "rootless": false,
+          "containerd": "2.2.0",
+          "runc": "1.4.2",
+          "buildx": "v0.32.0",
+          "compose": "2.42.0",
+          "iptables": "iptables v1.8.11 (nf_tables)",
+          "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+        }
+      },
+      "expected_cases": [
+        "install",
+        "backup",
+        "restore",
+        "upgrade",
+        "uninstall"
+      ],
+      "cases": [
+        {
+          "id": "install",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "backup",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "restore",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "upgrade",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "uninstall",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 5,
+        "executed": 5,
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "contracts-github-actions",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "github-hosted",
+        "runner": "ubuntu-24.04"
+      },
+      "expected_cases": [
+        "TestOrganizationJitAssignmentNotBound",
+        "TestInvalidCredentialFailsClosed",
+        "TestZeroCapacityDoesNotRevealQueuedDemand",
+        "TestEveryContractFixtureIsInstalled",
+        "TestDeliveryIdentityIsStable",
+        "TestLapsedAssignmentIsCancelledAndRequeued",
+        "TestScaleSetSystemLabel",
+        "TestRepositoryScaleSetAndJitRunner",
+        "TestASecondSessionIsRefusedRecognisably",
+        "TestOrganizationDefaultGroupScaleSet",
+        "TestTheScaleSetForbidsRunnerSelfUpdate",
+        "TestAnAdoptedScaleSetForbidsRunnerSelfUpdate",
+        "TestAdoptionLeavesACorrectScaleSetAlone"
+      ],
+      "cases": [
+        {
+          "id": "TestOrganizationJitAssignmentNotBound",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestInvalidCredentialFailsClosed",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestZeroCapacityDoesNotRevealQueuedDemand",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestEveryContractFixtureIsInstalled",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestDeliveryIdentityIsStable",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestLapsedAssignmentIsCancelledAndRequeued",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestScaleSetSystemLabel",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestRepositoryScaleSetAndJitRunner",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestASecondSessionIsRefusedRecognisably",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestOrganizationDefaultGroupScaleSet",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestTheScaleSetForbidsRunnerSelfUpdate",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestAnAdoptedScaleSetForbidsRunnerSelfUpdate",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestAdoptionLeavesACorrectScaleSetAlone",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 13,
+        "executed": 13,
+        "passed": 13,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "controller-e2e-portable",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "github-hosted",
+        "runner": "ubuntu-24.04"
+      },
+      "controller_image": "ghcr.io/rhobuild/runpool@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_cases": [
+        "TestControllerEndToEnd"
+      ],
+      "cases": [
+        {
+          "id": "TestControllerEndToEnd",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "schema_version": 1,
+      "suite_id": "controller-e2e",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+      "started_at": "2026-08-18T09:13:07Z",
+      "completed_at": "2026-08-18T09:14:07Z",
+      "environment": {
+        "kind": "release-platform",
+        "runner": "self-hosted",
+        "facts": {
+          "os": "debian",
+          "os_version": "13",
+          "os_codename": "trixie",
+          "arch": "amd64",
+          "kernel": "6.12.48+deb13-amd64",
+          "engine": "29.7.2",
+          "api": "1.53",
+          "cgroup_version": "2",
+          "cgroup_driver": "systemd",
+          "storage_driver": "overlayfs",
+          "backing_filesystem": "extfs",
+          "rootless": false,
+          "containerd": "2.2.0",
+          "runc": "1.4.2",
+          "buildx": "v0.32.0",
+          "compose": "2.42.0",
+          "iptables": "iptables v1.8.11 (nf_tables)",
+          "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+        }
+      },
+      "controller_image": "ghcr.io/rhobuild/runpool@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_cases": [
+        "TestControllerEndToEnd"
+      ],
+      "cases": [
+        {
+          "id": "TestControllerEndToEnd",
+          "outcome": "passed",
+          "duration_ms": 10
+        }
+      ],
+      "summary": {
+        "expected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "outcome": "passed"
+    }
   ]
 }

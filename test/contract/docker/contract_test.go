@@ -448,6 +448,51 @@ func TestResourceLimits(t *testing.T) {
 	}
 }
 
+// TestOOMState keeps the engine-neutral state truthful after a container has
+// stopped. Exit 137 alone is ambiguous with an operator SIGKILL; OOMKilled is
+// the daemon's kernel-backed attribution and is what a caller can act on.
+func TestOOMState(t *testing.T) {
+	c, instance := client(t)
+	ctx := t.Context()
+	const memory = 64 << 20
+	id, err := c.CreateContainer(ctx, engine.ContainerSpec{
+		Name:  instance + "-oom",
+		Image: busybox,
+		Cmd: []string{"sh", "-c",
+			"echo 1000 > /proc/self/oom_score_adj && exec dd if=/dev/zero of=/pressure/blob bs=1M count=128 status=none"},
+		Labels:          labels(instance, "lease-oom", "task", "helper"),
+		Tmpfs:           map[string]string{"/pressure": "rw,size=128m"},
+		MemoryBytes:     memory,
+		MemorySwapBytes: memory,
+		PIDsLimit:       64,
+	})
+	if err != nil {
+		t.Fatalf("create OOM fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = c.RemoveContainer(context.Background(), id) })
+	if err := c.StartContainer(ctx, id); err != nil {
+		t.Fatalf("start OOM fixture: %v", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := c.ContainerStatus(ctx, id)
+		if err != nil {
+			t.Fatalf("inspect OOM fixture: %v", err)
+		}
+		if state.Status == engine.StatusRunning || state.Status == engine.StatusCreated {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if state.ExitCode != 137 || !state.OOMKilled {
+			t.Fatalf("OOM state = status %s, exit %d, oom_killed %t; want exited, 137, true",
+				state.Status, state.ExitCode, state.OOMKilled)
+		}
+		return
+	}
+	t.Fatal("OOM fixture did not stop within 30s")
+}
+
 // TestOwnedIDByName is the fail-closed resolution the intent model
 // rests on: an object found by its deterministic name is returned only
 // with proven ownership, a foreign object with the same name is a typed
