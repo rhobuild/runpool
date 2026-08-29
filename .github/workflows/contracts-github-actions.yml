@@ -110,6 +110,19 @@ jobs:
           permission-contents: read
           permission-organization-self-hosted-runners: write
 
+      # Before the suite, because the suite is eight minutes long and a
+      # fixture that is not installed is knowable in five seconds. The
+      # last release cycle was spent finding one of these from a single
+      # test, after the tag had been cut.
+      - name: Verify the installed fixtures
+        env:
+          RUNPOOL_CONTRACT_ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
+          RUNPOOL_CONTRACT_ORG_TOKEN: ${{ steps.org-token.outputs.token }}
+          RUNPOOL_CONTRACT_REPO_A: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+          RUNPOOL_CONTRACT_REPO_B: ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
+          RUNPOOL_CONTRACT_QUALIFY: ${{ inputs.qualify && '1' || '' }}
+        run: go test ./test/contract/githubactions/ -count=1 -run TestEveryFixtureThisSuiteReadsIsInstalled -v
+
       - name: Run the upstream contracts
         # The suite creates its own scale sets and removes them through
         # t.Cleanup, including on failure, so a run leaves the fixture

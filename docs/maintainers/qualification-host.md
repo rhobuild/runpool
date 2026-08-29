@@ -90,11 +90,32 @@ apt-mark hold docker-ce docker-ce-cli containerd.io
 systemctl disable --now unattended-upgrades 2>/dev/null || true
 ```
 
-Then the runner agent, version 2.327.1 or newer, registered to this repository
-with the labels the qualification jobs select on:
+Then the runner agent, version 2.327.1 or newer. It refuses to configure
+as root, and this host is administered as root, so it belongs to a user of
+its own — `runner`, in the `docker` group, which is also the uid the capsule
+drops its workload to:
+
+```bash
+useradd -m -s /bin/bash -G docker runner
+su - runner -c 'mkdir -p ~/actions-runner && cd ~/actions-runner &&
+  curl -fsSL -o runner.tar.gz \
+    https://github.com/actions/runner/releases/download/v2.327.1/actions-runner-linux-x64-2.327.1.tar.gz &&
+  tar xzf runner.tar.gz && rm runner.tar.gz'
+```
+
+Register it with the labels the qualification jobs select on. `config.sh`
+supplies the first three itself and not the fourth, and a runner missing it
+takes no jobs and reports nothing wrong — the workflows simply queue for a
+runner that never answers:
 
 ```
 self-hosted, linux, x64, runpool-release-qualification
+```
+
+```bash
+su - runner -c 'cd ~/actions-runner && ./config.sh --url <repository> \
+  --token <registration token> --labels runpool-release-qualification --unattended'
+cd /home/runner/actions-runner && ./svc.sh install runner && ./svc.sh start
 ```
 
 Put it in a runner group restricted to this repository, and never let it accept
