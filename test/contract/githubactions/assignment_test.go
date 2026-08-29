@@ -101,15 +101,7 @@ func TestOrganizationJitAssignmentNotBound(t *testing.T) {
 
 	// Open the listener before dispatch so no assignment can precede the
 	// observed cursor.
-	session, err := c.MessageSessionClient(ctx, set.ID, "runpool-organization-contract")
-	if err != nil {
-		t.Fatalf("open message session: %v", err)
-	}
-	defer func() {
-		cctx, ccancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer ccancel()
-		session.Close(cctx)
-	}()
+	session := openContractSession(t, ctx, c, set.ID, "runpool-organization-contract")
 
 	poller := &messagePoller{session: session}
 	suffix := uniqueName(t)[len("runpool-ct-"):]
@@ -271,14 +263,25 @@ func (p *messagePoller) drainCompletions(t *testing.T, window time.Duration) {
 	defer cancel()
 	for {
 		msg, err := p.session.GetMessage(ctx, p.lastID, 2)
-		if err != nil || msg == nil {
-			return // window elapsed or empty poll cut short
+		if err != nil {
+			if ctx.Err() == nil {
+				t.Errorf("observe late completion messages: %v", err)
+			}
+			return
 		}
-		p.lastID = msg.MessageID
+		if msg == nil {
+			return
+		}
 		for _, j := range msg.JobCompletedMessages {
 			t.Logf("late JobCompleted: %s/%s on %q result=%q", j.OwnerName, j.RepositoryName, j.RunnerName, j.Result)
 		}
-		p.session.DeleteMessage(ctx, msg.MessageID)
+		if err := p.session.DeleteMessage(ctx, msg.MessageID); err != nil {
+			if ctx.Err() == nil {
+				t.Errorf("acknowledge late completion message %d: %v", msg.MessageID, err)
+			}
+			return
+		}
+		p.lastID = msg.MessageID
 	}
 }
 

@@ -106,6 +106,28 @@ func testCtx(t *testing.T) context.Context {
 	return ctx
 }
 
+func openContractSession(
+	t *testing.T,
+	ctx context.Context,
+	client *scaleset.Client,
+	setID int,
+	owner string,
+) *scaleset.MessageSessionClient {
+	t.Helper()
+	session, err := client.MessageSessionClient(ctx, setID, owner)
+	if err != nil {
+		t.Fatalf("open message session for scale set %d: %v", setID, err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := session.Close(closeCtx); err != nil {
+			t.Errorf("close message session for scale set %d: %v", setID, err)
+		}
+	})
+	return session
+}
+
 // newWrapper builds the production adapter the org/repo tests exercise,
 // so internal/githubactions is qualified by the same live suite
 // that pins the upstream contract.

@@ -13,6 +13,7 @@
     "TestOrganizationJitAssignmentNotBound",
     "TestInvalidCredentialFailsClosed",
     "TestZeroCapacityDoesNotRevealQueuedDemand",
+    "TestDiscoveryCreditReachesASilentBinding",
     "TestEveryContractFixtureIsInstalled",
     "TestDeliveryIdentityIsStable",
     "TestLapsedAssignmentIsCancelledAndRequeued",
@@ -37,6 +38,11 @@
     },
     {
       "id": "TestZeroCapacityDoesNotRevealQueuedDemand",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestDiscoveryCreditReachesASilentBinding",
       "outcome": "passed",
       "duration_ms": 10
     },
@@ -92,9 +98,9 @@
     }
   ],
   "summary": {
-    "expected": 13,
-    "executed": 13,
-    "passed": 13,
+    "expected": 14,
+    "executed": 14,
+    "passed": 14,
     "failed": 0,
     "skipped": 0
   },

@@ -1,7 +1,9 @@
 package githubcontract
 
 import (
+	"context"
 	"testing"
+	"time"
 )
 
 // TestOrganizationDefaultGroupScaleSet verifies creation and adoption in an
@@ -32,7 +34,13 @@ func TestOrganizationDefaultGroupScaleSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	defer session.Close(testCtx(t))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := session.Close(ctx); err != nil {
+			t.Errorf("close message session for scale set %d: %v", created.ID, err)
+		}
+	})
 
 	initial := session.Initial()
 	if initial == nil {

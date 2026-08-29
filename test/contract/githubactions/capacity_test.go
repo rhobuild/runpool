@@ -18,7 +18,7 @@ func TestZeroCapacityDoesNotRevealQueuedDemand(t *testing.T) {
 	c := newClient(t, url, token)
 	rest := newRESTClient(token)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	verifyOrganizationProbeFixtures(t, ctx, rest, repo)
 
@@ -29,59 +29,20 @@ func TestZeroCapacityDoesNotRevealQueuedDemand(t *testing.T) {
 	label := uniqueName(t)
 	set := createScaleSet(t, c, group, label)
 
-	session, err := c.MessageSessionClient(ctx, set.ID, "runpool-capacity-contract")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cctx, ccancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer ccancel()
-		session.Close(cctx)
-	}()
+	session := openContractSession(t, ctx, c, set.ID, "runpool-capacity-contract")
 
 	last := 0
-	// observe polls with the given announced capacity for a window,
-	// logging statistics and reporting whether a JobAssigned appeared. A
-	// short per-poll deadline turns the broker long-poll into a tick.
-	observe := func(capacity int, window time.Duration, label string) bool {
-		deadline := time.Now().Add(window)
-		assigned := false
-		for time.Now().Before(deadline) {
-			pctx, pcancel := context.WithTimeout(ctx, 12*time.Second)
-			msg, err := session.GetMessage(pctx, last, capacity)
-			pcancel()
-			if err != nil {
-				continue // long-poll tick with nothing to report
-			}
-			if msg == nil {
-				continue
-			}
-			last = msg.MessageID
-			if s := msg.Statistics; s != nil {
-				t.Logf("[%s cap=%d] available=%d assigned=%d acquired=%d", label, capacity,
-					s.TotalAvailableJobs, s.TotalAssignedJobs, s.TotalAcquiredJobs)
-			}
-			for _, j := range msg.JobAssignedMessages {
-				t.Logf("[%s] JobAssigned: %s/%s run=%d", label, j.OwnerName, j.RepositoryName, j.WorkflowRunID)
-				assigned = true
-			}
-			session.DeleteMessage(ctx, msg.MessageID)
-			if assigned {
-				return true
-			}
-		}
-		return assigned
+	prime := observeBroker(t, ctx, session, &last, 0, "prime")
+	if prime.Assigned {
+		t.Fatal("the new scale set received an assignment before the probe was dispatched")
 	}
-
-	observe(0, 3*time.Second, "prime") // announce zero before the job exists
 	run := dispatchOrganizationProbe(t, ctx, rest, repo, label)
 	t.Cleanup(func() { cancelProbeRun(t, rest, repo, run.ID) })
 
-	zeroAssigned := observe(0, 30*time.Second, "zero")
-	t.Logf("capacity=0 observation: assigned=%v", zeroAssigned)
-
-	raiseAssigned := observe(1, 60*time.Second, "raised")
-	t.Logf("capacity=1 observation: assigned=%v", raiseAssigned)
+	zero := observeBroker(t, ctx, session, &last, 0, "zero")
+	raised := observeBroker(t, ctx, session, &last, 1, "raised")
+	t.Logf("capacity observations: zero={assigned:%t statistics:%t} raised={assigned:%t statistics:%t}",
+		zero.Assigned, zero.Statistics, raised.Assigned, raised.Statistics)
 
 	// The contract this test pins: announcing zero is a trapdoor, not a
 	// throttle. A job that queues under capacity 0 is neither delivered
@@ -89,13 +50,83 @@ func TestZeroCapacityDoesNotRevealQueuedDemand(t *testing.T) {
 	// announcing 0 receives no statistics at all — it is blind to its
 	// own demand. The allocator therefore rotates one bounded discovery
 	// credit among otherwise silent bindings.
-	if zeroAssigned {
+	if zero.Assigned {
 		t.Error("job was assigned while capacity was 0; the announcement is not an admission gate")
 	}
-	if raiseAssigned {
+	if zero.Statistics {
+		t.Error("a session announcing capacity 0 received demand statistics; revisit the zero-capacity blindness contract")
+	}
+	if raised.Assigned {
 		t.Error("broker behavior changed: a job queued under capacity 0 was delivered after raising capacity; revisit discovery-credit semantics")
 	}
 	t.Log("zero-capacity blindness confirmed; eligible bindings require rotating discovery")
+}
+
+type brokerPollObservation struct {
+	Assigned   bool
+	Statistics bool
+	Empty      bool
+}
+
+func observeBroker(
+	t *testing.T,
+	ctx context.Context,
+	session *scaleset.MessageSessionClient,
+	last *int,
+	capacity int,
+	phase string,
+) brokerPollObservation {
+	t.Helper()
+	observation := brokerPollObservation{}
+	for poll := 1; poll <= 3; poll++ {
+		current := receiveBrokerPoll(t, ctx, session, last, capacity, phase)
+		observation.Assigned = observation.Assigned || current.Assigned
+		observation.Statistics = observation.Statistics || current.Statistics
+		observation.Empty = current.Empty
+		if current.Assigned || current.Empty {
+			return observation
+		}
+	}
+	t.Fatalf("%s did not reach an assignment or an empty broker response after three polls", phase)
+	return observation
+}
+
+// receiveBrokerPoll waits for the broker's own long-poll response. A local
+// deadline is a failed measurement, not an empty broker response.
+func receiveBrokerPoll(
+	t *testing.T,
+	ctx context.Context,
+	session *scaleset.MessageSessionClient,
+	last *int,
+	capacity int,
+	phase string,
+) brokerPollObservation {
+	t.Helper()
+	pollCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
+	defer cancel()
+	msg, err := session.GetMessage(pollCtx, *last, capacity)
+	if err != nil {
+		t.Fatalf("%s poll at capacity %d did not complete at the broker: %v", phase, capacity, err)
+	}
+	if msg == nil {
+		t.Logf("[%s capacity=%d] broker completed an empty poll", phase, capacity)
+		return brokerPollObservation{Empty: true}
+	}
+
+	observation := brokerPollObservation{Statistics: msg.Statistics != nil}
+	if statistics := msg.Statistics; statistics != nil {
+		t.Logf("[%s capacity=%d] available=%d assigned=%d acquired=%d", phase, capacity,
+			statistics.TotalAvailableJobs, statistics.TotalAssignedJobs, statistics.TotalAcquiredJobs)
+	}
+	for _, job := range msg.JobAssignedMessages {
+		t.Logf("[%s] JobAssigned: %s/%s run=%d", phase, job.OwnerName, job.RepositoryName, job.WorkflowRunID)
+		observation.Assigned = true
+	}
+	if err := session.DeleteMessage(ctx, msg.MessageID); err != nil {
+		t.Fatalf("acknowledge message %d during %s: %v", msg.MessageID, phase, err)
+	}
+	*last = msg.MessageID
+	return observation
 }
 
 // repoSlug turns a repository URL into owner/repository form.

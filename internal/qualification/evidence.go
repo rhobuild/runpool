@@ -157,7 +157,8 @@ var suiteDefinitions = []suiteDefinition{
 		environment: ExecutionEnvironment{Kind: EnvironmentHosted, Runner: "ubuntu-24.04"},
 		expectedCases: []string{
 			"TestOrganizationJitAssignmentNotBound", "TestInvalidCredentialFailsClosed",
-			"TestZeroCapacityDoesNotRevealQueuedDemand", "TestEveryContractFixtureIsInstalled",
+			"TestZeroCapacityDoesNotRevealQueuedDemand", "TestDiscoveryCreditReachesASilentBinding",
+			"TestEveryContractFixtureIsInstalled",
 			"TestDeliveryIdentityIsStable", "TestLapsedAssignmentIsCancelledAndRequeued",
 			"TestScaleSetSystemLabel", "TestRepositoryScaleSetAndJitRunner",
 			"TestASecondSessionIsRefusedRecognisably", "TestOrganizationDefaultGroupScaleSet",
