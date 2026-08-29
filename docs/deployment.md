@@ -188,7 +188,11 @@ Runpool does not use it, so a tier is reached by that one name and
 nothing else. `runs-on: [self-hosted, linux, x64]` still reaches no scale
 set of any kind: unlike a classic self-hosted runner, a scale-set runner
 receives no default labels at all, so none of those three words belongs
-to anything here. `runpool doctor` prints the name for every tier a
+to anything here. Serving more than one label per tier would need every
+tier's labels proven disjoint from every sibling's in the same target,
+which nothing validates today — see
+[the decision record](adrs/2026-08-29-a-tiers-second-label-is-deferred-not-refused.md)
+for what is measured and why this is deferred rather than ruled out. `runpool doctor` prints the name for every tier a
 deployment serves, so the string in configuration and the string in a
 workflow can be compared without reading either. A complete example
 workflow is in [`deploy/workflows/example.yml`](../deploy/workflows/example.yml).

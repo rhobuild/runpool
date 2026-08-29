@@ -13,6 +13,9 @@
 # `runs-on: [self-hosted, linux, x64]` reaches no scale set of any kind:
 # unlike a classic self-hosted runner, a scale-set runner receives no
 # default labels, so none of those three words belongs to anything.
+#
+# A second label per tier is deferred, not impossible — see
+# docs/adrs/2026-08-29-a-tiers-second-label-is-deferred-not-refused.md.
 name: example
 
 on:
