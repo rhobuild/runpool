@@ -587,5 +587,7 @@ func TestEveryJobThatCallsTheHelperHasTheTreeItLivesIn(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no job calls the helper, so this proves nothing")
 	}
-	t.Logf("%d jobs call %s, all with the tree", checked, helperPath)
+	if !t.Failed() {
+		t.Logf("%d jobs call %s, all with the tree", checked, helperPath)
+	}
 }
