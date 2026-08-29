@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
@@ -15,9 +16,9 @@ import (
 // translate what the broker committed, and queue it. Messages are
 // hints; the state store carries the truth.
 //
-// The announcement is a whole number of credits, which may be zero. A
-// binding announcing zero is silent, not blind: the tier's rotating
-// discovery credit reaches it within one pass of the pool.
+// The announcement is a whole number of credits, which may be zero. Zero is
+// blind upstream, so the allocator moves one discovery credit only after its
+// current holder completes an empty poll and revokes it before transfer.
 func (s *Controller) loop(ctx context.Context, b *binding) {
 	failures := 0
 	for {
@@ -132,9 +133,19 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 				continue
 			}
 		}
-		s.announce(b)
+		poll := s.announce(b)
+		if !poll.Valid() {
+			s.log.Error("cannot reserve a provider poll", "binding", b.key)
+			select {
+			case <-time.After(s.backoff()):
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
 
 		msg, err := b.session.Receive(ctx)
+		s.alloc.CompletePoll(poll, err == nil, err == nil && msg == nil)
 		if err == nil {
 			s.recordProviderContact(ctx, b)
 		} else {
@@ -154,11 +165,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 			continue
 		}
 		if msg == nil {
-			// An empty long-poll is one full cycle with nothing to do,
-			// which is exactly when the discovery credit should move on
-			// to the next silent binding.
 			failures = 0
-			s.alloc.Rotate()
 			continue
 		}
 		if msg.AcquireError == nil {
@@ -691,7 +698,9 @@ func (s *Controller) discardSpentSession(ctx context.Context, b *binding, failur
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
-	if err := b.session.Close(cctx); err != nil {
+	err := b.session.Close(cctx)
+	s.alloc.SessionClosed(b.key, err == nil)
+	if err != nil {
 		// Expected on the path that brought us here: the session the
 		// broker holds is the one that stopped answering.
 		s.log.Warn("cannot close the failing message session", "binding", b.key, "error", err)
@@ -716,6 +725,8 @@ func (s *Controller) openSession(ctx context.Context, b *binding) error {
 		return err
 	}
 	b.session = session
+	s.alloc.SessionOpened(b.key)
+	b.lastAdvertised = -1
 	initial := session.Initial()
 	if initial == nil {
 		// The broker opened the session without statistics, so there is
@@ -736,20 +747,27 @@ func (s *Controller) openSession(ctx context.Context, b *binding) error {
 // sets the session's capacity — the broker holds a total, not a delta —
 // but only a change is worth a log line, or a quiet pool would fill the
 // log with the same number every poll.
-func (s *Controller) announce(b *binding) {
-	credit := s.alloc.Advertised(b.key)
+func (s *Controller) announce(b *binding) allocator.Poll {
+	poll := s.alloc.BeginPoll(b.key)
+	if !poll.Valid() {
+		return poll
+	}
+	credit := poll.Capacity()
 	b.session.SetCapacity(credit)
 	if credit == b.lastAdvertised {
-		return
+		return poll
 	}
 	b.lastAdvertised = credit
 	parallelism, rows := s.alloc.PoolReport(assignment.TierID(b.tier.ID))
-	total := 0
+	desiredTotal, remoteTotal := 0, 0
 	for _, r := range rows {
-		total += r.Advertised
+		desiredTotal += r.Advertised
+		remoteTotal += r.RemoteCapacity
 	}
 	s.log.Info("advertised capacity changed", "binding", b.key, "advertised", credit,
-		"tier", b.tier.ID, "tier_parallelism", parallelism, "tier_advertised", total,
+		"tier", b.tier.ID, "tier_parallelism", parallelism,
+		"tier_advertised", desiredTotal, "tier_remote_capacity", remoteTotal,
 		"discovery", s.alloc.DiscoveryHolder(assignment.TierID(b.tier.ID)), "instance_capacity", s.alloc.CapacityReport(),
 		"credits", rows)
+	return poll
 }

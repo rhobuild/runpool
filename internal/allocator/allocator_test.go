@@ -12,6 +12,21 @@ func mustRegister(t *testing.T, a *Allocator, tier, key assignment.SourceWorkloa
 	if err := a.Register(assignment.TierID(tier), assignment.BindingKey(key), parallelism); err != nil {
 		t.Fatal(err)
 	}
+	a.SessionOpened(assignment.BindingKey(key))
+}
+
+// completeEmptyPoll advances discovery through the same lifecycle production
+// uses, then confirms the previous holder's next capacity. The second poll is
+// the revoke that prevents the next holder spending the same remote credit.
+func completeEmptyPoll(t *testing.T, a *Allocator, key assignment.BindingKey) {
+	t.Helper()
+	poll := a.BeginPoll(key)
+	if poll.Capacity() == 0 {
+		t.Fatalf("binding %q completed an empty discovery poll with zero capacity", key)
+	}
+	a.CompletePoll(poll, true, true)
+	revoke := a.BeginPoll(key)
+	a.CompletePoll(revoke, true, false)
 }
 
 // advertisedSum is the invariant's left-hand side. It reads the whole
@@ -181,7 +196,7 @@ func TestDiscoveryCreditMakesASilentBindingVisible(t *testing.T) {
 				seen[k] = true
 			}
 		}
-		a.Rotate()
+		completeEmptyPoll(t, a, a.DiscoveryHolder("std"))
 	}
 	for _, k := range []string{"a", "b", "c"} {
 		if !seen[k] {
@@ -210,6 +225,227 @@ func TestDiscoveryIsNotOfferedToEveryoneAtOnce(t *testing.T) {
 	}
 }
 
+func TestOnlyTheDiscoveryHoldersEmptyPollRotatesItsPool(t *testing.T) {
+	a := New()
+	for _, key := range []string{"small-a", "small-b"} {
+		mustRegister(t, a, "small", assignment.SourceWorkloadKey(key), 1)
+	}
+	for _, key := range []string{"large-a", "large-b"} {
+		mustRegister(t, a, "large", assignment.SourceWorkloadKey(key), 1)
+	}
+
+	smallHolder := a.DiscoveryHolder("small")
+	largeHolder := a.DiscoveryHolder("large")
+	nonHolder := assignment.BindingKey("small-b")
+	if nonHolder == smallHolder {
+		nonHolder = "small-a"
+	}
+	poll := a.BeginPoll(nonHolder)
+	if poll.Capacity() != 0 {
+		t.Fatalf("non-holder %q announced %d; want zero", nonHolder, poll.Capacity())
+	}
+	a.CompletePoll(poll, true, true)
+	if got := a.DiscoveryHolder("small"); got != smallHolder {
+		t.Errorf("a non-holder poll moved small from %q to %q", smallHolder, got)
+	}
+	if got := a.DiscoveryHolder("large"); got != largeHolder {
+		t.Errorf("a poll in small moved large from %q to %q", largeHolder, got)
+	}
+
+	holderPoll := a.BeginPoll(smallHolder)
+	if holderPoll.Capacity() != 1 {
+		t.Fatalf("small holder %q announced %d; want one", smallHolder, holderPoll.Capacity())
+	}
+	a.CompletePoll(holderPoll, true, true)
+	if got := a.DiscoveryHolder("small"); got == smallHolder {
+		t.Errorf("the holder's empty poll left small on %q", got)
+	}
+	if got := a.DiscoveryHolder("large"); got != largeHolder {
+		t.Errorf("rotating small moved large from %q to %q", largeHolder, got)
+	}
+}
+
+func TestDiscoveryRevokesBeforeGrantingTheNextHolder(t *testing.T) {
+	a := New()
+	mustRegister(t, a, "std", "a", 1)
+	mustRegister(t, a, "std", "b", 1)
+
+	first := a.DiscoveryHolder("std")
+	firstPoll := a.BeginPoll(first)
+	if firstPoll.Capacity() != 1 {
+		t.Fatalf("first holder announced %d; want one", firstPoll.Capacity())
+	}
+	a.CompletePoll(firstPoll, true, true)
+
+	second := a.DiscoveryHolder("std")
+	if second == first {
+		t.Fatal("the empty discovery poll did not select the next holder")
+	}
+	blocked := a.BeginPoll(second)
+	if blocked.Capacity() != 0 {
+		t.Fatalf("next holder announced %d before %q revoked its credit", blocked.Capacity(), first)
+	}
+	a.CompletePoll(blocked, true, true)
+
+	revoke := a.BeginPoll(first)
+	if revoke.Capacity() != 0 {
+		t.Fatalf("previous holder revoke announced %d; want zero", revoke.Capacity())
+	}
+	a.CompletePoll(revoke, true, false)
+
+	granted := a.BeginPoll(second)
+	if granted.Capacity() != 1 {
+		t.Fatalf("next holder announced %d after revoke; want one", granted.Capacity())
+	}
+	if got := effectivePublishedSum(a, "std"); got > 1 {
+		t.Fatalf("possible remote capacity = %d; tier parallelism is one", got)
+	}
+	a.CompletePoll(granted, true, false)
+}
+
+func TestFailedRevokeDoesNotReleaseRemoteCapacity(t *testing.T) {
+	a := New()
+	mustRegister(t, a, "std", "a", 1)
+	mustRegister(t, a, "std", "b", 1)
+	a.SetAssignedDemand("a", 1)
+
+	initial := a.BeginPoll("a")
+	a.CompletePoll(initial, true, false)
+	a.SetAssignedDemand("a", 0)
+	a.SetAssignedDemand("b", 1)
+
+	revoke := a.BeginPoll("a")
+	if revoke.Capacity() != 0 {
+		t.Fatalf("revoke capacity = %d; want zero", revoke.Capacity())
+	}
+	a.CompletePoll(revoke, false, false)
+	blocked := a.BeginPoll("b")
+	if blocked.Capacity() != 0 {
+		t.Fatalf("b announced %d after an uncertain revoke; want zero", blocked.Capacity())
+	}
+	a.CompletePoll(blocked, true, false)
+
+	retry := a.BeginPoll("a")
+	a.CompletePoll(retry, true, false)
+	granted := a.BeginPoll("b")
+	if granted.Capacity() != 1 {
+		t.Fatalf("b announced %d after the confirmed revoke; want one", granted.Capacity())
+	}
+	a.CompletePoll(granted, true, false)
+}
+
+func TestAStartedPoolPublishesZeroUntilEveryPredecessorIsKnown(t *testing.T) {
+	a := New()
+	if err := a.Register("std", "a", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Register("std", "b", 2); err != nil {
+		t.Fatal(err)
+	}
+	a.SetAssignedDemand("a", 2)
+	a.SessionOpened("a")
+
+	before := a.BeginPoll("a")
+	if before.Capacity() != 0 {
+		t.Fatalf("a announced %d while b's predecessor session was unresolved", before.Capacity())
+	}
+	a.CompletePoll(before, true, false)
+
+	a.SessionOpened("b")
+	after := a.BeginPoll("a")
+	if after.Capacity() != 2 {
+		t.Fatalf("a announced %d once every predecessor was known; want two", after.Capacity())
+	}
+	a.CompletePoll(after, true, false)
+}
+
+func TestAnUncertainSessionCloseHoldsThePoolUntilReplacement(t *testing.T) {
+	a := New()
+	mustRegister(t, a, "std", "a", 1)
+	mustRegister(t, a, "std", "b", 1)
+	a.SetAssignedDemand("a", 1)
+
+	published := a.BeginPoll("a")
+	a.CompletePoll(published, true, false)
+	a.SessionClosed("a", false)
+	a.SetAssignedDemand("a", 0)
+	a.SetAssignedDemand("b", 1)
+
+	blocked := a.BeginPoll("b")
+	if blocked.Capacity() != 0 {
+		t.Fatalf("b announced %d while a's close was uncertain", blocked.Capacity())
+	}
+	a.CompletePoll(blocked, true, false)
+
+	a.SessionOpened("a")
+	granted := a.BeginPoll("b")
+	if granted.Capacity() != 1 {
+		t.Fatalf("b announced %d after a's replacement opened; want one", granted.Capacity())
+	}
+	a.CompletePoll(granted, true, false)
+}
+
+func TestIndependentTierDoesNotWaitForAnotherTiersPredecessor(t *testing.T) {
+	a := New()
+	if err := a.Register("small", "small-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Register("large", "large-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	a.SetAssignedDemand("small-a", 1)
+	a.SessionOpened("small-a")
+
+	poll := a.BeginPoll("small-a")
+	if poll.Capacity() != 1 {
+		t.Fatalf("independent small tier announced %d; want one", poll.Capacity())
+	}
+	a.CompletePoll(poll, true, false)
+}
+
+func TestGlobalBudgetWaitsForEveryPredecessor(t *testing.T) {
+	a := NewWithGlobalParallelism(1)
+	if err := a.Register("small", "small-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Register("large", "large-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	a.SetAssignedDemand("small-a", 1)
+	a.SessionOpened("small-a")
+
+	poll := a.BeginPoll("small-a")
+	if poll.Capacity() != 0 {
+		t.Fatalf("global budget announced %d while another predecessor was unresolved", poll.Capacity())
+	}
+	a.CompletePoll(poll, true, false)
+}
+
+func TestLatePollFromReplacedSessionCannotRotateAgain(t *testing.T) {
+	a := New()
+	mustRegister(t, a, "std", "a", 1)
+	mustRegister(t, a, "std", "b", 1)
+	old := a.BeginPoll("a")
+
+	a.SessionOpened("a")
+	current := a.BeginPoll("a")
+	a.CompletePoll(current, true, true)
+	want := a.DiscoveryHolder("std")
+	a.CompletePoll(old, true, true)
+	if got := a.DiscoveryHolder("std"); got != want {
+		t.Errorf("late predecessor poll moved discovery from %q to %q", want, got)
+	}
+}
+
+func effectivePublishedSum(a *Allocator, tier assignment.TierID) int {
+	_, rows := a.PoolReport(tier)
+	total := 0
+	for _, row := range rows {
+		total += row.RemoteCapacity
+	}
+	return total
+}
+
 // TestRotationSkipsBindingsThatCanAlreadySee: a binding with demand or a
 // running capsule does not need discovery, and spending the rotation on
 // it would lengthen every other binding's wait.
@@ -218,11 +454,11 @@ func TestRotationSkipsBindingsThatCanAlreadySee(t *testing.T) {
 	for _, k := range []string{"a", "b", "c"} {
 		mustRegister(t, a, "std", assignment.SourceWorkloadKey(k), 3)
 	}
-	a.SetAssignedDemand("b", 5) // b has demand: it is visible without the credit
+	a.SetAssignedDemand("b", 1) // b has demand: it is visible without the credit
 
 	held := map[string]int{}
 	for range 6 {
-		a.Rotate()
+		completeEmptyPoll(t, a, a.DiscoveryHolder("std"))
 		held[string(a.DiscoveryHolder("std"))]++
 	}
 	if held["b"] != 0 {
@@ -370,7 +606,8 @@ func TestNoOvershootUnderConcurrentTraffic(t *testing.T) {
 				if a.TryReserve(assignment.BindingKey(k)) {
 					a.Release(assignment.BindingKey(k))
 				}
-				a.Rotate()
+				poll := a.BeginPoll(assignment.BindingKey(k))
+				a.CompletePoll(poll, true, true)
 			}
 		}(k)
 	}
@@ -427,7 +664,13 @@ func TestGlobalDiscoveryRotatesAcrossTiers(t *testing.T) {
 		if a.Advertised("small-a")+a.Advertised("large-a") > 1 {
 			t.Fatal("global discovery oversubscribed advertised capacity")
 		}
-		a.Rotate()
+		var holder assignment.BindingKey
+		for _, key := range []assignment.BindingKey{"small-a", "large-a"} {
+			if a.Advertised(key) == 1 {
+				holder = key
+			}
+		}
+		completeEmptyPoll(t, a, holder)
 	}
 	if !seen["small-a"] || !seen["large-a"] {
 		t.Fatalf("global discovery did not reach every tier: %v", seen)
@@ -531,7 +774,8 @@ func TestNoGlobalOvershootUnderConcurrentTraffic(t *testing.T) {
 				if a.TryReserve(assignment.BindingKey(key)) {
 					a.Release(assignment.BindingKey(key))
 				}
-				a.Rotate()
+				poll := a.BeginPoll(assignment.BindingKey(key))
+				a.CompletePoll(poll, true, true)
 			}
 		}(key)
 	}
@@ -675,6 +919,9 @@ func TestUnknownKeysAreAnsweredNotPanicked(t *testing.T) {
 	if a.TryReserve("ghost") {
 		t.Error("an unregistered key reserved capacity")
 	}
+	if poll := a.BeginPoll("ghost"); poll.Valid() {
+		t.Error("an unregistered key reserved a provider poll")
+	}
 	if got := a.AdvertisedAll("absent"); got != nil {
 		t.Errorf("AdvertisedAll of an unknown tier = %v; want nil", got)
 	}
@@ -684,6 +931,22 @@ func TestUnknownKeysAreAnsweredNotPanicked(t *testing.T) {
 	a.Adopt("ghost")
 	if got := a.CapacityReport(); got.Active != 0 {
 		t.Errorf("an unregistered key changed the pool: %+v", got)
+	}
+}
+
+func TestOneBindingCannotReserveTwoConcurrentPolls(t *testing.T) {
+	a := New()
+	mustRegister(t, a, "std", "a", 1)
+	first := a.BeginPoll("a")
+	if !first.Valid() {
+		t.Fatal("the first poll was not reserved")
+	}
+	if second := a.BeginPoll("a"); second.Valid() {
+		t.Fatal("a second poll was reserved while the first remained in flight")
+	}
+	a.CompletePoll(first, true, false)
+	if next := a.BeginPoll("a"); !next.Valid() {
+		t.Fatal("the binding could not poll again after completing the first")
 	}
 }
 

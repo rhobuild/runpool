@@ -635,7 +635,11 @@ func (s *Controller) closeSessions() {
 		wg.Add(1)
 		go func(b *binding) {
 			defer wg.Done()
-			if err := b.session.Close(ctx); err != nil {
+			err := b.session.Close(ctx)
+			if s.alloc != nil {
+				s.alloc.SessionClosed(b.key, err == nil)
+			}
+			if err != nil {
 				s.log.Warn("cannot close the message session; the broker holds it until it "+
 					"expires and the next start waits that out",
 					"binding", b.key, "error", err)

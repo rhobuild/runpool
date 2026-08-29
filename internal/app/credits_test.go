@@ -1,15 +1,27 @@
 package app
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/disk"
+	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
 
 	"github.com/rhobuild/runpool/internal/assignment"
 )
+
+type capacityRecorder struct{ capacity int }
+
+func (r *capacityRecorder) Receive(context.Context) (*githubactions.Message, error) { return nil, nil }
+func (r *capacityRecorder) Acknowledge(context.Context, int) error                  { return nil }
+func (r *capacityRecorder) SetCapacity(capacity int)                                { r.capacity = capacity }
+func (r *capacityRecorder) Initial() *githubactions.Statistics                      { return nil }
+func (r *capacityRecorder) Close(context.Context) error                             { return nil }
 
 // TestCreditsRebuildFromAdoptedCapsules: after a restart the allocator
 // starts empty, and reconciliation is what puts the credits back. A
@@ -85,6 +97,7 @@ func TestSilentBindingIsFoundByRotation(t *testing.T) {
 		if err := a.Register("std", assignment.BindingKey(k), 2); err != nil {
 			t.Fatal(err)
 		}
+		a.SessionOpened(assignment.BindingKey(k))
 	}
 	seen := map[string]bool{}
 	for range len(keys) {
@@ -96,13 +109,62 @@ func TestSilentBindingIsFoundByRotation(t *testing.T) {
 		if got := sumAdvertised(a); got > 2 {
 			t.Fatalf("sum(advertised) = %d during rotation; want at most 2", got)
 		}
-		a.Rotate()
+		holder := a.DiscoveryHolder("std")
+		poll := a.BeginPoll(holder)
+		if poll.Capacity() == 0 {
+			t.Fatalf("discovery holder %q polled with zero capacity", holder)
+		}
+		a.CompletePoll(poll, true, true)
+		revoke := a.BeginPoll(holder)
+		a.CompletePoll(revoke, true, false)
 	}
 	for _, k := range keys {
 		if !seen[k] {
 			t.Errorf("binding %q was never offered the discovery credit; it would stay blind", k)
 		}
 	}
+}
+
+func TestAnnouncementsRevokeBeforeTransferringDiscovery(t *testing.T) {
+	a := allocator.New()
+	for _, key := range []assignment.BindingKey{"a", "b"} {
+		if err := a.Register("std", key, 1); err != nil {
+			t.Fatal(err)
+		}
+		a.SessionOpened(key)
+	}
+	firstSession, secondSession := &capacityRecorder{}, &capacityRecorder{}
+	first := &binding{key: "a", tier: config.Tier{ID: "std"}, session: firstSession, lastAdvertised: -1}
+	second := &binding{key: "b", tier: config.Tier{ID: "std"}, session: secondSession, lastAdvertised: -1}
+	s := &Controller{alloc: a, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	firstPoll := s.announce(first)
+	if firstSession.capacity != 1 {
+		t.Fatalf("first holder announced %d; want one", firstSession.capacity)
+	}
+	secondPoll := s.announce(second)
+	if secondSession.capacity != 0 {
+		t.Fatalf("non-holder announced %d; want zero", secondSession.capacity)
+	}
+	a.CompletePoll(firstPoll, true, true)
+	a.CompletePoll(secondPoll, true, true)
+
+	blocked := s.announce(second)
+	if secondSession.capacity != 0 {
+		t.Fatalf("next holder announced %d before the previous holder revoked", secondSession.capacity)
+	}
+	a.CompletePoll(blocked, true, false)
+	revoke := s.announce(first)
+	if firstSession.capacity != 0 {
+		t.Fatalf("previous holder announced %d while revoking", firstSession.capacity)
+	}
+	a.CompletePoll(revoke, true, false)
+
+	granted := s.announce(second)
+	if secondSession.capacity != 1 {
+		t.Fatalf("next holder announced %d after the revoke; want one", secondSession.capacity)
+	}
+	a.CompletePoll(granted, true, false)
 }
 
 func sumAdvertised(a *allocator.Allocator) int {

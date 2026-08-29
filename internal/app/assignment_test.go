@@ -103,6 +103,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	if err := h.srv.alloc.Register(assignment.TierID(b.tier.ID), b.key, parallelism); err != nil {
 		t.Fatal(err)
 	}
+	h.srv.alloc.SessionOpened(b.key)
 	// The monitor is real, on a defaulted policy and a probe that reports
 	// room: admission consults the level on every delivery, and a nil
 	// monitor would make "no pressure" indistinguishable from "not wired".

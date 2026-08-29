@@ -6,13 +6,15 @@
 //
 // Capacity is credit, not entitlement. A tier holds exactly as many
 // credits as its parallelism permits; a running capsule holds one; what is
-// left is shared by demand. The sum of what every binding advertises never
-// exceeds either its tier limit or the optional instance-wide limit.
+// left is shared by demand. Poll reservations keep both the desired
+// distribution and the capacity that may still be in force remotely within
+// the tier limit and the optional instance-wide limit.
 //
 // One discovery credit rotates per independent tier, or across the instance
-// when a global limit is set. A silent binding announces one in turn and can
-// therefore observe its queue. The rotation reaches every eligible binding
-// within one pass. See
+// when a global limit is set. Only the holder's successful empty poll advances
+// it, and the preceding holder must confirm zero before the next can publish
+// the same credit. A silent binding therefore observes its queue without two
+// sessions spending one unit concurrently. See
 // docs/adrs/2026-08-13-admission-credits.md.
 package allocator
 
@@ -29,8 +31,10 @@ type pool struct {
 	order       []assignment.BindingKey // binding keys, registration order, stable
 	state       map[assignment.BindingKey]*binding
 	// discovery is the index in order of the binding currently holding
-	// the discovery credit. Rotate advances it.
-	discovery int
+	// the discovery credit. discoveryGeneration changes with the holder,
+	// so a late result from an earlier poll cannot move it again.
+	discovery           int
+	discoveryGeneration uint64
 }
 
 type binding struct {
@@ -43,16 +47,51 @@ type binding struct {
 	// disk pressure, quarantine, or any other contract that withholds
 	// credit. Running capsules still count; only new capacity stops.
 	held bool
+
+	// published is the last capacity a successful provider poll confirmed.
+	// A pending poll is counted at the larger of its capacity and published:
+	// until its outcome is known, either value may be in force remotely.
+	published int
+	pending   *pendingPoll
+	pollID    uint64
+	// remoteKnown is false on startup and after an uncertain session close.
+	// A newly opened session proves the predecessor is gone and starts at
+	// zero, which is when this becomes true.
+	remoteKnown bool
 }
+
+type pendingPoll struct {
+	id       uint64
+	capacity int
+}
+
+// Poll is one capacity announcement reserved against the remote budget.
+// Its fields are private so only BeginPoll can create a valid value; the
+// caller carries it unchanged to CompletePoll after the provider answers.
+type Poll struct {
+	key                 assignment.BindingKey
+	id                  uint64
+	capacity            int
+	discovery           bool
+	discoveryGeneration uint64
+}
+
+// Capacity is the value this poll must announce to the provider.
+func (p Poll) Capacity() int { return p.capacity }
+
+// Valid reports whether BeginPoll reserved this poll against a registered
+// binding. The serving loop must not contact the provider for an invalid poll.
+func (p Poll) Valid() bool { return p.id != 0 }
 
 type Allocator struct {
 	mu sync.Mutex
 	// globalParallelism is zero when tiers are intentionally independent.
-	globalParallelism int
-	pools             map[assignment.TierID]*pool
-	tierOf            map[assignment.BindingKey]assignment.TierID
-	order             []assignment.BindingKey // all binding keys, registration order
-	discovery         int                     // instance-wide cursor when a global limit is set
+	globalParallelism   int
+	pools               map[assignment.TierID]*pool
+	tierOf              map[assignment.BindingKey]assignment.TierID
+	order               []assignment.BindingKey // all binding keys, registration order
+	discovery           int                     // instance-wide cursor when a global limit is set
+	discoveryGeneration uint64
 	// held is the instance-wide hold. It is kept here, not only on the
 	// bindings, because a hold is a statement about the instance and
 	// outlives the set of bindings that existed when it was applied:
@@ -214,24 +253,96 @@ func (a *Allocator) Active(key assignment.BindingKey) int {
 	return 0
 }
 
-// Rotate advances every pool's discovery credit to the next binding that
-// could use it: one with no demand signal and no running capsule. A
-// binding that already has demand does not need discovery, so the
-// rotation skips it, which is what bounds the wait — every silent
-// binding holds the credit within one pass of the pool.
-func (a *Allocator) Rotate() {
+// SessionOpened records that the provider accepted a new session for key.
+// The provider refuses a second live session for the same binding, so this
+// proves any predecessor is gone and its capacity has returned to zero.
+func (a *Allocator) SessionOpened(key assignment.BindingKey) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.globalParallelism > 0 {
-		a.discovery = a.nextDiscovery(a.order, a.discovery)
+	b := a.binding(key)
+	if b == nil {
 		return
 	}
-	for _, p := range a.pools {
-		if len(p.order) == 0 {
-			continue
-		}
-		p.discovery = a.nextDiscovery(p.order, p.discovery)
+	b.published = 0
+	b.pending = nil
+	b.remoteKnown = true
+}
+
+// SessionClosed records the outcome of closing a provider session. A
+// confirmed close releases its published capacity. An uncertain close keeps
+// the last possible value reserved and makes the pool wait for a replacement
+// session before increasing any announcement.
+func (a *Allocator) SessionClosed(key assignment.BindingKey, confirmed bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.binding(key)
+	if b == nil {
+		return
 	}
+	if b.pending != nil && b.pending.capacity > b.published {
+		b.published = b.pending.capacity
+	}
+	b.pending = nil
+	if confirmed {
+		b.published = 0
+		b.remoteKnown = true
+		return
+	}
+	b.remoteKnown = false
+}
+
+// BeginPoll reserves one provider announcement. Increases are clamped against
+// the capacities that other sessions may still hold; decreases do not free
+// their old credit until CompletePoll confirms the provider accepted them.
+//
+// A zero-capacity poll is returned for an unknown key or while a predecessor
+// session in the same budget is still unresolved. A binding loop has at most
+// one poll in flight, so a second BeginPoll before completion also fails
+// closed at zero.
+func (a *Allocator) BeginPoll(key assignment.BindingKey) Poll {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.binding(key)
+	if b == nil || b.pending != nil {
+		return Poll{key: key}
+	}
+
+	desired := 0
+	if a.remoteStateKnown(key) {
+		desired = a.distributeAll()[key]
+	}
+	capacity := a.clampPublished(key, desired)
+	discovery, generation := a.discoveryAnnouncement(key, capacity)
+
+	b.pollID++
+	b.pending = &pendingPoll{id: b.pollID, capacity: capacity}
+	return Poll{
+		key: key, id: b.pollID, capacity: capacity, discovery: discovery,
+		discoveryGeneration: generation,
+	}
+}
+
+// CompletePoll records which capacity the provider may now hold and advances
+// discovery only when the current holder's own poll completed empty. Failed
+// polls retain the larger value because the request may have reached the
+// provider even when its response did not reach the controller.
+func (a *Allocator) CompletePoll(poll Poll, succeeded, empty bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b := a.binding(poll.key)
+	if b == nil || b.pending == nil || b.pending.id != poll.id {
+		return
+	}
+	if succeeded {
+		b.published = poll.capacity
+	} else if poll.capacity > b.published {
+		b.published = poll.capacity
+	}
+	b.pending = nil
+	if !succeeded || !empty || !poll.discovery {
+		return
+	}
+	a.rotateDiscovery(poll)
 }
 
 // DiscoveryHolder reports which binding currently holds the tier's
@@ -257,10 +368,9 @@ func (a *Allocator) DiscoveryHolder(tierID assignment.TierID) assignment.Binding
 	return p.order[p.discovery]
 }
 
-// Advertised computes the capacity key should announce now. It is a pure
-// function of pool state, so every binding's independent call sees the
-// same distribution and the pool's advertised sum stays within its
-// parallelism.
+// Advertised computes the desired capacity for key. BeginPoll turns that
+// desired value into the safe announcement after accounting for values that
+// concurrent provider sessions may still hold remotely.
 //
 // The order is forced by what each part means. Running capsules cannot
 // be retracted, so they are counted first. What remains is free credit,
@@ -277,10 +387,9 @@ func (a *Allocator) Advertised(key assignment.BindingKey) int {
 	return a.distributeAll()[key]
 }
 
-// AdvertisedAll is the whole tier's distribution under one lock. The
-// per-binding call is what a session announces, but the invariant is a
-// statement about the pool, and reading it one binding at a time
-// samples four different instants rather than one state.
+// AdvertisedAll is the whole tier's desired distribution under one lock. The
+// desired invariant is a statement about the pool; reading one binding at a
+// time samples different instants and proves nothing about a single state.
 func (a *Allocator) AdvertisedAll(tierID assignment.TierID) map[assignment.BindingKey]int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -296,13 +405,15 @@ func (a *Allocator) AdvertisedAll(tierID assignment.TierID) map[assignment.Bindi
 	return out
 }
 
-// BindingCredit is one binding's line in the pool report: the demand it
-// reported, the credits it holds, and what it would announce now.
+// BindingCredit is one binding's line in the pool report: its demand, local
+// reservations, desired announcement and maximum capacity that may currently
+// be in force remotely.
 type BindingCredit struct {
 	Key            assignment.BindingKey
 	AssignedDemand int
 	Reserved       int
 	Advertised     int
+	RemoteCapacity int
 	Discovery      bool
 }
 
@@ -328,23 +439,23 @@ func (a *Allocator) PoolReport(tierID assignment.TierID) (parallelism int, rows 
 		b := p.state[k]
 		rows = append(rows, BindingCredit{
 			Key: k, AssignedDemand: b.assignedDemand, Reserved: b.active,
-			Advertised: adv[k], Discovery: k == discovery,
+			Advertised: adv[k], RemoteCapacity: a.effectivePublished(b), Discovery: k == discovery,
 		})
 	}
 	return p.parallelism, rows
 }
 
-// CapacityReport is the instance-wide admission accounting. Parallelism is
-// the effective limit: the configured global limit, or the sum of tier limits
-// when tiers are independent. Global says which of those it is — the sum is
-// arithmetic, not a limit anyone configured, and a reader deciding whether an
-// instance-wide figure means anything needs to know the difference.
+// CapacityReport is the instance-wide admission accounting. RemoteCapacity
+// includes in-flight announcements conservatively. Parallelism is the
+// configured global limit, or the sum of independent tier limits; Global says
+// which one it is.
 type CapacityReport struct {
-	Parallelism int
-	Active      int
-	Advertised  int
-	Available   int
-	Global      bool
+	Parallelism    int
+	Active         int
+	Advertised     int
+	RemoteCapacity int
+	Available      int
+	Global         bool
 }
 
 func (a *Allocator) CapacityReport() CapacityReport {
@@ -362,12 +473,16 @@ func (a *Allocator) CapacityReport() CapacityReport {
 	for _, n := range a.distributeAll() {
 		advertised += n
 	}
+	remoteCapacity := 0
+	for _, key := range a.order {
+		remoteCapacity += a.effectivePublished(a.binding(key))
+	}
 	available := limit - active
 	if available < 0 {
 		available = 0
 	}
 	return CapacityReport{
-		Parallelism: limit, Active: active, Advertised: advertised,
+		Parallelism: limit, Active: active, Advertised: advertised, RemoteCapacity: remoteCapacity,
 		Available: available, Global: global,
 	}
 }
@@ -383,6 +498,122 @@ func (a *Allocator) distributeAll() map[assignment.BindingKey]int {
 		}
 	}
 	return out
+}
+
+// remoteStateKnown reports whether every predecessor session sharing key's
+// capacity budget has been accounted for. Independent tiers do not block one
+// another; a global limit makes every binding share one remote budget.
+func (a *Allocator) remoteStateKnown(key assignment.BindingKey) bool {
+	if a.globalParallelism > 0 {
+		for _, candidate := range a.order {
+			if b := a.binding(candidate); b != nil && !b.remoteKnown {
+				return false
+			}
+		}
+		return true
+	}
+	p := a.poolOf(key)
+	if p == nil {
+		return false
+	}
+	for _, candidate := range p.order {
+		if !p.state[candidate].remoteKnown {
+			return false
+		}
+	}
+	return true
+}
+
+// clampPublished limits one new announcement by every capacity value that may
+// still be in force remotely. The pending maximum is reserved before the
+// network call, so concurrent bindings cannot each spend the same credit.
+func (a *Allocator) clampPublished(key assignment.BindingKey, desired int) int {
+	if desired <= 0 {
+		return 0
+	}
+	p := a.poolOf(key)
+	if p == nil {
+		return 0
+	}
+	tierAvailable := p.parallelism
+	for _, candidate := range p.order {
+		if candidate != key {
+			tierAvailable -= a.effectivePublished(p.state[candidate])
+		}
+	}
+	if tierAvailable < 0 {
+		tierAvailable = 0
+	}
+	allowed := tierAvailable
+	if a.globalParallelism > 0 {
+		globalAvailable := a.globalParallelism
+		for _, candidate := range a.order {
+			if candidate != key {
+				globalAvailable -= a.effectivePublished(a.binding(candidate))
+			}
+		}
+		if globalAvailable < 0 {
+			globalAvailable = 0
+		}
+		if globalAvailable < allowed {
+			allowed = globalAvailable
+		}
+	}
+	if desired < allowed {
+		return desired
+	}
+	return allowed
+}
+
+func (a *Allocator) effectivePublished(b *binding) int {
+	if b == nil {
+		return 0
+	}
+	capacity := b.published
+	if b.pending != nil && b.pending.capacity > capacity {
+		capacity = b.pending.capacity
+	}
+	return capacity
+}
+
+func (a *Allocator) discoveryAnnouncement(key assignment.BindingKey, capacity int) (bool, uint64) {
+	if capacity == 0 {
+		return false, 0
+	}
+	b := a.binding(key)
+	if b == nil || b.held || b.assignedDemand != 0 || b.active != 0 {
+		return false, 0
+	}
+	if a.globalParallelism > 0 {
+		if len(a.order) == 0 || a.order[a.discovery] != key {
+			return false, 0
+		}
+		return true, a.discoveryGeneration
+	}
+	p := a.poolOf(key)
+	if p == nil || len(p.order) == 0 || p.order[p.discovery] != key {
+		return false, 0
+	}
+	return true, p.discoveryGeneration
+}
+
+func (a *Allocator) rotateDiscovery(poll Poll) {
+	if a.globalParallelism > 0 {
+		if poll.discoveryGeneration != a.discoveryGeneration || len(a.order) == 0 ||
+			a.order[a.discovery] != poll.key {
+			return
+		}
+		a.discovery = a.nextDiscovery(a.order, a.discovery)
+		a.discoveryGeneration++
+		return
+	}
+	p := a.poolOf(poll.key)
+	if p == nil || poll.discoveryGeneration != p.discoveryGeneration ||
+		len(p.order) == 0 || p.order[p.discovery] != poll.key {
+		return
+	}
+	p.discovery = a.nextDiscovery(p.order, p.discovery)
+	p.discoveryGeneration++
 }
 
 func (a *Allocator) distributeTier(p *pool) map[assignment.BindingKey]int {

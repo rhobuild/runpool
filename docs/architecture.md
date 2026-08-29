@@ -169,7 +169,10 @@ A tier holds as many credits as its configured parallelism. Running capsules hol
 free credits follow demand, max-min fair; one still-unclaimed credit is
 the tier's rotating discovery credit, which is what keeps a binding
 with no demand signal from going blind to its own queue. The sum a tier
-advertises never exceeds it.
+desires never exceeds it. Capacity that may still be in force at the provider
+is accounted separately: increases reserve before polling, decreases release
+only after a successful poll, and only the current holder's empty poll rotates
+discovery.
 
 When `scheduling.parallelism` is configured, the same accounting also has an
 instance-wide ceiling across every tier and target. Provider announcements and
