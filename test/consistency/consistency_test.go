@@ -444,6 +444,11 @@ func TestTheDeploymentSaysWhichHealthModeItWires(t *testing.T) {
 // `docker image inspect` is local and absent on purpose.
 var registryCommand = regexp.MustCompile(`docker (build|push|pull) |docker buildx imagetools `)
 
+// helperPath is the retry wrapper, named once because two tests
+// reason about it: one about which commands go through it, and one
+// about which jobs can find it.
+const helperPath = "scripts/ci/retry.sh"
+
 // TestEveryRegistryCommandIsRetried: four release cycles were lost to
 // registries answering badly, and nothing asked twice.
 //
@@ -466,10 +471,9 @@ func TestEveryRegistryCommandIsRetried(t *testing.T) {
 		t.Fatal("no workflow runs anything, so this proves nothing")
 	}
 
-	const helper = "scripts/ci/retry.sh"
-	info, err := os.Stat(repoPath(helper))
+	info, err := os.Stat(repoPath(helperPath))
 	if err != nil {
-		t.Fatalf("%s is missing, and every workflow calls it: %v", helper, err)
+		t.Fatalf("%s is missing, and every workflow calls it: %v", helperPath, err)
 	}
 	// Present is not enough. The workflows invoke it as a path, not
 	// through an interpreter, so a helper that lost its execute bit --
@@ -477,7 +481,7 @@ func TestEveryRegistryCommandIsRetried(t *testing.T) {
 	// exists, reads correctly, and fails every step that calls it.
 	if info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("%s is not executable (mode %v); every step calling it would fail to start",
-			helper, info.Mode().Perm())
+			helperPath, info.Mode().Perm())
 	}
 
 	found := 0
@@ -502,14 +506,88 @@ func TestEveryRegistryCommandIsRetried(t *testing.T) {
 					continue
 				}
 				found++
-				if !strings.Contains(line, helper) {
+				if !strings.Contains(line, helperPath) {
 					t.Errorf("%s reaches a registry without %s:\n    %s",
-						rel(workflow), helper, strings.TrimSpace(line))
+						rel(workflow), helperPath, strings.TrimSpace(line))
 				}
 			}
 		}
 	}
 	if found == 0 {
 		t.Fatal("no workflow reaches a registry, so this proves nothing")
+	}
+}
+
+// TestEveryJobThatCallsTheHelperHasTheTreeItLivesIn.
+//
+// `scripts/ci/retry.sh` is a file in this repository, so a job that
+// calls it and does not check the repository out gets exit 127 and a
+// message about a missing file — not about the registry command it was
+// wrapping.
+//
+// TestEveryRegistryCommandIsRetried cannot see this. It reads the
+// workflows for commands that reach a registry and asks whether each
+// one goes through the helper; whether the job around it has the helper
+// on disk is a different question, and one no amount of reading the
+// command answers.
+//
+// It has already cost a release. `capsule-index` assembles an index out
+// of digests other jobs pushed, so it wanted nothing from the tree and
+// checked nothing out — until the command it assembles them with was
+// routed through a file that only exists there. The tag was cut, four
+// jobs passed, and the fifth could not find a shell script.
+func TestEveryJobThatCallsTheHelperHasTheTreeItLivesIn(t *testing.T) {
+	workflows, err := filepath.Glob(repoPath(".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workflows) == 0 {
+		t.Fatal("no workflows found, so this proves nothing")
+	}
+
+	checked := 0
+	for _, path := range workflows {
+		var doc struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Uses string `yaml:"uses"`
+					Run  string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(body, &doc); err != nil {
+			t.Fatalf("%s: %v", filepath.Base(path), err)
+		}
+		for name, job := range doc.Jobs {
+			calls, checksOut := false, false
+			for _, step := range job.Steps {
+				if strings.Contains(step.Run, helperPath) {
+					calls = true
+				}
+				if strings.HasPrefix(step.Uses, "actions/checkout@") {
+					checksOut = true
+				}
+			}
+			if !calls {
+				continue
+			}
+			checked++
+			if !checksOut {
+				t.Errorf("%s: job %q calls %s and checks nothing out. The helper is a file "+
+					"in this repository, so the step exits 127 naming a missing script "+
+					"rather than whatever it was wrapping",
+					filepath.Base(path), name, helperPath)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no job calls the helper, so this proves nothing")
+	}
+	if !t.Failed() {
+		t.Logf("%d jobs call %s, all with the tree", checked, helperPath)
 	}
 }
