@@ -195,9 +195,7 @@ func TestAScaleSetMayClaimTheSelfHostedLabel(t *testing.T) {
 	// provider's own stranded-grant handling calls unrecoverable from
 	// this side. The answer is already in `created`; the set does not
 	// have to outlive the assertion to give it.
-	if err := c.DeleteRunnerScaleSet(testCtx(t), created.ID); err != nil {
-		t.Errorf("delete the scale set holding %q: %v", "self-hosted", err)
-	}
+	deleteNow(t, c, created)
 
 	if got := labelNames(created); !slices.Contains(got, "self-hosted") {
 		t.Errorf("labels = %v; the service dropped or refused %q, which it is entitled "+

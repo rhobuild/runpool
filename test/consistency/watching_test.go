@@ -1,7 +1,6 @@
 package consistency
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -30,6 +29,20 @@ import (
 func TestTheWatchingThresholdsFollowTheConstantsTheyAreDerivedFrom(t *testing.T) {
 	section := watchingSection(t)
 
+	// Counted, not searched. Two of these work out to the same number
+	// today -- twice a capsule's preparation and six rediscovery
+	// intervals are both thirty minutes -- so asking whether the section
+	// contains 1800 is answered by either of them. Delete one line and
+	// the other still answers for it.
+	present := map[int64]int{}
+	for _, m := range regexp.MustCompile(`> (\d+)\)`).FindAllStringSubmatch(section, -1) {
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		present[n]++
+	}
+
 	for _, tc := range []struct {
 		name string
 		want time.Duration
@@ -53,13 +66,16 @@ func TestTheWatchingThresholdsFollowTheConstantsTheyAreDerivedFrom(t *testing.T)
 		why:  "no healthy instance misses six rediscoveries",
 	}} {
 		seconds := int64(tc.want.Seconds())
-		if !strings.Contains(section, fmt.Sprintf("> %d)", seconds)) &&
-			!strings.Contains(section, fmt.Sprintf("> %d ", seconds)) {
-			t.Errorf("the watching section has no threshold of %d seconds (%s), which is what "+
-				"%q works out to today. Either a constant moved and the document did not, or "+
-				"the derivation changed and this test did not: %s",
+		if present[seconds] == 0 {
+			t.Errorf("the watching section has no threshold of %d seconds (%s) left, which is "+
+				"what %q works out to today. Either a constant moved and the document did not, "+
+				"or the derivation changed and this test did not: %s",
 				seconds, tc.want, tc.name, tc.why)
+			continue
 		}
+		// Spent, so a second condition deriving the same number has to
+		// find its own occurrence rather than this one.
+		present[seconds]--
 	}
 }
 
