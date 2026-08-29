@@ -31,6 +31,12 @@ that is what decides whether it can run on a pull request at all.
 | `release` | `capsule index`, `build immutable candidates` | The index serves every platform the run built, and the standalone artifacts exist by checksum | Hosted, protected `release-candidate` |
 | `release` | `attest and publish qualified artifacts` | The record covers this build, the artifacts match their checksums, and the promoted digests are the qualified ones | Hosted, protected `release` |
 
+The GitHub Actions workflow also runs `github_observation` probes on its
+weekly and non-qualifying manual executions. They record upstream behavior for
+capabilities the product does not expose. They are deliberately excluded from
+release qualification; a change in an unused provider behavior must prompt
+investigation without blocking the release contract.
+
 `qualify-release` also calls `ci`, `contracts-github-actions` and
 `controller-e2e` rather than restating them: two definitions of one gate drift,
 and the one that decides a release must be the one every change already passed.

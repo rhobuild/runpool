@@ -3,11 +3,15 @@ package githubcontract
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type installedFixture struct {
+	repositories     []string
+	qualifiesRelease bool
+}
 
 // installedFixtures maps each versioned fixture to the repositories that
 // must carry it, by the environment variable naming each.
@@ -21,35 +25,22 @@ import (
 // An entry claiming more than a test needs is worse than no check at
 // all: it fails a qualification for a fixture nothing reads, which
 // nothing keeps in sync, for a gap that does not exist.
-var installedFixtures = map[string][]string{
-	"identity.yml":           {envRepoA},
-	"organization-cache.yml": {envRepoA, envRepoB},
-	"label-routing.yml":      {envRepoA},
+var installedFixtures = map[string]installedFixture{
+	"identity.yml":           {repositories: []string{envRepoA}, qualifiesRelease: true},
+	"organization-cache.yml": {repositories: []string{envRepoA, envRepoB}, qualifiesRelease: true},
+	"label-routing.yml":      {repositories: []string{envRepoA}},
 }
 
-// TestEveryFixtureThisSuiteReadsIsInstalled fails in seconds, naming
-// every fixture that is missing or has drifted, before anything
-// dispatches.
+// TestEveryContractFixtureIsInstalled fails in seconds, naming every
+// release-required fixture that is missing or has drifted before a contract
+// dispatches. Observation-only fixtures are mapped here for parity but do not
+// qualify a release.
 //
-// Each test that uses a fixture already verifies its own copy — that is
-// the check that must never be removed, because it runs against the file
-// the dispatch is about to use. This one exists for when it fails: a
-// missing fixture surfaced eight minutes into a release, from one test,
-// naming one file, after the tag had been cut. The same absence is
-// knowable in five seconds and can name all of them at once.
-//
-// It is also the check a maintainer can run before cutting a tag, which
-// is the point: the fixtures live in other repositories, and nothing in
-// this one can otherwise say whether they are there.
-//
-// Scope, said out loud because the name does not say it: this covers the
-// fixtures this package reads. The controller end-to-end suite keeps its
-// own, in a third repository under a different filename and behind
-// separate credentials, and it is not checked here. That gap is worse
-// than the one this closes -- the e2e job runs after the live contracts,
-// so a fixture missing there surfaces later than the one that cost this
-// cycle, not earlier.
-func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
+// Each dispatching test verifies its own fixture again. This preflight reports
+// all missing or drifted contract fixtures before the longer suite starts. The
+// controller end-to-end fixture has separate credentials and its own parity
+// check.
+func TestEveryContractFixtureIsInstalled(t *testing.T) {
 	_, token := target(t, envOrgURL, envOrgToken)
 	rest := newRESTClient(token)
 	ctx := testCtx(t)
@@ -82,11 +73,14 @@ func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 	checked := 0
 	for _, path := range files {
 		name := filepath.Base(path)
-		carriedBy, mapped := installedFixtures[name]
+		fixture, mapped := installedFixtures[name]
 		if !mapped {
 			t.Errorf("testdata/%s is versioned here and no test says which repository "+
 				"carries it. A fixture nothing installs is one a suite skips or fails "+
 				"on, and neither says so until it runs", name)
+			continue
+		}
+		if !fixture.qualifiesRelease {
 			continue
 		}
 		body, err := os.ReadFile(path)
@@ -95,7 +89,7 @@ func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 		}
 		want := sha256.Sum256(body)
 
-		for _, which := range carriedBy {
+		for _, which := range fixture.repositories {
 			repo := repos[which]
 			checked++
 			got, err := rest.installedFixtureDigest(ctx, repo, ".github/workflows/"+name)
@@ -113,5 +107,5 @@ func TestEveryFixtureThisSuiteReadsIsInstalled(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no fixture was checked against any repository, so this proves nothing")
 	}
-	t.Logf("%d installed fixtures match %s", checked, fmt.Sprintf("%d versioned files", len(files)))
+	t.Logf("%d installed contract fixtures match their versioned files", checked)
 }

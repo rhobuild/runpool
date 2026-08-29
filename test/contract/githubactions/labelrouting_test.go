@@ -1,3 +1,5 @@
+//go:build github_observation
+
 package githubcontract
 
 import (
@@ -46,43 +48,10 @@ func routingCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-// TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor is the
-// experiment that decides whether runpool can ever serve more than one
-// label per tier.
-//
-// A tier is a resource ceiling, a capsule image and an egress policy.
-// Today the `runs-on` that selects one is a unique scale-set name, so
-// the configuration decides which tier serves a job. Labels would move
-// that decision into GitHub's matcher -- and the rule is published for
-// runners in general ("any runner that matches all of the specified
-// runs-on values") and nowhere for scale sets.
-//
-// If the rule is the general one, then a tier labelled {a, b, c} answers
-// a job asking for {a, b}, two tiers whose labels overlap both answer,
-// and which of them serves the job -- with its network policy -- is a
-// tie nothing documents breaking. If instead a scale set is matched only
-// on the exact set it carries, overlap is impossible to write by
-// accident and labels are ordinary configuration.
-//
-// One scale set, deliberately: with two, a job could land on either and
-// a single dispatch would measure a tie-break rather than the rule. Here
-// the only set that could possibly answer carries a superset, so an
-// assignment means superset matching and silence means exact matching.
-//
-// Measured on 2026-08-29: the job arrived. So a scale set is matched on
-// holding all of the labels a job asks for, and two tiers carrying
-// overlapping labels both answer one `runs-on`.
-//
-// What that does and does not settle: an uncoordinated label cannot
-// select a tier safely, because which of two matching tiers serves a
-// job -- with its resource ceiling and its egress policy -- is a tie
-// nothing documents breaking. It does not show a label could never
-// select one. Labels proven disjoint across a target's tiers would make
-// two matches impossible, since a request that matched both would have
-// to be a subset of an empty intersection and `runs-on` is never empty.
-// Nothing validates that today, which is why this is deferred rather
-// than refused.
-func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
+// TestObservationJobReachesScaleSetWithSupersetLabels records whether a job
+// asking for two labels reaches the only scale set, which carries a strict
+// superset. The product does not depend on this behaviour.
+func TestObservationJobReachesScaleSetWithSupersetLabels(t *testing.T) {
 	url, token := target(t, envOrgURL, envOrgToken)
 	repo := requireEnv(t, envRepoA)
 	c := newClient(t, url, token)
@@ -96,9 +65,7 @@ func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 		t.Fatalf("resolve Default runner group: %v", err)
 	}
 
-	// Asked for: the first two. Carried: those two and a third, so the
-	// set is a strict superset of the request and matches under the
-	// general rule and not under an exact one.
+	// Asked for: the first two. Carried: those two and a third.
 	name := uniqueName(t)
 	asked := []string{name + "-a", name + "-b"}
 	carried := append(append([]string{}, asked...), name+"-c")
@@ -133,33 +100,14 @@ func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 	})
 
 	if !waitForAnyJob(t, session, routingWindow) {
-		t.Errorf("no job asking for %v reached a scale set carrying %v within %s. "+
-			"Matching has become exact rather than all-of, which would mean two tiers "+
-			"can no longer answer one `runs-on` by carrying overlapping labels -- read "+
-			"the decision record before acting on it, because it is the premise that "+
-			"deferred serving a second label per tier", asked, carried, routingWindow)
+		t.Errorf("no job asking for %v reached the scale set carrying %v within %s",
+			asked, carried, routingWindow)
 	}
 }
 
-// TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels asks the one
-// thing left open about serving more than one label per tier.
-//
-// The SDK adds the name-equal label only when the caller supplies none,
-// so a caller that supplies labels builds the whole set itself --
-// including the name, if it wants `runs-on: <name>` to keep working.
-// That is what ARC's controller does: it puts the scale set's name in
-// first, unconditionally, before appending anything an operator asked
-// for. Whether the service then still routes a bare name against a set
-// carrying the name and more is the question, and nothing published
-// answers it.
-//
-// This replaces a test that claimed to answer it and did not. That one
-// created a set carrying one label that was not its name, dispatched by
-// the name, and concluded from the silence that labels break name
-// routing. The label it dispatched by was never among the labels the set
-// carried, so nothing could have arrived under any matching rule -- the
-// experiment never varied the thing it named.
-func TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels(t *testing.T) {
+// TestObservationScaleSetWithExtraLabelAnswersToName records whether a bare
+// scale-set name still routes when that name is one of multiple labels.
+func TestObservationScaleSetWithExtraLabelAnswersToName(t *testing.T) {
 	url, token := target(t, envOrgURL, envOrgToken)
 	repo := requireEnv(t, envRepoA)
 	c := newClient(t, url, token)
@@ -173,8 +121,6 @@ func TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels(t *testing.T) {
 		t.Fatalf("resolve Default runner group: %v", err)
 	}
 	name := uniqueName(t)
-	// The name first and something else after it, which is the shape a
-	// caller that wants both has to build.
 	set := createScaleSetWith(t, c, &scaleset.RunnerScaleSet{
 		Name:          name,
 		RunnerGroupID: group.ID,
@@ -193,8 +139,6 @@ func TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels(t *testing.T) {
 		}
 	})
 
-	// By the name alone, which is what every workflow already written
-	// against this scale set says.
 	run := dispatchLabelRouting(t, ctx, rest, repo, []string{name})
 	t.Cleanup(func() {
 		closing, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -205,10 +149,8 @@ func TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels(t *testing.T) {
 	})
 
 	if !waitForAnyJob(t, session, routingWindow) {
-		t.Errorf("no job reached scale set %q dispatched by its own name within %s, "+
-			"though the name is among its labels. Keeping the name is then not enough "+
-			"to preserve `runs-on: %s`, and serving a second label would break every "+
-			"workflow already pointing at a tier", name, routingWindow, name)
+		t.Errorf("no job reached scale set %q by its name within %s although the name is among its labels",
+			name, routingWindow)
 	}
 }
 
@@ -263,16 +205,7 @@ func requireEnv(t *testing.T, name string) string {
 	t.Helper()
 	v := os.Getenv(name)
 	if v == "" {
-		// The same refusal target() makes, and for the same reason: this
-		// suite's contract is that it cannot be skipped while
-		// qualifying. A gate that only skips would let a release attest
-		// a routing rule nothing measured -- which is worse here than
-		// elsewhere, because the answer these tests produce is what
-		// decides whether a tier can be selected by label at all.
-		if os.Getenv(envQualify) != "" {
-			t.Fatalf("release qualification requires %s; the label-routing experiment cannot be skipped", name)
-		}
-		t.Skipf("%s not set; the label-routing experiment needs a fixture repository", name)
+		t.Skipf("%s not set; label-routing observations need a fixture repository", name)
 	}
 	return v
 }
