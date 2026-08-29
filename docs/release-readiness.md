@@ -6,15 +6,19 @@ objective publication gates; it is not a development log.
 
 ## Release target
 
-The first release is `v1.0.0`. Docker Engine 29.7.2, the latest official
-stable Debian 13 package at the 2026-08-16 policy review, is selected for the
-first release qualification. The exact platform reference in
+Docker Engine 29.7.2, the latest official stable Debian 13 package at the
+2026-08-16 policy review, is what every release so far has been qualified
+against. The exact platform reference in
 [`build/platform.lock.json`](../build/platform.lock.json) is `frozen`: the
 production-class host's kernel, API, runtime, cgroup, storage, firewall,
 Buildx and Compose facts were captured on 2026-08-26 and reviewed before
 any candidate tag existed, which is the point of freezing them there.
-Updating Docker after this freeze requires a new reviewed lock and a
-complete no-skip qualification run.
+
+A release does not re-freeze it. The lock is reviewed evidence about a
+host, so it stands until the host changes, and one lock has carried every
+release since `v1.0.0`. Changing Docker — or standing up a host whose
+eighteen facts differ in any one place — requires a new reviewed lock and
+a complete no-skip qualification run against it.
 
 That exact host is an evidence reference, not an operator-side version pin.
 Runtime admission requires Docker Engine 28.0 or newer and the capabilities it

@@ -2,6 +2,7 @@ package consistency
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -242,5 +243,91 @@ func TestTheReleaseBodyCarriesTheChangelog(t *testing.T) {
 		t.Errorf("the release body reads outputs of %q, which %q does not directly "+
 			"depend on; the expression resolves to the empty string and the release "+
 			"publishes with no changelog and no error", source, publishing)
+	}
+}
+
+// TestTheNewestChangelogSectionCouldBeReleased runs the shape half of
+// the release gate against the real file, on every pull request.
+//
+// The gate itself lives in release.yml and can only run on a tag,
+// because the half it exists for compares the newest heading against the
+// version being released and a version exists only there. But the rest
+// of what it demands has nothing to do with a version: a section needs
+// an opening summary, its links have to be ones the workflow knows how
+// to pin, and it must not contain the delimiter that carries it to the
+// release body.
+//
+// None of that was checked anywhere until a tag was pushed — which is
+// the most expensive place to find it, because the tag is protected by a
+// ruleset with no bypass actors and the failure lands after it exists.
+// It has already happened once: the section that became v1.2.0 opened
+// straight onto a group heading, and the gate refused it.
+func TestTheNewestChangelogSectionCouldBeReleased(t *testing.T) {
+	body, err := os.ReadFile(repoPath("CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(body), "\n")
+
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatal("CHANGELOG.md has no section heading at all, so this proves nothing")
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	heading, section := lines[start], lines[start+1:end]
+
+	// The lead is everything before the first group, and the workflow
+	// refuses a section without one: a release page that opens on a
+	// bullet list says what changed and never says what this is.
+	var lead []string
+	for _, line := range section {
+		if strings.HasPrefix(line, "### ") {
+			break
+		}
+		lead = append(lead, line)
+	}
+	if strings.TrimSpace(strings.Join(lead, "")) == "" {
+		t.Errorf("the newest section %q has no summary paragraph under it. The release "+
+			"gate refuses that, on the tag, after it exists", heading)
+	}
+
+	// Every relative link has to start with a directory the workflow's
+	// pinning knows, or it reaches the release page unresolvable.
+	pinnable := regexp.MustCompile(`^(docs|build|deploy|scripts|test|internal|cmd|\.github)/`)
+	link := regexp.MustCompile(`\]\(([^)]*)\)`)
+	for i, line := range section {
+		for _, m := range link.FindAllStringSubmatch(line, -1) {
+			target := m[1]
+			if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") ||
+				strings.HasPrefix(target, "#") || pinnable.MatchString(target) {
+				continue
+			}
+			t.Errorf("CHANGELOG.md:%d links to %q, which the release workflow cannot pin "+
+				"to a tag; it would publish as a broken link or fail the gate",
+				start+2+i, target)
+		}
+	}
+
+	// The heredoc delimiter the workflow carries this section with. A
+	// line equal to it would end the value early and leave the rest
+	// parsed as further outputs.
+	const delimiter = "RUNPOOL_CHANGELOG_SECTION"
+	for i, line := range section {
+		if line == delimiter {
+			t.Errorf("CHANGELOG.md:%d is exactly the delimiter the release workflow "+
+				"writes this section with", start+2+i)
+		}
 	}
 }
