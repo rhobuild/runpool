@@ -1,4 +1,4 @@
--- Code generated from internal/store/migrations (schema version 1). DO NOT EDIT.
+-- Code generated from internal/store/migrations (schema version 2). DO NOT EDIT.
 -- Regenerate with: go run ./internal/store/schema/gen
 
 CREATE TABLE assignment_attempts (
@@ -76,7 +76,8 @@ CREATE TABLE broker_deliveries (
 		CHECK (ack_state IN ('pending', 'requested', 'confirmed', 'uncertain')),
 	received_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	ack_updated_at       INTEGER,
-	acknowledged_at      INTEGER,
+	acknowledged_at      INTEGER, payload_fingerprint_version INTEGER NOT NULL DEFAULT 1
+		CHECK (payload_fingerprint_version IN (1, 2)),
 	FOREIGN KEY (binding_id) REFERENCES provider_bindings (id),
 	UNIQUE (binding_id, source_delivery_key),
 	-- The composite key assignment_attempts points at, so an attempt can

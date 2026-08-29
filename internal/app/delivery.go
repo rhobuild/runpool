@@ -368,7 +368,6 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 	// between redeliveries of one message id. That read as unrecoverable
 	// drift, failed the persist, left the message unacknowledged, and
 	// because the queue is ordered it blocked the binding permanently.
-	fingerprint := assignment.Fingerprint(msg.Assigned)
 	workloads := make([]store.WorkloadRow, len(admitted))
 	for i, a := range admitted {
 		workloads[i] = store.WorkloadRow{
@@ -380,7 +379,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 
 	var deliveryID assignment.DeliveryID
 	err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		id, err := tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
+		id, err := tx.RecordDelivery(b.bindingID, key, msg.Assigned, workloads)
 		if errors.Is(err, store.ErrOpenAttemptExists) {
 			// Supersede the predecessor and record again, in this same
 			// transaction. Only a predecessor that provably consumed
@@ -399,7 +398,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 					return serr
 				}
 			}
-			id, err = tx.RecordDelivery(b.bindingID, key, fingerprint, workloads)
+			id, err = tx.RecordDelivery(b.bindingID, key, msg.Assigned, workloads)
 		}
 		if err != nil {
 			return err

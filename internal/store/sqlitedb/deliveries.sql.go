@@ -11,7 +11,8 @@ import (
 
 const getDeliveryByKey = `-- name: GetDeliveryByKey :one
 SELECT id, binding_id, source_delivery_key, payload_sha256, ack_state,
-       received_at, ack_updated_at, acknowledged_at
+       received_at, ack_updated_at, acknowledged_at,
+       payload_fingerprint_version
 FROM broker_deliveries
 WHERE binding_id = ?1
   AND source_delivery_key = ?2
@@ -34,22 +35,27 @@ func (q *Queries) GetDeliveryByKey(ctx context.Context, arg GetDeliveryByKeyPara
 		&i.ReceivedAt,
 		&i.AckUpdatedAt,
 		&i.AcknowledgedAt,
+		&i.PayloadFingerprintVersion,
 	)
 	return i, err
 }
 
 const insertDelivery = `-- name: InsertDelivery :one
 
-INSERT INTO broker_deliveries (binding_id, source_delivery_key, payload_sha256)
-VALUES (?1, ?2, ?3)
+INSERT INTO broker_deliveries (
+  binding_id, source_delivery_key, payload_sha256, payload_fingerprint_version
+)
+VALUES (?1, ?2, ?3, ?4)
 RETURNING id, binding_id, source_delivery_key, payload_sha256, ack_state,
-          received_at, ack_updated_at, acknowledged_at
+          received_at, ack_updated_at, acknowledged_at,
+          payload_fingerprint_version
 `
 
 type InsertDeliveryParams struct {
-	BindingID         int64
-	SourceDeliveryKey string
-	PayloadSha256     []byte
+	BindingID                 int64
+	SourceDeliveryKey         string
+	PayloadSha256             []byte
+	PayloadFingerprintVersion int64
 }
 
 // Broker deliveries: at-least-once messages made durable before any
@@ -58,7 +64,12 @@ type InsertDeliveryParams struct {
 // they may leave from; zero rows means the delivery moved and the
 // caller re-reads.
 func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) (BrokerDelivery, error) {
-	row := q.db.QueryRowContext(ctx, insertDelivery, arg.BindingID, arg.SourceDeliveryKey, arg.PayloadSha256)
+	row := q.db.QueryRowContext(ctx, insertDelivery,
+		arg.BindingID,
+		arg.SourceDeliveryKey,
+		arg.PayloadSha256,
+		arg.PayloadFingerprintVersion,
+	)
 	var i BrokerDelivery
 	err := row.Scan(
 		&i.ID,
@@ -69,6 +80,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.ReceivedAt,
 		&i.AckUpdatedAt,
 		&i.AcknowledgedAt,
+		&i.PayloadFingerprintVersion,
 	)
 	return i, err
 }

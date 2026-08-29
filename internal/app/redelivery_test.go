@@ -631,7 +631,7 @@ func TestAFailedAcknowledgementStaysRetryable(t *testing.T) {
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
 		var err error
 		delivery, err = tx.RecordDelivery(h.bind.bindingID,
-			assignment.DeliveryKey(h.bind.scaleSetID, 701), [32]byte{}, nil)
+			assignment.DeliveryKey(h.bind.scaleSetID, 701), nil, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

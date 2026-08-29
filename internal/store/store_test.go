@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -61,7 +60,7 @@ func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
 	t.Helper()
 	var id string
 	inTx(t, s, func(tx *Tx) error {
-		if _, err := tx.RecordDelivery(binding, deliveryKey, fingerprint(deliveryKey),
+		if _, err := tx.RecordDelivery(binding, deliveryKey, payload(deliveryKey),
 			[]WorkloadRow{{SourceWorkloadKey: string(workloadKey), TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
@@ -74,7 +73,9 @@ func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
 	return assignment.AttemptID(id)
 }
 
-func fingerprint(s string) [32]byte { return sha256.Sum256([]byte(s)) }
+func payload(key string) []assignment.WorkloadAssignment {
+	return []assignment.WorkloadAssignment{{SourceWorkloadKey: key}}
+}
 
 // A redelivery repeats the delivery byte for byte, so it lands on the
 // same delivery row and creates no second attempt. The same natural key
@@ -88,13 +89,24 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 	var first assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		first, err = tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
+		first, err = tx.RecordDelivery(binding, "msg-7", payload("payload-a"), workloads)
+		if err != nil {
+			return err
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: int64(binding), SourceDeliveryKey: "msg-7",
+		})
+		currentVersion, _ := assignment.CurrentDeliveryFingerprint(payload("payload-a"))
+		if err == nil && delivery.PayloadFingerprintVersion != int64(currentVersion) {
+			t.Errorf("new delivery fingerprint version = %d; want %d",
+				delivery.PayloadFingerprintVersion, currentVersion)
+		}
 		return err
 	})
 
 	// Exact redelivery: same row back, still exactly one attempt.
 	inTx(t, s, func(tx *Tx) error {
-		again, err := tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
+		again, err := tx.RecordDelivery(binding, "msg-7", payload("payload-a"), workloads)
 		if err != nil {
 			return err
 		}
@@ -113,12 +125,115 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 
 	// Drift: same key, different payload.
 	err := s.Tx(t.Context(), func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-7", fingerprint("payload-B"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-7", payload("payload-B"), workloads)
 		return err
 	})
 	if !errors.Is(err, ErrContractDrift) {
 		t.Fatalf("drifted redelivery returned %v; want ErrContractDrift", err)
 	}
+}
+
+func TestFingerprintEncoderRegistryMatchesTheSchema(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	versions := assignment.DeliveryFingerprintVersions()
+	if len(versions) == 0 {
+		t.Fatal("the delivery fingerprint registry is empty")
+	}
+	inTx(t, s, func(tx *Tx) error {
+		for _, version := range versions {
+			if _, err := tx.tx.Exec(`
+				INSERT INTO broker_deliveries (
+					binding_id, source_delivery_key, payload_sha256,
+					payload_fingerprint_version
+				) VALUES (?, ?, ?, ?)`,
+				binding, fmt.Sprintf("version-%d", version), make([]byte, 32), version); err != nil {
+				t.Errorf("schema rejects registered fingerprint version %d: %v", version, err)
+			}
+		}
+		unsupported := versions[len(versions)-1] + 1
+		if _, err := tx.tx.Exec(`
+			INSERT INTO broker_deliveries (
+				binding_id, source_delivery_key, payload_sha256,
+				payload_fingerprint_version
+			) VALUES (?, ?, ?, ?)`,
+			binding, "unsupported-version", make([]byte, 32), unsupported); err == nil {
+			t.Errorf("schema accepted unregistered fingerprint version %d", unsupported)
+		}
+		return nil
+	})
+}
+
+// TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint
+// proves the compatibility reason for persisting a version. v1.0.0 and
+// v1.1.0 shipped the same schema and delimiter encoding; after migration,
+// their rows use that encoder while new rows use the current one.
+func TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint(t *testing.T) {
+	const publishedFingerprintVersion assignment.DeliveryFingerprintVersion = 1
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 2 {
+		t.Fatal("the fingerprint migration is absent")
+	}
+
+	dir := t.TempDir()
+	old := openRaw(t, dir)
+	if err := old.applyScript(migrations[0].up, 1, schemaFingerprint(migrations[:1])); err != nil {
+		t.Fatal(err)
+	}
+	workload := assignment.WorkloadAssignment{
+		SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "app",
+		SourceRequestID: 7, SourceRunID: 41, Labels: []string{"self-hosted", "linux"},
+	}
+	assigned := []assignment.WorkloadAssignment{workload}
+	published, ok := assignment.DeliveryFingerprintForVersion(assigned, publishedFingerprintVersion)
+	if !ok {
+		t.Fatal("this build cannot compute the published fingerprint version")
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO provider_bindings (id, target_id, provider_kind, source_binding_key)
+		VALUES (1, 'app', 'github_actions', 'published-binding')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO broker_deliveries
+			(id, binding_id, source_delivery_key, payload_sha256)
+		VALUES (1, 1, 'msg-old', ?)`, published[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dir, DefaultRetryBudget)
+	if err != nil {
+		t.Fatalf("upgrade published schema: %v", err)
+	}
+	defer upgraded.Close()
+	row := WorkloadRow{
+		SourceWorkloadKey: workload.SourceWorkloadKey,
+		TenantKey:         workload.TenantKey,
+		ProjectKey:        workload.ProjectKey,
+	}
+	inTx(t, upgraded, func(tx *Tx) error {
+		id, err := tx.RecordDelivery(1, "msg-old", assigned, []WorkloadRow{row})
+		if err != nil {
+			return err
+		}
+		if id != 1 {
+			t.Errorf("redelivery returned delivery %d; want historical row 1", id)
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 1, SourceDeliveryKey: "msg-old",
+		})
+		if err == nil && delivery.PayloadFingerprintVersion != int64(publishedFingerprintVersion) {
+			t.Errorf("historical row was rewritten to fingerprint version %d", delivery.PayloadFingerprintVersion)
+		}
+		return err
+	})
 }
 
 // A reassignment arrives as a new delivery for a workload whose previous
@@ -132,13 +247,13 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	workloads := []WorkloadRow{{SourceWorkloadKey: "job-r", TenantKey: "acme", ProjectKey: "app"}}
 
 	inTx(t, s, func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-1", payload("first"), workloads)
 		return err
 	})
 
 	// While the first attempt is open, the new delivery is refused.
 	err := s.Tx(t.Context(), func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 		return err
 	})
 	if !errors.Is(err, ErrOpenAttemptExists) {
@@ -151,7 +266,7 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 		if err := tx.SupersedeOpenAttempt(binding, "job-r", assignment.ResolutionSuperseded, 0); err != nil {
 			return err
 		}
-		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 		return err
 	})
 
@@ -186,7 +301,7 @@ func TestOneOpenAttemptUnderContention(t *testing.T) {
 		key := "msg-c" + string(rune('a'+i))
 		go func() {
 			results <- s.Tx(context.Background(), func(tx *Tx) error {
-				_, err := tx.RecordDelivery(binding, key, fingerprint(key),
+				_, err := tx.RecordDelivery(binding, key, payload(key),
 					[]WorkloadRow{{SourceWorkloadKey: "job-contended", TenantKey: "acme", ProjectKey: "app"}})
 				return err
 			})
@@ -245,7 +360,7 @@ func TestAckStateMachineConvergesAfterUncertainty(t *testing.T) {
 	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", fingerprint("ack"),
+		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", payload("ack"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-ack", TenantKey: "acme", ProjectKey: "app"}})
 		return err
 	})
@@ -504,7 +619,7 @@ func TestAckRequestedIsRetriedAfterACrashInFlight(t *testing.T) {
 	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", fingerprint("wedge"),
+		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", payload("wedge"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-wedge", TenantKey: "acme", ProjectKey: "app"}})
 		return err
 	})
@@ -1332,7 +1447,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 
 			var attemptID assignment.AttemptID
 			inTx(t, s, func(tx *Tx) error {
-				if _, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads); err != nil {
+				if _, err := tx.RecordDelivery(binding, "msg-1", payload("first"), workloads); err != nil {
 					return err
 				}
 				ready, err := tx.ReadyAttempts(binding)
@@ -1351,7 +1466,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 				if serr != nil {
 					return serr
 				}
-				_, rerr := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+				_, rerr := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 				return rerr
 			})
 
@@ -1404,7 +1519,7 @@ func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 		if withWork, err = tx.EnsureBinding("old", "github_actions", "v2|old|default|runpool-old"); err != nil {
 			return err
 		}
-		_, err = tx.RecordDelivery(withWork, "msg-old", fingerprint("old"),
+		_, err = tx.RecordDelivery(withWork, "msg-old", payload("old"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "old"}})
 		return err
 	})
@@ -2660,6 +2775,16 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 		}
 		if len(bindings) != 1 || bindings[0].TargetID != "app" {
 			t.Errorf("the restored books hold %d bindings; the fixture wrote one", len(bindings))
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 1, SourceDeliveryKey: "msg-fixture",
+		})
+		if err != nil {
+			return err
+		}
+		if delivery.PayloadFingerprintVersion != 1 {
+			t.Errorf("migrated delivery fingerprint version = %d; want published value 1 preserved",
+				delivery.PayloadFingerprintVersion)
 		}
 		return nil
 	}); err != nil {

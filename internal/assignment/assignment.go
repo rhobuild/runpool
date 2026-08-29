@@ -8,7 +8,9 @@
 package assignment
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
@@ -88,13 +90,59 @@ func DeliveryKey(sourceQueueID, sourceID int) string {
 	return fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID)
 }
 
-// Fingerprint digests the normalized content of a delivery: every field
-// of every assignment the domain processes, in a canonical order that
-// does not depend on how the provider happened to arrange the message.
-// A redelivery must reproduce it byte for byte; the same delivery key
-// with a different fingerprint is contract drift, and the store fails
-// closed on it.
-func Fingerprint(assignments []WorkloadAssignment) [32]byte {
+// DeliveryFingerprintVersion is the persisted selector for a canonical
+// encoder. Individual historical numbers stay inside the registry; callers
+// only read the version already stored or ask for the current one.
+type DeliveryFingerprintVersion int64
+
+const currentDeliveryFingerprintVersion DeliveryFingerprintVersion = 2
+
+// PayloadFingerprint is the fixed-size digest persisted for one broker
+// delivery payload.
+type PayloadFingerprint [sha256.Size]byte
+
+var deliveryFingerprintEncoders = map[DeliveryFingerprintVersion]func([]WorkloadAssignment) PayloadFingerprint{
+	1: fingerprintDelimited,
+	2: func(assignments []WorkloadAssignment) PayloadFingerprint {
+		return PayloadFingerprint(sha256.Sum256(canonicalFingerprintPreimage(assignments)))
+	},
+}
+
+// DeliveryFingerprintVersions returns the durable encoder vocabulary in
+// ascending order. The store uses it to hold its schema constraint in parity
+// with the algorithms this build can read.
+func DeliveryFingerprintVersions() []DeliveryFingerprintVersion {
+	versions := make([]DeliveryFingerprintVersion, 0, len(deliveryFingerprintEncoders))
+	for version := range deliveryFingerprintEncoders {
+		versions = append(versions, version)
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	return versions
+}
+
+// CurrentDeliveryFingerprint returns the version and digest written for a new
+// delivery. Only the current encoder runs on this path; retaining historical
+// readers does not make new deliveries progressively more expensive.
+func CurrentDeliveryFingerprint(assignments []WorkloadAssignment) (DeliveryFingerprintVersion, PayloadFingerprint) {
+	return currentDeliveryFingerprintVersion,
+		deliveryFingerprintEncoders[currentDeliveryFingerprintVersion](assignments)
+}
+
+// DeliveryFingerprintForVersion computes a payload with the encoder named by
+// a durable row. It returns false for a version this build cannot interpret.
+func DeliveryFingerprintForVersion(assignments []WorkloadAssignment,
+	version DeliveryFingerprintVersion) (PayloadFingerprint, bool) {
+	encode, ok := deliveryFingerprintEncoders[version]
+	if !ok {
+		return PayloadFingerprint{}, false
+	}
+	return encode(assignments), true
+}
+
+// fingerprintDelimited is retained only for rows written before the
+// fingerprint version was persisted. Its bytes are a durable compatibility
+// contract, but its historical number is not part of the Go vocabulary.
+func fingerprintDelimited(assignments []WorkloadAssignment) PayloadFingerprint {
 	lines := make([]string, len(assignments))
 	for i, a := range assignments {
 		labels := append([]string(nil), a.Labels...)
@@ -104,7 +152,43 @@ func Fingerprint(assignments []WorkloadAssignment) [32]byte {
 			a.SourceRequestID, a.SourceRunID, strings.Join(labels, ","))
 	}
 	sort.Strings(lines)
-	return sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return PayloadFingerprint(sha256.Sum256([]byte(strings.Join(lines, "\n"))))
+}
+
+const canonicalFingerprintDomain = "runpool.delivery-fingerprint.length-prefixed\x00"
+
+func canonicalFingerprintPreimage(assignments []WorkloadAssignment) []byte {
+	records := make([][]byte, len(assignments))
+	for i, a := range assignments {
+		labels := append([]string(nil), a.Labels...)
+		sort.Strings(labels)
+
+		var record []byte
+		record = appendLengthPrefixedString(record, a.SourceWorkloadKey)
+		record = appendLengthPrefixedString(record, a.TenantKey)
+		record = appendLengthPrefixedString(record, a.ProjectKey)
+		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRequestID))
+		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRunID))
+		record = binary.BigEndian.AppendUint64(record, uint64(len(labels)))
+		for _, label := range labels {
+			record = appendLengthPrefixedString(record, label)
+		}
+		records[i] = record
+	}
+	sort.Slice(records, func(i, j int) bool { return bytes.Compare(records[i], records[j]) < 0 })
+
+	out := append([]byte(nil), canonicalFingerprintDomain...)
+	out = binary.BigEndian.AppendUint64(out, uint64(len(records)))
+	for _, record := range records {
+		out = binary.BigEndian.AppendUint64(out, uint64(len(record)))
+		out = append(out, record...)
+	}
+	return out
+}
+
+func appendLengthPrefixedString(dst []byte, value string) []byte {
+	dst = binary.BigEndian.AppendUint64(dst, uint64(len(value)))
+	return append(dst, value...)
 }
 
 // Resolution says exactly what was observed and what was decided, never

@@ -52,13 +52,20 @@ type WorkloadRow struct {
 //     delivery returns ErrOpenAttemptExists: the caller supersedes or
 //     resolves the predecessor first, in the same transaction, and
 //     retries.
-func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (assignment.DeliveryID, error) {
+func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey string,
+	assigned []assignment.WorkloadAssignment, workloads []WorkloadRow) (assignment.DeliveryID, error) {
 	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
 		BindingID: int64(bindingID), SourceDeliveryKey: sourceDeliveryKey,
 	})
 	switch {
 	case err == nil:
-		if !bytes.Equal(delivery.PayloadSha256, fingerprint[:]) {
+		version := assignment.DeliveryFingerprintVersion(delivery.PayloadFingerprintVersion)
+		expected, ok := assignment.DeliveryFingerprintForVersion(assigned, version)
+		if !ok {
+			return 0, fmt.Errorf("delivery %s of binding %d uses unsupported fingerprint version %d",
+				sourceDeliveryKey, bindingID, version)
+		}
+		if !bytes.Equal(delivery.PayloadSha256, expected[:]) {
 			return 0, fmt.Errorf("%w: delivery %s of binding %d",
 				ErrContractDrift, sourceDeliveryKey, bindingID)
 		}
@@ -68,10 +75,12 @@ func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey st
 		// resolving inside this very transaction — would otherwise leave
 		// a delivery whose work no query can ever find.
 	case errors.Is(err, sql.ErrNoRows):
+		version, fingerprint := assignment.CurrentDeliveryFingerprint(assigned)
 		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
-			BindingID:         int64(bindingID),
-			SourceDeliveryKey: sourceDeliveryKey,
-			PayloadSha256:     fingerprint[:],
+			BindingID:                 int64(bindingID),
+			SourceDeliveryKey:         sourceDeliveryKey,
+			PayloadSha256:             fingerprint[:],
+			PayloadFingerprintVersion: int64(version),
 		})
 		if err != nil {
 			return 0, err

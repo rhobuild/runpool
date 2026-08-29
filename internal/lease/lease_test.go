@@ -2,7 +2,6 @@ package lease
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -106,7 +105,9 @@ func newFixture(t *testing.T, remove Remover) *fixture {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.RecordDelivery(binding, "msg-1", sha256.Sum256([]byte("payload")),
+		if _, err := tx.RecordDelivery(binding, "msg-1", []assignment.WorkloadAssignment{{
+			SourceWorkloadKey: "payload",
+		}},
 			[]store.WorkloadRow{{SourceWorkloadKey: "job-1", TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
