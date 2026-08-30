@@ -23,9 +23,10 @@ func (t *Tx) RecordGitHubBindingMetadata(bindingID assignment.BindingID, scope, 
 
 // RecordGitHubAttemptMetadata stores the provider identifiers observed for an
 // attempt. Runner request ids are diagnostic metadata and may be zero.
-func (t *Tx) RecordGitHubAttemptMetadata(attemptID assignment.AttemptID, jobID string, runnerRequestID, workflowRunID int64) error {
+func (t *Tx) RecordGitHubAttemptMetadata(attemptID assignment.AttemptID,
+	jobID assignment.SourceWorkloadKey, runnerRequestID, workflowRunID int64) error {
 	return t.q.UpsertGitHubAttemptMetadata(t.ctx, sqlitedb.UpsertGitHubAttemptMetadataParams{
-		AttemptID: string(attemptID), JobID: jobID,
+		AttemptID: string(attemptID), JobID: string(jobID),
 		RunnerRequestID: runnerRequestID, WorkflowRunID: workflowRunID,
 	})
 }

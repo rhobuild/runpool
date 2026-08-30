@@ -158,7 +158,8 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 
 // deliverMsg persists one broker message through the production path.
 // The message id is explicit so a test can redeliver the same message.
-func (h *harness) deliverMsg(msgID int, workloads ...assignment.WorkloadAssignment) error {
+func (h *harness) deliverMsg(msgID assignment.SourceDeliveryID,
+	workloads ...assignment.WorkloadAssignment) error {
 	_, err := h.srv.supervisor.persistDelivery(h.t.Context(), h.bind, &githubactions.Message{
 		ID: msgID, Assigned: workloads,
 	})
@@ -168,7 +169,7 @@ func (h *harness) deliverMsg(msgID int, workloads ...assignment.WorkloadAssignme
 // deliver persists one fresh message.
 func (h *harness) deliver(workloads ...assignment.WorkloadAssignment) error {
 	h.msgSeq++
-	return h.deliverMsg(h.msgSeq, workloads...)
+	return h.deliverMsg(assignment.SourceDeliveryID(h.msgSeq), workloads...)
 }
 
 func (h *harness) serve() {
@@ -246,7 +247,8 @@ func (h *harness) resolveWithoutRuntime(ctx context.Context, lease store.Lease) 
 
 func demand(workloadKey, project string, run int64) assignment.WorkloadAssignment {
 	return assignment.WorkloadAssignment{
-		SourceWorkloadKey: workloadKey, TenantKey: "acme", ProjectKey: project, SourceRunID: run,
+		SourceWorkloadKey: assignment.SourceWorkloadKey(workloadKey), TenantKey: "acme",
+		ProjectKey: assignment.ProjectKey(project), SourceRunID: run,
 	}
 }
 

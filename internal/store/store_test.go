@@ -56,12 +56,12 @@ func seedBinding(t *testing.T, s *Store) assignment.BindingID {
 // ready attempt it produced — the starting point for anything that needs
 // work to lease.
 func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
-	deliveryKey string, workloadKey assignment.SourceWorkloadKey) assignment.AttemptID {
+	deliveryKey assignment.DeliveryKey, workloadKey assignment.SourceWorkloadKey) assignment.AttemptID {
 	t.Helper()
 	var id string
 	inTx(t, s, func(tx *Tx) error {
-		if _, err := tx.RecordDelivery(binding, deliveryKey, payload(deliveryKey),
-			[]WorkloadRow{{SourceWorkloadKey: string(workloadKey), TenantKey: "acme", ProjectKey: "app"}}); err != nil {
+		if _, err := tx.RecordDelivery(binding, deliveryKey, payload(string(deliveryKey)),
+			[]WorkloadRow{{SourceWorkloadKey: workloadKey, TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
 		attempt, err := tx.q.GetOpenAttemptByWorkload(tx.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
@@ -74,7 +74,7 @@ func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
 }
 
 func payload(key string) []assignment.WorkloadAssignment {
-	return []assignment.WorkloadAssignment{{SourceWorkloadKey: key}}
+	return []assignment.WorkloadAssignment{{SourceWorkloadKey: assignment.SourceWorkloadKey(key)}}
 }
 
 // A redelivery repeats the delivery byte for byte, so it lands on the
@@ -298,10 +298,10 @@ func TestOneOpenAttemptUnderContention(t *testing.T) {
 
 	results := make(chan error, 2)
 	for i := range 2 {
-		key := "msg-c" + string(rune('a'+i))
+		key := assignment.DeliveryKey("msg-c" + string(rune('a'+i)))
 		go func() {
 			results <- s.Tx(context.Background(), func(tx *Tx) error {
-				_, err := tx.RecordDelivery(binding, key, payload(key),
+				_, err := tx.RecordDelivery(binding, key, payload(string(key)),
 					[]WorkloadRow{{SourceWorkloadKey: "job-contended", TenantKey: "acme", ProjectKey: "app"}})
 				return err
 			})
@@ -726,7 +726,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	live := map[assignment.LeaseID]bool{}
 	for i, state := range []LeaseState{LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered} {
 		key := assignment.SourceWorkloadKey(fmt.Sprintf("live-%d", i))
-		attempt := seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
+		attempt := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+string(key)), "job-"+key)
 		inTx(t, s, func(tx *Tx) error {
 			lease, err := tx.LeaseAttempt(attempt, binding, "standard")
 			if err != nil {
@@ -815,7 +815,7 @@ func backdateLease(t *testing.T, s *Store, leaseID assignment.LeaseID, started, 
 // releasedLease drives one attempt to a released lease and returns both ids.
 func releasedLease(t *testing.T, s *Store, binding assignment.BindingID, key assignment.SourceWorkloadKey) (leaseID assignment.LeaseID, attemptID assignment.AttemptID) {
 	t.Helper()
-	attemptID = seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
+	attemptID = seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+string(key)), "job-"+key)
 	inTx(t, s, func(tx *Tx) error {
 		lease, err := tx.LeaseAttempt(attemptID, binding, "standard")
 		if err != nil {
@@ -1660,7 +1660,8 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	// one: an attempt in a servable state is not enough on its own.
 	leased := func(t *testing.T, name string, state AttemptState) (assignment.LeaseID, assignment.AttemptID) {
 		t.Helper()
-		id := seedAttempt(t, s, binding, "msg-"+name, assignment.SourceWorkloadKey("job-"+name))
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+name),
+			assignment.SourceWorkloadKey("job-"+name))
 		var leaseID assignment.LeaseID
 		inTx(t, s, func(tx *Tx) error {
 			lease, err := tx.LeaseAttempt(id, binding, "tier-a")
@@ -2378,7 +2379,8 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 	binding := seedBinding(t, s)
 
 	for _, r := range assignment.AllResolutions {
-		id := seedAttempt(t, s, binding, "msg-res-"+string(r), assignment.SourceWorkloadKey("job-res-"+string(r)))
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-res-"+string(r)),
+			assignment.SourceWorkloadKey("job-res-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.CancelReady(id, r)
 		}); err != nil {
@@ -2386,7 +2388,8 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 		}
 	}
 	for _, r := range AllReviewReasons {
-		id := seedAttempt(t, s, binding, "msg-rr-"+string(r), assignment.SourceWorkloadKey("job-rr-"+string(r)))
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-rr-"+string(r)),
+			assignment.SourceWorkloadKey("job-rr-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.HoldForReview(id, r)
 		}); err != nil {

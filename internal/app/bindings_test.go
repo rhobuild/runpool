@@ -437,13 +437,13 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 // it, and each binding then meets a provider that already holds its
 // scale set and refuses to adopt one it has no record of creating.
 //
-// The test that existed compared sourceBindingKey's output to
-// sourceBindingKey's output, so any change to the encoding, version
+// The test that existed compared configuredBindingKey's output to
+// configuredBindingKey's output, so any change to the encoding, version
 // included, left the suite green. The costly one was the unpinned one.
 func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
-	got := sourceBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
-	if want := assignment.SourceBindingKey("v2|app|default|runpool-standard"); got != want {
-		t.Errorf("sourceBindingKey = %q; want %q. This value keys every delivery, attempt "+
+	got := configuredBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
+	if want := assignment.ConfiguredBindingKey("v2|app|default|runpool-standard"); got != want {
+		t.Errorf("configuredBindingKey = %q; want %q. This value keys every delivery, attempt "+
 			"and lease a binding owns, and moving it is a migration rather than an encoding change",
 			got, want)
 	}
@@ -461,7 +461,7 @@ func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
 // history goes with it.
 func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	base := config.Target{ID: "app", RunnerGroup: "default"}
-	want := sourceBindingKey(base, "runpool-standard")
+	want := configuredBindingKey(base, "runpool-standard")
 
 	for name, url := range map[string]string{
 		"a plain repository URL": "https://github.com/acme/app",
@@ -472,7 +472,7 @@ func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			target := base
 			target.URL = url
-			if got := sourceBindingKey(target, "runpool-standard"); got != want {
+			if got := configuredBindingKey(target, "runpool-standard"); got != want {
 				t.Errorf("key = %q for %s; want %q — the identity moved with the address form",
 					got, url, want)
 			}
@@ -482,10 +482,10 @@ func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	// And it still separates what genuinely differs.
 	other := base
 	other.RunnerGroup = "isolated"
-	if sourceBindingKey(other, "runpool-standard") == want {
+	if configuredBindingKey(other, "runpool-standard") == want {
 		t.Error("two runner groups share one binding key")
 	}
-	if sourceBindingKey(base, "runpool-large") == want {
+	if configuredBindingKey(base, "runpool-large") == want {
 		t.Error("two scale sets share one binding key")
 	}
 }

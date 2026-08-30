@@ -250,7 +250,7 @@ func (s *bindingSupervisor) loop(ctx context.Context, b *binding) {
 			continue
 		}
 
-		advanced := s.acknowledgeDelivery(ctx, b, assignment.DeliveryID(delivery), msg.ID)
+		advanced := s.acknowledgeDelivery(ctx, b, delivery, msg.ID)
 
 		if msg.Statistics != nil {
 			// TotalAssignedJobs is the upstream scaling signal: what
@@ -287,7 +287,8 @@ func (s *bindingSupervisor) loop(ctx context.Context, b *binding) {
 // delivery already confirmed, and an acknowledgement that failed - and on
 // both of them the next poll returns this same message with no long-poll
 // delay, so the caller has to wait rather than spin.
-func (s *bindingSupervisor) acknowledgeDelivery(ctx context.Context, b *binding, deliveryID assignment.DeliveryID, messageID int) bool {
+func (s *bindingSupervisor) acknowledgeDelivery(ctx context.Context, b *binding,
+	deliveryID assignment.DeliveryID, messageID assignment.SourceDeliveryID) bool {
 	var proceed bool
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
@@ -349,7 +350,8 @@ func (s *bindingSupervisor) acknowledgeDelivery(ctx context.Context, b *binding,
 // got further resolves through its own lifecycle first, and this
 // message simply stays unacknowledged until it has — never are two
 // attempts of one workload live together.
-func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding, msg *githubactions.Message) (int64, error) {
+func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding,
+	msg *githubactions.Message) (assignment.DeliveryID, error) {
 	// Everything this message hands over: what the broker assigned plus
 	// what the session acquired from its availables.
 	admitted := make([]assignment.WorkloadAssignment, 0, len(msg.Assigned)+len(msg.Acquired))
@@ -360,7 +362,8 @@ func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding, msg
 			return 0, err
 		}
 	}
-	key := assignment.DeliveryKey(b.scaleSetID, msg.ID)
+	key := assignment.NewDeliveryKey(
+		assignment.SourceQueueID(b.scaleSetID), msg.ID)
 	// The fingerprint covers the broker's own payload only. It exists to
 	// catch the provider sending different content under a stable key, and
 	// an acquisition is not the provider changing anything — what it grants
@@ -412,12 +415,12 @@ func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding, msg
 		if err != nil {
 			return err
 		}
-		byKey := make(map[string]assignment.WorkloadAssignment, len(admitted))
+		byKey := make(map[assignment.SourceWorkloadKey]assignment.WorkloadAssignment, len(admitted))
 		for _, a := range admitted {
 			byKey[a.SourceWorkloadKey] = a
 		}
 		for _, attempt := range attempts {
-			a, ok := byKey[string(attempt.SourceWorkloadKey)]
+			a, ok := byKey[attempt.SourceWorkloadKey]
 			if !ok {
 				continue
 			}
@@ -431,7 +434,7 @@ func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding, msg
 	if err != nil {
 		return 0, err
 	}
-	return int64(deliveryID), nil
+	return deliveryID, nil
 }
 
 // recordLifecycleEvents persists the provider's started/completed
@@ -582,7 +585,7 @@ func (s *bindingSupervisor) attemptForObservation(tx *store.Tx, b *binding,
 			return "", nil
 		case perr != nil:
 			return "", perr
-		case string(provisioned.SourceWorkloadKey) == ev.SourceWorkloadKey:
+		case provisioned.SourceWorkloadKey == ev.SourceWorkloadKey:
 			// Same workload, earlier attempt: a report of the run that
 			// attempt made, arriving after a requeue opened this one in
 			// its place. The open attempt has started nothing, and

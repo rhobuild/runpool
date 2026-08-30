@@ -23,7 +23,7 @@ type Session struct {
 	mc       *scaleset.MessageSessionClient
 	initial  *Statistics
 	capacity atomic.Int64
-	lastID   int
+	lastID   assignment.SourceDeliveryID
 }
 
 func (c *Client) OpenSession(ctx context.Context, scaleSetID int, owner string) (*Session, error) {
@@ -76,7 +76,7 @@ func (s *Session) SetCapacity(n int) { s.capacity.Store(int64(n)) }
 //
 // An empty long poll returns (nil, nil).
 func (s *Session) Receive(ctx context.Context) (*Message, error) {
-	msg, err := s.mc.GetMessage(ctx, s.lastID, int(s.capacity.Load()))
+	msg, err := s.mc.GetMessage(ctx, int(s.lastID), int(s.capacity.Load()))
 	if err != nil {
 		return nil, err
 	}
@@ -140,8 +140,8 @@ func offerable(available []assignment.WorkloadAssignment) ([]int64, map[int64]as
 // Acknowledge tells the broker the message is safely handled and advances
 // the cursor. Until it is called the same message is redelivered, which
 // is what makes the persist-then-acknowledge order crash-safe.
-func (s *Session) Acknowledge(ctx context.Context, messageID int) error {
-	if err := s.mc.DeleteMessage(ctx, messageID); err != nil {
+func (s *Session) Acknowledge(ctx context.Context, messageID assignment.SourceDeliveryID) error {
+	if err := s.mc.DeleteMessage(ctx, int(messageID)); err != nil {
 		return fmt.Errorf("acknowledge message %d: %w", messageID, err)
 	}
 	s.lastID = messageID

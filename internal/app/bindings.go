@@ -45,7 +45,7 @@ type provider interface {
 // providerSession is the message-session surface consumed by one binding.
 type providerSession interface {
 	Receive(ctx context.Context) (*githubactions.Message, error)
-	Acknowledge(ctx context.Context, messageID int) error
+	Acknowledge(ctx context.Context, messageID assignment.SourceDeliveryID) error
 	SetCapacity(n int)
 	Initial() *githubactions.Statistics
 	Close(ctx context.Context) error
@@ -205,12 +205,13 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 
 			// The neutral binding row comes first: it keys the delivery,
 			// attempt and lease machinery.
-			sourceBindingKey := sourceBindingKey(target, tb.ScaleSetName)
+			configuredKey := configuredBindingKey(target, tb.ScaleSetName)
 			var bindingID assignment.BindingID
 			var knownSetID int64
 			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 				var err error
-				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID), "github_actions", sourceBindingKey); err != nil {
+				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID),
+					assignment.ProviderGitHubActions, configuredKey); err != nil {
 					return err
 				}
 				// The scale set id recorded against this binding is the
@@ -262,7 +263,7 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 	// A binding that still holds deliveries is kept: forgetting it would
 	// orphan the attempts hanging off those rows. Everything else goes,
 	// including the recorded scale set id — which is why a rename is a
-	// migration rather than an edit, and why sourceBindingKey's own
+	// migration rather than an edit, and why configuredBindingKey's own
 	// documentation says what a moved key costs.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		forgotten, err := tx.ForgetUnclaimedBindings(claimed)
@@ -279,7 +280,7 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 	return nil
 }
 
-// bindingKeyVersion prefixes the binding key, and is not the delivery
+// configuredBindingKeyFormat prefixes the binding key, and is not the delivery
 // key's version even though it reads the same today.
 //
 // Bumping it renames every binding. The new key matches no row, so a row
@@ -293,9 +294,9 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 // That is a migration, not an encoding change. Anything that makes this
 // value move deserves the same reading as renaming a targets[].id, which
 // docs/adrs/2026-08-17-target-hosts-and-scopes.md records.
-const bindingKeyVersion = "v2"
+const configuredBindingKeyFormat = "v2"
 
-// sourceBindingKey is a binding's durable identity: the row every
+// configuredBindingKey is a binding's durable identity: the row every
 // delivery, attempt and lease hangs off.
 //
 // It is built from what an operator configured and never from a parsed
@@ -308,9 +309,9 @@ const bindingKeyVersion = "v2"
 // adopt a set it has no record of creating, which is a refusal before it
 // is an adoption. Scope and canonical URL still travel, in the adapter's
 // own metadata, which is where provider identity belongs.
-func sourceBindingKey(target config.Target, scaleSetName string) assignment.SourceBindingKey {
-	return assignment.SourceBindingKey(fmt.Sprintf("%s|%s|%s|%s",
-		bindingKeyVersion, target.ID, target.RunnerGroup, scaleSetName))
+func configuredBindingKey(target config.Target, scaleSetName string) assignment.ConfiguredBindingKey {
+	return assignment.ConfiguredBindingKey(fmt.Sprintf("%s|%s|%s|%s",
+		configuredBindingKeyFormat, target.ID, target.RunnerGroup, scaleSetName))
 }
 
 // ensureScaleSet creates or adopts this binding's scale set and records

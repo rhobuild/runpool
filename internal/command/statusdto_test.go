@@ -30,7 +30,7 @@ func TestStatusDocumentShape(t *testing.T) {
 	}
 	body := string(raw)
 
-	if !strings.Contains(body, `"api_version":"v1"`) {
+	if !strings.Contains(body, `"api_version":"v2"`) {
 		t.Errorf("document is not versioned: %s", body)
 	}
 	if !strings.Contains(body, `"manual_review_total":0`) {
@@ -75,7 +75,7 @@ func TestStatusDocumentShape(t *testing.T) {
 				nulls, len(nullable), body)
 		}
 	}
-	for _, upper := range []string{"InstanceID", "SourceBindingKey", "LeaseID", "AttemptID"} {
+	for _, upper := range []string{"InstanceID", "ConfiguredBindingKey", "LeaseID", "AttemptID"} {
 		if strings.Contains(body, upper) {
 			t.Errorf("persistence field name %q leaked into the reporting document", upper)
 		}
@@ -174,7 +174,7 @@ func TestSchedulingStatusCountsEveryUnreleasedLease(t *testing.T) {
 		{ID: "active", TierID: "large", State: store.LeaseCleaning},
 		{ID: "released", TierID: "small", State: store.LeaseReleased},
 	}
-	got := schedulingStatus(cfg, leases, map[int64]int{7: 3}, "")
+	got := schedulingStatus(cfg, leases, map[assignment.BindingID]int{7: 3}, "")
 	if got.Mode != "global" || got.Active != 1 || got.Available != 0 || got.EffectiveParallelism != 1 {
 		t.Fatalf("scheduling = %+v", got)
 	}
@@ -211,7 +211,7 @@ func TestReleasedTotalIsTheStoresCountNotTheArrayLength(t *testing.T) {
 // is the shape a stuck binding takes, and it was invisible.
 func TestQueuedWorkIsReported(t *testing.T) {
 	cfg := &config.Config{Tiers: []config.Tier{{ID: "standard", Parallelism: 2}}}
-	got := schedulingStatus(cfg, nil, map[int64]int{1: 4, 2: 2}, "")
+	got := schedulingStatus(cfg, nil, map[assignment.BindingID]int{1: 4, 2: 2}, "")
 	if got.Queued != 6 {
 		t.Errorf("queued = %d; want the sum across bindings, 6", got.Queued)
 	}
@@ -357,9 +357,11 @@ func TestStatusBoundsManualReviewAndPointsToTheNextPage(t *testing.T) {
 		rows := make([]store.WorkloadRow, heldAttempts)
 		for index := range heldAttempts {
 			key := fmt.Sprintf("job-%03d", index)
-			workloads[index] = assignment.WorkloadAssignment{SourceWorkloadKey: key}
+			workloads[index] = assignment.WorkloadAssignment{
+				SourceWorkloadKey: assignment.SourceWorkloadKey(key),
+			}
 			rows[index] = store.WorkloadRow{
-				SourceWorkloadKey: key, TenantKey: "acme", ProjectKey: "app",
+				SourceWorkloadKey: assignment.SourceWorkloadKey(key), TenantKey: "acme", ProjectKey: "app",
 			}
 		}
 		if _, err := tx.RecordDelivery(bindingID, "status-pagination", workloads, rows); err != nil {

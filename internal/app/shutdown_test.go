@@ -25,10 +25,10 @@ type gatedSession struct {
 	key     string
 }
 
-func (g *gatedSession) Receive(context.Context) (*githubactions.Message, error) { return nil, nil }
-func (g *gatedSession) Acknowledge(context.Context, int) error                  { return nil }
-func (g *gatedSession) SetCapacity(int)                                         {}
-func (g *gatedSession) Initial() *githubactions.Statistics                      { return nil }
+func (g *gatedSession) Receive(context.Context) (*githubactions.Message, error)        { return nil, nil }
+func (g *gatedSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (g *gatedSession) SetCapacity(int)                                                {}
+func (g *gatedSession) Initial() *githubactions.Statistics                             { return nil }
 func (g *gatedSession) Close(ctx context.Context) error {
 	g.started <- g.key
 	select {

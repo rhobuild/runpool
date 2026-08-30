@@ -18,10 +18,12 @@ import (
 type capacityRecorder struct{ capacity int }
 
 func (r *capacityRecorder) Receive(context.Context) (*githubactions.Message, error) { return nil, nil }
-func (r *capacityRecorder) Acknowledge(context.Context, int) error                  { return nil }
-func (r *capacityRecorder) SetCapacity(capacity int)                                { r.capacity = capacity }
-func (r *capacityRecorder) Initial() *githubactions.Statistics                      { return nil }
-func (r *capacityRecorder) Close(context.Context) error                             { return nil }
+func (r *capacityRecorder) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
+	return nil
+}
+func (r *capacityRecorder) SetCapacity(capacity int)           { r.capacity = capacity }
+func (r *capacityRecorder) Initial() *githubactions.Statistics { return nil }
+func (r *capacityRecorder) Close(context.Context) error        { return nil }
 
 // TestCreditsRebuildFromAdoptedCapsules: after a restart the allocator
 // starts empty, and reconciliation is what puts the credits back. A

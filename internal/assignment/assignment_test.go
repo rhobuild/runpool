@@ -148,16 +148,17 @@ func FuzzCanonicalFingerprintFieldBoundaries(f *testing.F) {
 	f.Add("a|b", "x\ny", "", "α,β")
 	f.Fuzz(func(t *testing.T, workload, tenant, project, label string) {
 		left := []WorkloadAssignment{{
-			SourceWorkloadKey: workload, TenantKey: tenant, ProjectKey: project,
-			Labels: []string{label},
+			SourceWorkloadKey: SourceWorkloadKey(workload), TenantKey: TenantKey(tenant),
+			ProjectKey: ProjectKey(project),
+			Labels:     []string{label},
 		}}
 		fields := []string{workload, tenant, project, label}
 		for i := range fields {
 			rightFields := append([]string(nil), fields...)
 			rightFields[i] += "\x00"
 			right := []WorkloadAssignment{{
-				SourceWorkloadKey: rightFields[0], TenantKey: rightFields[1],
-				ProjectKey: rightFields[2], Labels: []string{rightFields[3]},
+				SourceWorkloadKey: SourceWorkloadKey(rightFields[0]), TenantKey: TenantKey(rightFields[1]),
+				ProjectKey: ProjectKey(rightFields[2]), Labels: []string{rightFields[3]},
 			}}
 			if bytes.Equal(canonicalFingerprintPreimage(left), canonicalFingerprintPreimage(right)) {
 				t.Fatalf("changing field %d did not change the canonical encoding", i)
@@ -167,8 +168,8 @@ func FuzzCanonicalFingerprintFieldBoundaries(f *testing.F) {
 }
 
 func TestDeliveryKeyIsVersioned(t *testing.T) {
-	if got := DeliveryKey(7, 41); got != "v2|7|41" {
-		t.Errorf("DeliveryKey(7, 41) = %q; the versioned encoding is the stored identity", got)
+	if got := NewDeliveryKey(7, 41); got != "v2|7|41" {
+		t.Errorf("NewDeliveryKey(7, 41) = %q; the versioned encoding is the stored identity", got)
 	}
 }
 
@@ -178,7 +179,7 @@ func TestDeliveryKeyIsVersioned(t *testing.T) {
 // delivery the binding already recorded and acknowledged from the old
 // one, and the store would deduplicate away work it has never seen.
 func TestDeliveryKeySeparatesQueues(t *testing.T) {
-	if DeliveryKey(7, 41) == DeliveryKey(8, 41) {
+	if NewDeliveryKey(7, 41) == NewDeliveryKey(8, 41) {
 		t.Error("two queues issuing the same delivery id produced one key; the second delivery would be deduplicated away")
 	}
 }

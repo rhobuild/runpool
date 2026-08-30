@@ -14,7 +14,7 @@ import (
 // changes only with its version string. Field names are snake_case,
 // collections are always arrays — an empty one is `[]`, never null,
 // because consumers branch on length, not on presence.
-const statusAPIVersion = "v1"
+const statusAPIVersion = "v2"
 
 // statusHead is what both forms of the document carry, and the whole of
 // the pre-serve one.
@@ -133,14 +133,13 @@ type pressureDTO struct {
 	MeasuredAt   string `json:"measured_at"`
 }
 
-// bindingDTO reports one configured source of work. It is provider
-// neutral by design: source_binding_key is the provider's own identity,
-// versioned and opaque, and a consumer that needs to parse it is reading
-// the wrong document.
+// bindingDTO reports one configured source of work. It is provider neutral:
+// configured_binding_key is derived from operator configuration, versioned,
+// and opaque. Provider-issued metadata belongs to its adapter.
 type bindingDTO struct {
-	TargetID         string `json:"target_id"`
-	ProviderKind     string `json:"provider_kind"`
-	SourceBindingKey string `json:"source_binding_key"`
+	TargetID             string `json:"target_id"`
+	ProviderKind         string `json:"provider_kind"`
+	ConfiguredBindingKey string `json:"configured_binding_key"`
 	// LastContactAt is when a provider call for this binding last
 	// succeeded, and LastError what it cannot do now. Both are reported
 	// because neither answers alone: an instance holding no leases is
@@ -228,18 +227,18 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 	}
 	for _, b := range snap.Bindings {
 		doc.Bindings = append(doc.Bindings, bindingDTO{
-			TargetID: string(b.TargetID), ProviderKind: b.ProviderKind,
-			SourceBindingKey: string(b.SourceBindingKey),
-			LastContactAt:    rfc3339(b.Contact.LastContact),
-			LastError:        b.Contact.LastError,
-			LastErrorAt:      rfc3339(b.Contact.LastErrorAt),
+			TargetID: string(b.TargetID), ProviderKind: string(b.ProviderKind),
+			ConfiguredBindingKey: string(b.ConfiguredBindingKey),
+			LastContactAt:        rfc3339(b.Contact.LastContact),
+			LastError:            b.Contact.LastError,
+			LastErrorAt:          rfc3339(b.Contact.LastErrorAt),
 		})
 	}
 	for _, l := range snap.Leases {
 		attempt := snap.Attempts[l.ID]
 		project := ""
 		if attempt.TenantKey != "" || attempt.ProjectKey != "" {
-			project = attempt.TenantKey + "/" + attempt.ProjectKey
+			project = string(attempt.TenantKey) + "/" + string(attempt.ProjectKey)
 		}
 		lease := leaseDTO{
 			ID:          string(l.ID),
@@ -287,7 +286,8 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 	return doc
 }
 
-func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64]int, shippedCapsule string) *schedulingDTO {
+func schedulingStatus(cfg *config.Config, leases []store.Lease,
+	queued map[assignment.BindingID]int, shippedCapsule string) *schedulingDTO {
 	activeByTier := make(map[assignment.TierID]int, len(cfg.Tiers))
 	active := 0
 	for _, lease := range leases {

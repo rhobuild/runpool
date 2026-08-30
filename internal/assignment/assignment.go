@@ -24,11 +24,11 @@ type WorkloadAssignment struct {
 	// itself, opaque and non-empty. It is the only field the domain
 	// deduplicates on: grouping identities (a run, a batch) hold many
 	// workloads, and keying on one of those collapses siblings.
-	SourceWorkloadKey string
+	SourceWorkloadKey SourceWorkloadKey
 	// TenantKey and ProjectKey locate the workload's owner — for cache
 	// scoping and diagnostics, never for identity.
-	TenantKey  string
-	ProjectKey string
+	TenantKey  TenantKey
+	ProjectKey ProjectKey
 	// SourceRequestID is the provider's attempt correlation number as
 	// observed. Zero is a legitimate value; it is never a key.
 	SourceRequestID int64
@@ -72,11 +72,11 @@ func (a WorkloadAssignment) Validate() error {
 // creating a second set. Recoverable.
 //
 // Bumping the binding key's is a rename of every binding. See
-// bindingKeyVersion in internal/app, which says what that costs, and do not treat the
-// two as one value because they read alike.
+// configuredBindingKeyFormat in internal/app, which says what that costs, and
+// do not treat the two as one value because they read alike.
 const DeliveryKeyVersion = "v2"
 
-// DeliveryKey encodes a provider's delivery identity as the opaque,
+// NewDeliveryKey encodes a provider's delivery identity as the opaque,
 // versioned key the store deduplicates on. The version prefix is what
 // lets the encoding evolve without two encodings of one delivery ever
 // comparing equal.
@@ -86,8 +86,8 @@ const DeliveryKeyVersion = "v2"
 // recreated starts numbering again, and the binding outlives that: keyed
 // on the id alone, a fresh message can collide with a delivery this
 // binding already recorded and confirmed.
-func DeliveryKey(sourceQueueID, sourceID int) string {
-	return fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID)
+func NewDeliveryKey(sourceQueueID SourceQueueID, sourceID SourceDeliveryID) DeliveryKey {
+	return DeliveryKey(fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID))
 }
 
 // DeliveryFingerprintVersion is the persisted selector for a canonical
@@ -164,9 +164,9 @@ func canonicalFingerprintPreimage(assignments []WorkloadAssignment) []byte {
 		sort.Strings(labels)
 
 		var record []byte
-		record = appendLengthPrefixedString(record, a.SourceWorkloadKey)
-		record = appendLengthPrefixedString(record, a.TenantKey)
-		record = appendLengthPrefixedString(record, a.ProjectKey)
+		record = appendLengthPrefixedString(record, string(a.SourceWorkloadKey))
+		record = appendLengthPrefixedString(record, string(a.TenantKey))
+		record = appendLengthPrefixedString(record, string(a.ProjectKey))
 		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRequestID))
 		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRunID))
 		record = binary.BigEndian.AppendUint64(record, uint64(len(labels)))
@@ -240,9 +240,9 @@ var AllResolutions = []Resolution{
 // runtime cannot be correlated to the attempt it belongs to, which is
 // how a cancellation aimed at an old attempt could hit a new one.
 type WorkloadLifecycleEvent struct {
-	SourceWorkloadKey string
-	TenantKey         string
-	ProjectKey        string
+	SourceWorkloadKey SourceWorkloadKey
+	TenantKey         TenantKey
+	ProjectKey        ProjectKey
 	// RuntimeName identifies the provider-side runtime the observation
 	// names, opaque to the domain. It is the handle a late report
 	// correlates by, which is why the workload key travels beside it

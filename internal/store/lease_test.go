@@ -17,7 +17,8 @@ import (
 func seedLease(t *testing.T, s *Store, key string) Lease {
 	t.Helper()
 	binding := seedBinding(t, s)
-	attempt := seedAttempt(t, s, binding, "msg-"+key, assignment.SourceWorkloadKey("job-"+key))
+	attempt := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+key),
+		assignment.SourceWorkloadKey("job-"+key))
 	var lease Lease
 	inTx(t, s, func(tx *Tx) error {
 		var err error

@@ -376,8 +376,8 @@ func TestReportingShapesBeforeTheFirstServe(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("status --json: %v", err)
 	}
-	if doc["api_version"] != "v1" {
-		t.Errorf("api_version = %v; want v1", doc["api_version"])
+	if doc["api_version"] != "v2" {
+		t.Errorf("api_version = %v; want v2", doc["api_version"])
 	}
 	if served, ok := doc["served"].(bool); !ok || served {
 		t.Errorf("served = %v; the pre-serve form carries served=false", doc["served"])

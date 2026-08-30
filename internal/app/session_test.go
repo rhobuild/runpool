@@ -61,7 +61,7 @@ func (s *stubSession) Receive(ctx context.Context) (*githubactions.Message, erro
 		s.mu.Lock()
 		id := s.receives
 		s.mu.Unlock()
-		return &githubactions.Message{ID: id, AcquireError: s.offerErr}, nil
+		return &githubactions.Message{ID: assignment.SourceDeliveryID(id), AcquireError: s.offerErr}, nil
 	}
 	if s.block {
 		<-ctx.Done()
@@ -70,9 +70,11 @@ func (s *stubSession) Receive(ctx context.Context) (*githubactions.Message, erro
 	return nil, s.fail
 }
 
-func (s *stubSession) Acknowledge(context.Context, int) error { return s.ackErr }
-func (s *stubSession) SetCapacity(int)                        {}
-func (s *stubSession) Initial() *githubactions.Statistics     { return s.backlog }
+func (s *stubSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
+	return s.ackErr
+}
+func (s *stubSession) SetCapacity(int)                    {}
+func (s *stubSession) Initial() *githubactions.Statistics { return s.backlog }
 
 func (s *stubSession) Close(context.Context) error {
 	s.mu.Lock()
@@ -209,7 +211,7 @@ func (s *intermittentSession) Receive(ctx context.Context) (*githubactions.Messa
 	case n <= 2*perRun+1:
 		return nil, errors.New("transient")
 	case n == 2*perRun+2:
-		return &githubactions.Message{ID: n}, nil // a message, nothing to acquire
+		return &githubactions.Message{ID: assignment.SourceDeliveryID(n)}, nil // a message, nothing to acquire
 	case n <= 3*perRun+2:
 		return nil, errors.New("transient")
 	}
@@ -218,10 +220,12 @@ func (s *intermittentSession) Receive(ctx context.Context) (*githubactions.Messa
 	return nil, ctx.Err()
 }
 
-func (s *intermittentSession) Acknowledge(context.Context, int) error { return nil }
-func (s *intermittentSession) SetCapacity(int)                        {}
-func (s *intermittentSession) Initial() *githubactions.Statistics     { return nil }
-func (s *intermittentSession) Close(context.Context) error            { return nil }
+func (s *intermittentSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
+	return nil
+}
+func (s *intermittentSession) SetCapacity(int)                    {}
+func (s *intermittentSession) Initial() *githubactions.Statistics { return nil }
+func (s *intermittentSession) Close(context.Context) error        { return nil }
 
 // TestAFailedReopenDoesNotKeepTheDeadSession. Recovery can fail: the
 // broker is unreachable, or still holds the session that was just closed.
@@ -574,10 +578,10 @@ func (s *driftingSession) Receive(context.Context) (*githubactions.Message, erro
 	}, nil
 }
 
-func (s *driftingSession) Acknowledge(context.Context, int) error { return nil }
-func (s *driftingSession) SetCapacity(int)                        {}
-func (s *driftingSession) Initial() *githubactions.Statistics     { return nil }
-func (s *driftingSession) Close(context.Context) error            { return nil }
+func (s *driftingSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (s *driftingSession) SetCapacity(int)                                                {}
+func (s *driftingSession) Initial() *githubactions.Statistics                             { return nil }
+func (s *driftingSession) Close(context.Context) error                                    { return nil }
 
 // TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy.
 //

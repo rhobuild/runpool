@@ -34,9 +34,9 @@ var (
 // WorkloadRow is the assignment content a delivery carries for one
 // workload, in the domain's neutral terms.
 type WorkloadRow struct {
-	SourceWorkloadKey string
-	TenantKey         string
-	ProjectKey        string
+	SourceWorkloadKey assignment.SourceWorkloadKey
+	TenantKey         assignment.TenantKey
+	ProjectKey        assignment.ProjectKey
 }
 
 // RecordDelivery persists one delivery and its attempts idempotently.
@@ -52,10 +52,10 @@ type WorkloadRow struct {
 //     delivery returns ErrOpenAttemptExists: the caller supersedes or
 //     resolves the predecessor first, in the same transaction, and
 //     retries.
-func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey string,
+func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey assignment.DeliveryKey,
 	assigned []assignment.WorkloadAssignment, workloads []WorkloadRow) (assignment.DeliveryID, error) {
 	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
-		BindingID: int64(bindingID), SourceDeliveryKey: sourceDeliveryKey,
+		BindingID: int64(bindingID), SourceDeliveryKey: string(sourceDeliveryKey),
 	})
 	switch {
 	case err == nil:
@@ -78,7 +78,7 @@ func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey st
 		version, fingerprint := assignment.CurrentDeliveryFingerprint(assigned)
 		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
 			BindingID:                 int64(bindingID),
-			SourceDeliveryKey:         sourceDeliveryKey,
+			SourceDeliveryKey:         string(sourceDeliveryKey),
 			PayloadSha256:             fingerprint[:],
 			PayloadFingerprintVersion: int64(version),
 		})
@@ -115,9 +115,9 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 		ID:                id,
 		DeliveryID:        delivery.ID,
 		BindingID:         delivery.BindingID,
-		SourceWorkloadKey: w.SourceWorkloadKey,
-		TenantKey:         w.TenantKey,
-		ProjectKey:        w.ProjectKey,
+		SourceWorkloadKey: string(w.SourceWorkloadKey),
+		TenantKey:         string(w.TenantKey),
+		ProjectKey:        string(w.ProjectKey),
 	})
 	if err != nil {
 		// The partial unique index rejects a second open attempt for the

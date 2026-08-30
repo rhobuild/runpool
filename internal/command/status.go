@@ -175,7 +175,7 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	now := time.Now()
 	for _, b := range snap.Bindings {
 		fmt.Fprintf(streams.Out, "  %-14s %-16s %s\n",
-			b.TargetID, b.ProviderKind, b.SourceBindingKey)
+			b.TargetID, b.ProviderKind, b.ConfiguredBindingKey)
 		fmt.Fprintf(streams.Out, "  %-14s %s\n", "", providerReach(b.Contact, now))
 	}
 
@@ -289,7 +289,7 @@ func renderLeases(w io.Writer, live []store.Lease, snap store.Snapshot) {
 		resources := snap.Resources[l.ID]
 		project := ""
 		if a, ok := snap.Attempts[l.ID]; ok {
-			project = a.TenantKey + "/" + a.ProjectKey
+			project = string(a.TenantKey) + "/" + string(a.ProjectKey)
 		}
 		fmt.Fprintf(w, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))
 		if l.State != store.LeaseQuarantined {

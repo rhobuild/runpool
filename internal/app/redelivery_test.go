@@ -363,10 +363,10 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.inStore(func(tx *store.Tx) error {
-		if _, err := tx.AckRequested(assignment.DeliveryID(delivery)); err != nil {
+		if _, err := tx.AckRequested(delivery); err != nil {
 			return err
 		}
-		return tx.AckConfirmed(assignment.DeliveryID(delivery))
+		return tx.AckConfirmed(delivery)
 	})
 
 	// The broker sends it again, now carrying the cancellation. One full
@@ -442,10 +442,10 @@ func (s *replaySession) Receive(ctx context.Context) (*githubactions.Message, er
 	return nil, ctx.Err()
 }
 
-func (s *replaySession) Acknowledge(context.Context, int) error { return nil }
-func (s *replaySession) SetCapacity(int)                        {}
-func (s *replaySession) Initial() *githubactions.Statistics     { return nil }
-func (s *replaySession) Close(context.Context) error            { return nil }
+func (s *replaySession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (s *replaySession) SetCapacity(int)                                                {}
+func (s *replaySession) Initial() *githubactions.Statistics                             { return nil }
+func (s *replaySession) Close(context.Context) error                                    { return nil }
 
 // cancellingSession hands over one message and cancels the loop from
 // inside the acknowledgement — the shape of a shutdown that lands
@@ -471,7 +471,7 @@ func (s *cancellingSession) Receive(ctx context.Context) (*githubactions.Message
 	return nil, ctx.Err()
 }
 
-func (s *cancellingSession) Acknowledge(context.Context, int) error {
+func (s *cancellingSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
 	s.cancel()
 	return nil
 }
@@ -631,7 +631,7 @@ func TestAFailedAcknowledgementStaysRetryable(t *testing.T) {
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
 		var err error
 		delivery, err = tx.RecordDelivery(h.bind.bindingID,
-			assignment.DeliveryKey(h.bind.scaleSetID, 701), nil, nil)
+			assignment.NewDeliveryKey(assignment.SourceQueueID(h.bind.scaleSetID), 701), nil, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

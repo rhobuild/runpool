@@ -59,8 +59,8 @@ type Attempt struct {
 	DeliveryID        assignment.DeliveryID
 	BindingID         assignment.BindingID
 	SourceWorkloadKey assignment.SourceWorkloadKey
-	TenantKey         string
-	ProjectKey        string
+	TenantKey         assignment.TenantKey
+	ProjectKey        assignment.ProjectKey
 	State             AttemptState
 	Evidence          Evidence
 	ReviewReason      ReviewReason
@@ -101,8 +101,8 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		DeliveryID:        assignment.DeliveryID(r.DeliveryID),
 		BindingID:         assignment.BindingID(r.BindingID),
 		SourceWorkloadKey: assignment.SourceWorkloadKey(r.SourceWorkloadKey),
-		TenantKey:         r.TenantKey,
-		ProjectKey:        r.ProjectKey,
+		TenantKey:         assignment.TenantKey(r.TenantKey),
+		ProjectKey:        assignment.ProjectKey(r.ProjectKey),
 		State:             AttemptState(r.State),
 		Evidence:          Evidence(r.ExecutionEvidence),
 		ReviewReason:      ReviewReason(r.ReviewReason.String),
@@ -628,10 +628,10 @@ func (t *Tx) AckUncertain(deliveryID assignment.DeliveryID) error {
 }
 
 // EnsureBinding records the neutral binding identity and returns its id.
-func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind string,
-	sourceBindingKey assignment.SourceBindingKey) (assignment.BindingID, error) {
+func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind assignment.ProviderKind,
+	configuredBindingKey assignment.ConfiguredBindingKey) (assignment.BindingID, error) {
 	b, err := t.q.InsertProviderBinding(t.ctx, sqlitedb.InsertProviderBindingParams{
-		TargetID: string(targetID), ProviderKind: providerKind, SourceBindingKey: string(sourceBindingKey),
+		TargetID: string(targetID), ProviderKind: string(providerKind), SourceBindingKey: string(configuredBindingKey),
 	})
 	if err != nil {
 		return 0, err
@@ -644,7 +644,7 @@ func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind string,
 // failure leaves the last success alone, so a report can say how long a
 // binding has been unable to reach anything.
 type ProviderContact struct {
-	BindingID   int64
+	BindingID   assignment.BindingID
 	LastContact time.Time
 	LastError   string
 	LastErrorAt time.Time
@@ -671,7 +671,7 @@ func (t *Tx) RecordProviderFailure(bindingID assignment.BindingID, at time.Time,
 // that has never reached its provider and never failed either, which is
 // the shape of one that has not run yet — and stays a zero time.
 func providerContactFromRow(bindingID, contactMs int64, lastError string, errorMs int64) ProviderContact {
-	c := ProviderContact{BindingID: bindingID, LastError: lastError}
+	c := ProviderContact{BindingID: assignment.BindingID(bindingID), LastError: lastError}
 	if contactMs > 0 {
 		c.LastContact = time.UnixMilli(contactMs).UTC()
 	}

@@ -63,7 +63,7 @@ func (e *leaseExecutor) createLease(ctx context.Context, b *binding, attempt sto
 		return store.Lease{}, err
 	}
 	e.log.Info("lease reserved", "binding", b.key, "lease", lease.ID,
-		"project", attempt.TenantKey+"/"+attempt.ProjectKey, "attempt", attempt.ID)
+		"project", string(attempt.TenantKey)+"/"+string(attempt.ProjectKey), "attempt", attempt.ID)
 	return lease, nil
 }
 

@@ -37,17 +37,30 @@ type (
 	TargetID string
 	// TierID is the operator's name for one envelope of resources.
 	TierID string
+	// TenantKey identifies the provider-side tenant that owns a workload.
+	TenantKey string
+	// ProjectKey identifies the workload's project within its tenant.
+	ProjectKey string
+	// ProviderKind selects the adapter responsible for a binding.
+	ProviderKind string
 	// SourceWorkloadKey is the provider's identity for a workload,
 	// opaque here.
 	SourceWorkloadKey string
-	// SourceBindingKey is a binding's durable identity — the value the
-	// binding row is keyed by. It survives the process.
-	SourceBindingKey string
+	// SourceQueueID identifies the provider queue that issued a delivery.
+	SourceQueueID int64
+	// SourceDeliveryID identifies a delivery within its provider queue.
+	SourceDeliveryID int64
+	// DeliveryKey is the encoded durable identity of one provider delivery.
+	DeliveryKey string
+	// ConfiguredBindingKey is a binding's durable identity derived from
+	// operator configuration. It survives the process but is not an
+	// identifier issued by the provider.
+	ConfiguredBindingKey string
 	// BindingKey is a binding's in-memory name, derived from
 	// configuration on every start and never written down. It is used
 	// for allocator accounting and log correlation.
 	//
-	// It and SourceBindingKey have shared one English name for long
+	// It and ConfiguredBindingKey have shared one English name for long
 	// enough that separating them is half the reason this file exists:
 	// one keys rows that outlive the process, the other keys a map that
 	// does not.
@@ -60,3 +73,5 @@ type (
 	// ResourceIntentID is one planned Docker object's row id.
 	ResourceIntentID int64
 )
+
+const ProviderGitHubActions ProviderKind = "github_actions"

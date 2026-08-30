@@ -122,7 +122,7 @@ func TestDescribeNamesEveryObjectItWouldTake(t *testing.T) {
 // backlog and reports zero — so the confirmation an operator reads before
 // the purge is the one shape where the number has to be right.
 func TestQueuedAttemptsAreVisibleBeforeAPurge(t *testing.T) {
-	backlog := store.Snapshot{Queued: map[int64]int{1: 4, 2: 2}}
+	backlog := store.Snapshot{Queued: map[assignment.BindingID]int{1: 4, 2: 2}}
 
 	if got := liveLeaseCount(backlog); got != 0 {
 		t.Fatalf("liveLeaseCount = %d; this case is the one where no lease is live", got)
