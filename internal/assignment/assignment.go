@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -220,16 +221,16 @@ const (
 	ResolutionSuperseded Resolution = "superseded"
 )
 
-// AllResolutions is every decision Runpool can reach, for the tests that
-// hold the vocabulary against the schema and against the machine that
-// produces it.
-var AllResolutions = []Resolution{
+var resolutions = []Resolution{
 	ResolutionCompletedObserved,
 	ResolutionStartedObserved,
 	ResolutionMayHaveExecuted,
 	ResolutionRemoteCanceled,
 	ResolutionSuperseded,
 }
+
+// Resolutions returns every durable disposition Runpool can reach.
+func Resolutions() []Resolution { return slices.Clone(resolutions) }
 
 // WorkloadLifecycleEvent is a provider observation about one workload.
 // It carries the workload's own key: an event that names only the
@@ -322,7 +323,7 @@ func (o ExecutionObservation) Establishes() bool {
 	}
 }
 
-// AllExecutionObservations is every value of this vocabulary, which is
+// executionObservations contains every value of this vocabulary, which is
 // one more than the observations: NoObservation is a value and not an
 // observation, and a switch that leaves it out decides for it by
 // omission -- in the one function whose contract is that nothing is
@@ -333,7 +334,7 @@ func (o ExecutionObservation) Establishes() bool {
 // whatever branch is last, which reads as a decision and is not one. A
 // value added here without a home elsewhere is what a totality check
 // has to fail on.
-var AllExecutionObservations = []ExecutionObservation{
+var executionObservations = []ExecutionObservation{
 	NoObservation,
 	ObservedCreated,
 	ObservedNeverStarted,
@@ -341,4 +342,10 @@ var AllExecutionObservations = []ExecutionObservation{
 	ObservedExited,
 	ObservedAbsent,
 	ObservedUnavailable,
+}
+
+// ExecutionObservations returns every runtime-observation value, including
+// NoObservation.
+func ExecutionObservations() []ExecutionObservation {
+	return slices.Clone(executionObservations)
 }

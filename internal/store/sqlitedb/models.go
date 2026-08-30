@@ -30,7 +30,7 @@ type AttemptEvent struct {
 	AttemptID      string
 	IdempotencyKey string
 	Kind           string
-	DetailJson     string
+	DetailJSON     string
 	CreatedAt      int64
 }
 
@@ -92,7 +92,7 @@ type GithubActionsAttemptMetadatum struct {
 type GithubActionsBindingMetadatum struct {
 	BindingID    int64
 	Scope        string
-	CanonicalUrl string
+	CanonicalURL string
 	RunnerGroup  string
 	ScaleSetName string
 	ScaleSetID   sql.NullInt64

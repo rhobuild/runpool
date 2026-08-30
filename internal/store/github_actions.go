@@ -15,7 +15,7 @@ import (
 // binding, one row per neutral binding.
 func (t *Tx) RecordGitHubBindingMetadata(bindingID assignment.BindingID, scope, canonicalURL, runnerGroup, scaleSetName string, scaleSetID int64) error {
 	return t.q.UpsertGitHubBindingMetadata(t.ctx, sqlitedb.UpsertGitHubBindingMetadataParams{
-		BindingID: int64(bindingID), Scope: scope, CanonicalUrl: canonicalURL,
+		BindingID: int64(bindingID), Scope: scope, CanonicalURL: canonicalURL,
 		RunnerGroup: runnerGroup, ScaleSetName: scaleSetName,
 		ScaleSetID: sql.NullInt64{Int64: scaleSetID, Valid: scaleSetID > 0},
 	})
@@ -52,7 +52,7 @@ func (t *Tx) GitHubBindings() ([]GitHubBinding, error) {
 	out := make([]GitHubBinding, len(rows))
 	for i, row := range rows {
 		out[i] = GitHubBinding{
-			BindingID: row.BindingID, Scope: row.Scope, CanonicalURL: row.CanonicalUrl,
+			BindingID: row.BindingID, Scope: row.Scope, CanonicalURL: row.CanonicalURL,
 			RunnerGroup: row.RunnerGroup, ScaleSetName: row.ScaleSetName,
 			ScaleSetID: row.ScaleSetID.Int64,
 		}

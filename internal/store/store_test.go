@@ -536,7 +536,7 @@ func TestLeaseAttemptClaimsExactlyOnce(t *testing.T) {
 		t.Fatalf("second lease of the same attempt = %v; want ErrConflict", err)
 	}
 	inTx(t, s, func(tx *Tx) error {
-		leases, err := tx.LeasesInStates(AllLeaseStates...)
+		leases, err := tx.LeasesInStates(LeaseStates()...)
 		if err != nil {
 			return err
 		}
@@ -1750,7 +1750,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	for _, c := range cases {
 		decided[c.state] = true
 	}
-	for _, state := range AllAttemptStates {
+	for _, state := range AttemptStates() {
 		if !decided[state] {
 			t.Errorf("an attempt can be %q and this test decides nothing about starting it", state)
 		}
@@ -1992,8 +1992,9 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 	}
 	constraint := body[start : start+strings.Index(body[start:], "))")]
 
-	listed := make(map[AttemptState]bool, len(AllAttemptStates))
-	for _, s := range AllAttemptStates {
+	states := AttemptStates()
+	listed := make(map[AttemptState]bool, len(states))
+	for _, s := range states {
 		listed[s] = true
 	}
 	found := 0
@@ -2003,12 +2004,12 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 		}
 		found++
 		if !listed[AttemptState(state)] {
-			t.Errorf("the schema allows attempt state %q and AllAttemptStates omits it", state)
+			t.Errorf("the schema allows attempt state %q and AttemptStates omits it", state)
 		}
 	}
-	if found != len(AllAttemptStates) {
-		t.Errorf("the constraint names %d states and AllAttemptStates has %d; "+
-			"one of them lists something the other does not", found, len(AllAttemptStates))
+	if found != len(states) {
+		t.Errorf("the constraint names %d states and AttemptStates has %d; "+
+			"one of them lists something the other does not", found, len(states))
 	}
 }
 
@@ -2481,7 +2482,7 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
 
-	for _, r := range assignment.AllResolutions {
+	for _, r := range assignment.Resolutions() {
 		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-res-"+string(r)),
 			assignment.SourceWorkloadKey("job-res-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
@@ -2490,7 +2491,7 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 			t.Errorf("the column refuses the resolution %q the machine produces: %v", r, err)
 		}
 	}
-	for _, r := range AllReviewReasons {
+	for _, r := range ReviewReasons() {
 		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-rr-"+string(r)),
 			assignment.SourceWorkloadKey("job-rr-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
@@ -2521,7 +2522,7 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-kinds", "job-kinds")
 
-	for _, k := range AllEventKinds {
+	for _, k := range EventKinds() {
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.RecordEvent(id, "idem-"+string(k), k)
 		}); err != nil {
@@ -2532,12 +2533,13 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 	// The other direction, against the column itself: the list is not
 	// short. Every kind the schema admits has a constant here.
 	admitted := checkVocabulary(t, s, "attempt_events", "kind")
-	if len(admitted) != len(AllEventKinds) {
-		t.Fatalf("the column admits %d kinds and AllEventKinds holds %d: %v",
-			len(admitted), len(AllEventKinds), admitted)
+	eventKinds := EventKinds()
+	if len(admitted) != len(eventKinds) {
+		t.Fatalf("the column admits %d kinds and EventKinds holds %d: %v",
+			len(admitted), len(eventKinds), admitted)
 	}
 	for _, a := range admitted {
-		if !slices.Contains(AllEventKinds, EventKind(a)) {
+		if !slices.Contains(eventKinds, EventKind(a)) {
 			t.Errorf("the column admits %q and no constant names it", a)
 		}
 	}
@@ -2559,7 +2561,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"lease states": {"capsule_leases", "state         TEXT",
 			func() []string {
 				var o []string
-				for _, v := range AllLeaseStates {
+				for _, v := range LeaseStates() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2567,7 +2569,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"resolutions": {"assignment_attempts", "resolution",
 			func() []string {
 				var o []string
-				for _, v := range assignment.AllResolutions {
+				for _, v := range assignment.Resolutions() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2575,7 +2577,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"review reasons": {"assignment_attempts", "review_reason",
 			func() []string {
 				var o []string
-				for _, v := range AllReviewReasons {
+				for _, v := range ReviewReasons() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2583,7 +2585,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"execution evidence": {"assignment_attempts", "execution_evidence",
 			func() []string {
 				var o []string
-				for _, v := range AllEvidence {
+				for _, v := range EvidenceStates() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2591,7 +2593,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"resource kinds": {"resource_intents", "kind",
 			func() []string {
 				var o []string
-				for _, v := range AllResourceKinds {
+				for _, v := range ResourceKinds() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2599,7 +2601,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"resource roles": {"resource_intents", "role",
 			func() []string {
 				var o []string
-				for _, v := range AllResourceRoles {
+				for _, v := range ResourceRoles() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2607,7 +2609,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"resource states": {"resource_intents", "state       TEXT",
 			func() []string {
 				var o []string
-				for _, v := range AllResourceStates {
+				for _, v := range ResourceStates() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2690,7 +2692,7 @@ func TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits(t *testing.T) 
 	slices.Sort(admitted)
 
 	var establishes []string
-	for _, o := range assignment.AllExecutionObservations {
+	for _, o := range assignment.ExecutionObservations() {
 		if o.Establishes() {
 			establishes = append(establishes, string(o))
 		}
@@ -2717,7 +2719,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-trail", "job-trail")
 
-	for _, e := range AllEvidence[1:] {
+	for _, e := range EvidenceStates()[1:] {
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.RecordEvidence(id, e)
 		}); err != nil {
@@ -2736,7 +2738,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 		}
 		return nil
 	})
-	for _, e := range AllEvidence[1:] {
+	for _, e := range EvidenceStates()[1:] {
 		want := eventKindOf(e)
 		if want == "" {
 			t.Errorf("the advance to %s names no trail entry", e)
@@ -2745,7 +2747,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 		if !slices.Contains(kinds, want) {
 			t.Errorf("advancing to %s wrote no %s into the trail: %v", e, want, kinds)
 		}
-		if !slices.Contains(AllEventKinds, want) {
+		if !slices.Contains(EventKinds(), want) {
 			t.Errorf("%s is not a kind the column admits", want)
 		}
 	}
@@ -2988,8 +2990,9 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 		t.Fatal("the index names no state, so this proves nothing")
 	}
 
-	known := make(map[AttemptState]bool, len(AllAttemptStates))
-	for _, s := range AllAttemptStates {
+	attemptStates := AttemptStates()
+	known := make(map[AttemptState]bool, len(attemptStates))
+	for _, s := range attemptStates {
 		known[s] = true
 	}
 	// The authority is spelled from the vocabulary too: a lease state

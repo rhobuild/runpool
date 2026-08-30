@@ -116,7 +116,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		// and the per-lease reads below turned that into two queries per
 		// row — so `runpool status` cost rose with history rather than
 		// with what the instance is doing.
-		if snap.Leases, err = tx.LeasesInStates(LiveLeaseStates...); err != nil {
+		if snap.Leases, err = tx.LeasesInStates(LiveLeaseStates()...); err != nil {
 			return err
 		}
 		recent, total, err := tx.RecentReleasedLeases(ReportedReleasedLeases)

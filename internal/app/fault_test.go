@@ -1024,7 +1024,7 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 // level an operator is paged on, for the ordinary case of a start that
 // failed and left nothing behind.
 func TestEveryObservationHasAStartFailureReport(t *testing.T) {
-	for _, obs := range assignment.AllExecutionObservations {
+	for _, obs := range assignment.ExecutionObservations() {
 		report, unproven := startFailureReport(obs)
 		if report == "" {
 			t.Errorf("observation %q has no report, so a failed start carrying it is logged "+

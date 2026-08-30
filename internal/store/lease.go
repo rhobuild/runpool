@@ -55,14 +55,16 @@ func ValidTransition(from, to LeaseState) bool {
 
 func (s LeaseState) Terminal() bool { return s == LeaseReleased }
 
-// AllLeaseStates lists every state, including released.
-var AllLeaseStates = []LeaseState{
+var leaseStates = []LeaseState{
 	LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered,
 	LeaseWorkloadRunning, LeaseDraining, LeaseCleaning, LeaseReleased,
 	LeaseFailed, LeaseQuarantined,
 }
 
-// LiveLeaseStates is every state but released: the work an instance is
+// LeaseStates returns every state, including released.
+func LeaseStates() []LeaseState { return slices.Clone(leaseStates) }
+
+// liveLeaseStates contains every state but released: the work an instance is
 // still responsible for. Reporting, the reconciler's working set and the
 // resource sweep all read it.
 //
@@ -71,7 +73,10 @@ var AllLeaseStates = []LeaseState{
 // silent and expensive: a live state missing here drops those leases out
 // of the snapshot, so cleanup builds its keep set without them and
 // deletes the resources of a capsule that is running.
-var LiveLeaseStates = slices.DeleteFunc(slices.Clone(AllLeaseStates), LeaseState.Terminal)
+var liveLeaseStates = slices.DeleteFunc(slices.Clone(leaseStates), LeaseState.Terminal)
+
+// LiveLeaseStates returns the work an instance remains responsible for.
+func LiveLeaseStates() []LeaseState { return slices.Clone(liveLeaseStates) }
 
 // ReportedReleasedLeases is how much finished history a snapshot carries.
 // A report wants recent history, not all of it — and the difference is
@@ -119,9 +124,12 @@ const (
 	ResourceVolume    ResourceKind = "volume"
 )
 
-var AllResourceKinds = []ResourceKind{
+var resourceKinds = []ResourceKind{
 	ResourceContainer, ResourceNetwork, ResourceVolume,
 }
+
+// ResourceKinds returns every persisted resource kind.
+func ResourceKinds() []ResourceKind { return slices.Clone(resourceKinds) }
 
 // ResourceRole identifies the part of a capsule an intent owns. Only
 // lease-scoped roles belong here; instance infrastructure and short-lived
@@ -136,10 +144,13 @@ const (
 	ResourceRoleDindData       ResourceRole = "dind-data"
 )
 
-var AllResourceRoles = []ResourceRole{
+var resourceRoles = []ResourceRole{
 	ResourceRoleCapsule, ResourceRoleGateway,
 	ResourceRoleCapsuleNetwork, ResourceRoleDindData,
 }
+
+// ResourceRoles returns every persisted resource role.
+func ResourceRoles() []ResourceRole { return slices.Clone(resourceRoles) }
 
 // ResourceState is the durable state of one external-effect saga.
 type ResourceState string
@@ -152,10 +163,13 @@ const (
 	ResourceDeleting       ResourceState = "deleting"
 )
 
-var AllResourceStates = []ResourceState{
+var resourceStates = []ResourceState{
 	ResourcePlanned, ResourceCreating, ResourcePresent,
 	ResourceCleanupPending, ResourceDeleting,
 }
+
+// ResourceStates returns every persisted resource state.
+func ResourceStates() []ResourceState { return slices.Clone(resourceStates) }
 
 // ResourceIntent is the durable plan for one external object, committed
 // before the effect that creates it and deleted only when the object is

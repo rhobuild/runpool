@@ -1,5 +1,7 @@
 package store
 
+import "slices"
+
 // EventKind is what an attempt_events row records. The twelve values
 // are closed by the column and were spelled as literals in four
 // packages, with no list anywhere -- so a kind the schema does not admit
@@ -46,9 +48,7 @@ const (
 	EventRemoteCanceled EventKind = "remote_canceled"
 )
 
-// AllEventKinds is every kind the trail can hold, for the test that
-// holds this list against the column that closes it.
-var AllEventKinds = []EventKind{
+var eventKinds = []EventKind{
 	EventAttemptCreated,
 	EventLeaseAttached,
 	EventRuntimePrepared,
@@ -62,3 +62,6 @@ var AllEventKinds = []EventKind{
 	EventAttemptSuperseded,
 	EventRemoteCanceled,
 }
+
+// EventKinds returns every persisted kind the attempt trail can hold.
+func EventKinds() []EventKind { return slices.Clone(eventKinds) }

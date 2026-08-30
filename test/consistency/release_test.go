@@ -260,8 +260,8 @@ func TestTheReleaseBodyCarriesTheChangelog(t *testing.T) {
 // None of that was checked anywhere until a tag was pushed — which is
 // the most expensive place to find it, because the tag is protected by a
 // ruleset with no bypass actors and the failure lands after it exists.
-// It has already happened once: the section that became v1.2.0 opened
-// straight onto a group heading, and the gate refused it.
+// It has already happened once: a proposed release section opened straight
+// onto a group heading, and the gate refused it.
 func TestTheNewestChangelogSectionCouldBeReleased(t *testing.T) {
 	body, err := os.ReadFile(repoPath("CHANGELOG.md"))
 	if err != nil {

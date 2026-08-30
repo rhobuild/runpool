@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
@@ -54,7 +55,7 @@ var ErrInvalidExecutionObservation = errors.New("execution observation is not a 
 // overwriting an observation.
 var ErrObservationConflict = errors.New("execution observation conflicts with what is recorded")
 
-// AllEvidence is every state the monotonic machine can reach, in the
+// evidenceStates contains every state the monotonic machine can reach, in the
 // order it can reach them. The order is the rule: evidence only ever
 // moves forward, and a write that would move it back is refused.
 //
@@ -67,7 +68,7 @@ var ErrObservationConflict = errors.New("execution observation conflicts with wh
 // hole in the slice that only a test happens to catch. Written this way
 // neither is expressible, and the hand-assigned numbers are gone with
 // their own chance to disagree.
-var AllEvidence = []Evidence{
+var evidenceStates = []Evidence{
 	EvidenceNotStarted,
 	EvidenceRuntimePrepared,
 	EvidenceStartAuthorized,
@@ -75,10 +76,13 @@ var AllEvidence = []Evidence{
 	EvidenceExitObserved,
 }
 
+// EvidenceStates returns the monotonic evidence vocabulary in order.
+func EvidenceStates() []Evidence { return slices.Clone(evidenceStates) }
+
 // evidenceRank orders the vocabulary for the monotonic rule.
 var evidenceRank = func() map[Evidence]int {
-	m := make(map[Evidence]int, len(AllEvidence))
-	for i, e := range AllEvidence {
+	m := make(map[Evidence]int, len(evidenceStates))
+	for i, e := range evidenceStates {
 		m[e] = i
 	}
 	return m
@@ -125,13 +129,14 @@ const (
 	ReviewReasonIncompatibleCapsule ReviewReason = "capsule_incompatible"
 )
 
-// AllReviewReasons is every reason an attempt can be held, for the test
-// that holds this list against the column's own constraint.
-var AllReviewReasons = []ReviewReason{
+var reviewReasons = []ReviewReason{
 	ReviewReasonStartOutcomeUnknown,
 	ReviewReasonRetryBudgetExhausted,
 	ReviewReasonIncompatibleCapsule,
 }
+
+// ReviewReasons returns every persisted reason an attempt can be held.
+func ReviewReasons() []ReviewReason { return slices.Clone(reviewReasons) }
 
 // RecordEvidence advances what is known about an attempt's execution and
 // classifies every outcome instead of collapsing them into success:

@@ -28,7 +28,7 @@ func releaseQualificationReference() map[string]string {
 	// read as a platform check while being an architecture one.
 	here := runtime.GOOS + "/" + runtime.GOARCH
 	qualified, ok := ref.For(runtime.GOARCH)
-	if !slices.Contains(platform.Buildable, here) || !ok {
+	if !slices.Contains(platform.BuildablePlatforms(), here) || !ok {
 		return map[string]string{
 			"status":    "not-qualified-here",
 			"platform":  here,

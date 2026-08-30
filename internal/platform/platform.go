@@ -34,7 +34,7 @@ const (
 //go:embed platform.lock.json
 var manifestJSON []byte
 
-// Buildable are the platforms a release can build for: the intersection
+// buildablePlatforms contains the platforms a release can build for: the intersection
 // of what the pinned upstream images publish. The runner image publishes
 // linux/amd64 and linux/arm64 and nothing else, which is the ceiling;
 // dind publishes more.
@@ -48,13 +48,16 @@ var manifestJSON []byte
 // It is not the list of qualified platforms. A release may build for a
 // platform nobody has run the suites on, and keeping the two apart is
 // what lets either be said without implying the other.
-var Buildable = []string{"linux/amd64", "linux/arm64"}
+var buildablePlatforms = []string{"linux/amd64", "linux/arm64"}
 
-// BuildableArches is Buildable's architectures, for the entries in the
-// qualification record, which name a host rather than an image.
+// BuildablePlatforms returns every platform the release images can target.
+func BuildablePlatforms() []string { return slices.Clone(buildablePlatforms) }
+
+// BuildableArches returns the architecture component of every buildable
+// platform for qualification records, which name hosts rather than images.
 func BuildableArches() []string {
-	out := make([]string, 0, len(Buildable))
-	for _, p := range Buildable {
+	out := make([]string, 0, len(buildablePlatforms))
+	for _, p := range buildablePlatforms {
 		if _, arch, ok := strings.Cut(p, "/"); ok {
 			out = append(out, arch)
 		}
@@ -203,7 +206,7 @@ func (r Reference) validate() error {
 func (q Qualified) validate() error {
 	if !slices.Contains(BuildableArches(), q.Policy.Arch) {
 		return fmt.Errorf("platform manifest qualifies %q, which no release builds for; "+
-			"the pinned images publish %s", q.Policy.Arch, strings.Join(Buildable, ", "))
+			"the pinned images publish %s", q.Policy.Arch, strings.Join(buildablePlatforms, ", "))
 	}
 	// Which distribution was selected is a reviewed choice, not a rule.
 	// Naming one here would do to the operating system what naming a

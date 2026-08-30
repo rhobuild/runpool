@@ -184,6 +184,22 @@ func TestDeliveryKeySeparatesQueues(t *testing.T) {
 	}
 }
 
+func TestVocabularySnapshotsCannotMutateTheDomain(t *testing.T) {
+	resolutions := Resolutions()
+	wantResolution := resolutions[0]
+	resolutions[0] = "caller_mutation"
+	if got := Resolutions()[0]; got != wantResolution {
+		t.Errorf("Resolutions()[0] = %q after caller mutation; want %q", got, wantResolution)
+	}
+
+	observations := ExecutionObservations()
+	wantObservation := observations[0]
+	observations[0] = "caller_mutation"
+	if got := ExecutionObservations()[0]; got != wantObservation {
+		t.Errorf("ExecutionObservations()[0] = %q after caller mutation; want %q", got, wantObservation)
+	}
+}
+
 // TestAnAssignmentWithoutAWorkloadKeyIsRefused: the key is what
 // deduplication and recovery recognise an assignment by, so recording
 // one without it plants a row nothing can recognise again. The guard is

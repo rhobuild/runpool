@@ -68,7 +68,7 @@ func (r *reconciler) reconcile(ctx context.Context) error {
 
 	var live []store.Lease
 	if err := r.store.Tx(ctx, func(tx *store.Tx) error {
-		live, err = tx.LeasesInStates(store.LiveLeaseStates...)
+		live, err = tx.LeasesInStates(store.LiveLeaseStates()...)
 		if err != nil {
 			return err
 		}
@@ -562,7 +562,7 @@ func (r *reconciler) sweepPeriodically(ctx context.Context) {
 		var live []store.Lease
 		if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 			var err error
-			live, err = tx.LeasesInStates(store.LiveLeaseStates...)
+			live, err = tx.LeasesInStates(store.LiveLeaseStates()...)
 			return err
 		}); err != nil {
 			// Named, because the caller now has one message for every
@@ -588,7 +588,7 @@ func (r *reconciler) retryStranded(ctx context.Context) {
 	var live []store.Lease
 	if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		live, err = tx.LeasesInStates(store.LiveLeaseStates...)
+		live, err = tx.LeasesInStates(store.LiveLeaseStates()...)
 		return err
 	}); err != nil {
 		r.log.Error("periodic reconcile cannot list live leases", "error", err)

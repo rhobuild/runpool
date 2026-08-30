@@ -687,14 +687,14 @@ func TestAProvenInertStartIsRequeuedFromEitherPath(t *testing.T) {
 //
 // The states walked are the store's own list filtered through the
 // predicate, so neither side of the question is restated here: the
-// domain comes from store.AllAttemptStates, which its own test holds
+// domain comes from store.AttemptStates, which its own test holds
 // against the schema's constraint, and the answer comes from
 // servedByThisLease. A state added to the serving set is disposed of
 // here whether or not anyone remembers this test, and one the fixture
 // cannot drive to fails in advanceAttemptTo, which names it.
 func TestEveryServingStateCanBeDisposedOf(t *testing.T) {
 	var walked int
-	for _, state := range store.AllAttemptStates {
+	for _, state := range store.AttemptStates() {
 		if !servedByThisLease(state) {
 			continue
 		}
@@ -808,7 +808,7 @@ func TestOnlyAMeasurementIsRecorded(t *testing.T) {
 	// The list is every value of the vocabulary, NoObservation included,
 	// so this covers the value a retry arrives with as well as the
 	// measurements.
-	for _, obs := range assignment.AllExecutionObservations {
+	for _, obs := range assignment.ExecutionObservations() {
 		name := string(obs)
 		if obs == assignment.NoObservation {
 			name = "nothing measured"

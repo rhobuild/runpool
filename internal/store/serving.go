@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
@@ -35,21 +36,24 @@ const (
 	AttemptCanceled     AttemptState = "canceled"
 )
 
-// AllAttemptStates lists every state an attempt can hold, terminal ones
+// attemptStates lists every state an attempt can hold, terminal ones
 // included, in the order the walk reaches them.
 //
-// It exists for the reason AllLeaseStates does. Anything that has to
+// It exists for the reason LeaseStates does. Anything that has to
 // decide something for every state — a disposition, a report, a table
 // test — needs the list to come from one place, or a state added later
 // is quietly left undecided by whichever copy nobody updated.
 // TestAttemptStatesCoverTheSchema holds it against the constraint the
 // database enforces, so the list cannot drift from what a row may
 // actually contain.
-var AllAttemptStates = []AttemptState{
+var attemptStates = []AttemptState{
 	AttemptReady, AttemptLeased, AttemptPreparing, AttemptPrepared,
 	AttemptStarting, AttemptRunning, AttemptManualReview,
 	AttemptSuperseded, AttemptSettled, AttemptCanceled,
 }
+
+// AttemptStates returns every persisted attempt state in lifecycle order.
+func AttemptStates() []AttemptState { return slices.Clone(attemptStates) }
 
 // Attempt is the store's domain-facing view of one attempt row. It is a
 // translation, not the generated row: consumers never see table types,
@@ -131,7 +135,7 @@ func (t *Tx) Events(attemptID assignment.AttemptID) ([]Event, error) {
 	}
 	out := make([]Event, len(rows))
 	for i, r := range rows {
-		out[i] = Event{Kind: r.Kind, Detail: r.DetailJson, CreatedAt: unixTime(r.CreatedAt)}
+		out[i] = Event{Kind: r.Kind, Detail: r.DetailJSON, CreatedAt: unixTime(r.CreatedAt)}
 	}
 	return out, nil
 }
@@ -575,7 +579,7 @@ func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind EventKin
 		return err
 	}
 	_, err = t.q.InsertSequencedAttemptEvent(t.ctx, sqlitedb.InsertSequencedAttemptEventParams{
-		AttemptID: string(attemptID), Kind: string(kind), DetailJson: string(encoded),
+		AttemptID: string(attemptID), Kind: string(kind), DetailJSON: string(encoded),
 	})
 	return err
 }
@@ -583,7 +587,7 @@ func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind EventKin
 // RecordEvent appends one lifecycle event, idempotently per key.
 func (t *Tx) RecordEvent(attemptID assignment.AttemptID, idempotencyKey string, kind EventKind) error {
 	_, err := t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: "{}",
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJSON: "{}",
 	})
 	return err
 }
@@ -598,7 +602,7 @@ func (t *Tx) RecordEventDetail(attemptID assignment.AttemptID, idempotencyKey st
 		return err
 	}
 	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: string(encoded),
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJSON: string(encoded),
 	})
 	return err
 }
