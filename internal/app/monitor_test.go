@@ -78,7 +78,7 @@ func TestPersistedNormalDoesNotOpenAfterAProbeFailure(t *testing.T) {
 	probe := &fakeProbe{freeErr: errors.New("daemon unavailable")}
 	monitor, st, gate := newIsolatedDiskMonitor(t, probe)
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.SetPressure(store.PressureInfo{Level: disk.Normal.String(), FreeBytes: 1 << 40})
+		return tx.SetPressure(store.PressureVerdict{Level: disk.Normal.String(), FreeBytes: 1 << 40})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestASandboxFailureIsRecordedWhileTheControllerIsStopping(t *testing.T) {
 	if !strings.Contains(got.Error, "the probe could not run") {
 		t.Errorf("recorded %q; it has to carry why, which is what an operator acts on", got.Error)
 	}
-	if got.At == 0 {
+	if got.At.IsZero() {
 		t.Error("recorded no time; a pass that stopped running is only visible as a " +
 			"timestamp that stopped moving")
 	}

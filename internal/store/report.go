@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
@@ -88,7 +89,7 @@ type CacheLaneInfo struct {
 	SourceProjectKey string
 	Generation       string
 	LeasedBy         assignment.LeaseID
-	LastUsed         int64
+	LastUsed         time.Time
 }
 
 // Snapshot collects the instance's whole durable picture in one
@@ -168,9 +169,11 @@ func (t *Tx) CacheLanes() ([]CacheLaneInfo, error) {
 	var out []CacheLaneInfo
 	for rows.Next() {
 		var c CacheLaneInfo
-		if err := rows.Scan(&c.ID, &c.SourceProjectKey, &c.Generation, &c.LeasedBy, &c.LastUsed); err != nil {
+		var lastUsed int64
+		if err := rows.Scan(&c.ID, &c.SourceProjectKey, &c.Generation, &c.LeasedBy, &lastUsed); err != nil {
 			return nil, err
 		}
+		c.LastUsed = unixTime(lastUsed)
 		out = append(out, c)
 	}
 	return out, rows.Err()

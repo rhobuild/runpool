@@ -228,7 +228,7 @@ func (m *diskMonitor) apply(level disk.Level) {
 
 func (m *diskMonitor) persistVerdict(ctx context.Context, prev, next disk.Level, facts disk.Facts, detail string) error {
 	return m.store.Tx(ctx, func(tx *store.Tx) error {
-		if err := tx.SetPressure(store.PressureInfo{
+		if err := tx.SetPressure(store.PressureVerdict{
 			Level:        next.String(),
 			FreeBytes:    facts.FreeBytes,
 			FreeInodes:   facts.FreeInodes,
@@ -329,7 +329,7 @@ const sandboxRecordBudget = 5 * time.Second
 // already logged by the pass itself, so nothing is lost that was not
 // already lost.
 func (s *Controller) recordSandboxPass(ctx context.Context, cause error) {
-	pass := store.SandboxPass{At: time.Now().Unix()}
+	pass := store.SandboxPass{At: time.Now()}
 	if cause != nil {
 		pass.Error = cause.Error()
 	}

@@ -3,23 +3,29 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"time"
 )
 
-// PressureInfo is the disk monitor's last persisted verdict. It is
-// durable so `runpool status` sees the level in force and a restarting
-// controller preserves an emergency instead of assuming normal. An
-// unknown verdict uses -1 for facts the failed measurement could not
-// provide.
-type PressureInfo struct {
+// PressureVerdict is one disk measurement to persist. An unknown verdict uses
+// -1 for facts the failed measurement could not provide.
+type PressureVerdict struct {
 	Level        string
 	FreeBytes    int64
 	FreeInodes   int64
 	ManagedBytes int64
-	MeasuredAt   int64
+}
+
+// PressureInfo is the disk monitor's last persisted verdict. It is durable so
+// status sees the level in force and a restarting controller preserves an
+// emergency instead of assuming normal. MeasuredAt belongs to the stored fact,
+// not to the write request: SQLite records it atomically with the verdict.
+type PressureInfo struct {
+	PressureVerdict
+	MeasuredAt time.Time
 }
 
 // SetPressure records the monitor's verdict, replacing the previous one.
-func (t *Tx) SetPressure(p PressureInfo) error {
+func (t *Tx) SetPressure(p PressureVerdict) error {
 	_, err := t.tx.Exec(`
 		INSERT INTO pressure (id, level, free_bytes, free_inodes, managed_bytes, measured_at)
 		VALUES (1, ?, ?, ?, ?, unixepoch())
@@ -35,16 +41,18 @@ func (t *Tx) SetPressure(p PressureInfo) error {
 // run — which callers must treat as "unknown", not "normal".
 func (t *Tx) Pressure() (*PressureInfo, error) {
 	var p PressureInfo
+	var measuredAt int64
 	err := t.tx.QueryRow(`
 		SELECT level, free_bytes, free_inodes, managed_bytes, measured_at
 		FROM pressure WHERE id = 1`).
-		Scan(&p.Level, &p.FreeBytes, &p.FreeInodes, &p.ManagedBytes, &p.MeasuredAt)
+		Scan(&p.Level, &p.FreeBytes, &p.FreeInodes, &p.ManagedBytes, &measuredAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	p.MeasuredAt = unixTime(measuredAt)
 	return &p, nil
 }
 
@@ -52,7 +60,7 @@ func (t *Tx) Pressure() (*PressureInfo, error) {
 // no attempt can carry: who did it, what they did, to what.
 type AuditEntry struct {
 	ID      int64
-	At      int64
+	At      time.Time
 	Actor   string
 	Action  string
 	Subject string
@@ -79,9 +87,11 @@ func (t *Tx) AuditTail(limit int) ([]AuditEntry, error) {
 	var out []AuditEntry
 	for rows.Next() {
 		var e AuditEntry
-		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &e.Action, &e.Subject, &e.Detail); err != nil {
+		var at int64
+		if err := rows.Scan(&e.ID, &at, &e.Actor, &e.Action, &e.Subject, &e.Detail); err != nil {
 			return nil, err
 		}
+		e.At = unixTime(at)
 		out = append(out, e)
 	}
 	return out, rows.Err()

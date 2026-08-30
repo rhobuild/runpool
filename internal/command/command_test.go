@@ -488,7 +488,7 @@ func TestLivenessReadsTheStateAndTheVerdictAge(t *testing.T) {
 	// A fresh verdict passes; one far beyond the monitor's cadence is a
 	// serve loop that stopped writing.
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.SetPressure(store.PressureInfo{
+		return tx.SetPressure(store.PressureVerdict{
 			Level: "normal", FreeBytes: 1 << 30, FreeInodes: 1 << 20,
 		})
 	}); err != nil {

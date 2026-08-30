@@ -214,7 +214,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 		doc.Scheduling = schedulingStatus(cfg, snap.Leases, snap.Queued, shippedCapsule)
 	}
 	if sb := snap.Sandbox; sb != nil {
-		doc.Sandbox = &sandboxDTO{LastPassAt: rfc3339(time.Unix(sb.At, 0)), Error: sb.Error}
+		doc.Sandbox = &sandboxDTO{LastPassAt: rfc3339(sb.At), Error: sb.Error}
 	}
 	if p := snap.Pressure; p != nil {
 		doc.DiskPressure = &pressureDTO{
@@ -222,7 +222,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 			FreeBytes:    p.FreeBytes,
 			FreeInodes:   p.FreeInodes,
 			ManagedBytes: p.ManagedBytes,
-			MeasuredAt:   rfc3339(time.Unix(p.MeasuredAt, 0)),
+			MeasuredAt:   rfc3339(p.MeasuredAt),
 		}
 	}
 	for _, b := range snap.Bindings {
@@ -253,7 +253,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 		}
 		for _, in := range snap.Resources[l.ID] {
 			lease.Resources = append(lease.Resources, resourceDTO{
-				Kind: string(in.Kind), Role: in.Role, Name: in.Name, LeaseID: string(in.LeaseID), State: in.State,
+				Kind: string(in.Kind), Role: string(in.Role), Name: in.Name, LeaseID: string(in.LeaseID), State: string(in.State),
 			})
 		}
 		doc.Leases = append(doc.Leases, lease)
@@ -261,7 +261,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReview
 	for _, c := range snap.CacheLanes {
 		doc.CacheLanes = append(doc.CacheLanes, laneDTO{
 			ID: c.ID, SourceProjectKey: c.SourceProjectKey, Generation: c.Generation,
-			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
+			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(c.LastUsed),
 		})
 	}
 	doc.ManualReview = append(doc.ManualReview, review.Attempts...)

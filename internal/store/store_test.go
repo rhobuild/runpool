@@ -940,7 +940,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 		if err := tx.Settle(wedgedAttempt, AttemptLeased, assignment.ResolutionCompletedObserved); err != nil {
 			return err
 		}
-		_, err := tx.PlanResource(wedged, ResourceContainer, "runner", "runpool-wedged")
+		_, err := tx.PlanResource(wedged, ResourceContainer, ResourceRoleCapsule, "runpool-wedged")
 		return err
 	})
 
@@ -2048,7 +2048,7 @@ func seedEverything(t *testing.T, s *Store) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.PlanResource(lease.ID, ResourceContainer, "capsule", "runpool-seed"); err != nil {
+		if _, err := tx.PlanResource(lease.ID, ResourceContainer, ResourceRoleCapsule, "runpool-seed"); err != nil {
 			return err
 		}
 		project, err := tx.EnsureCacheProject("acme/app")
@@ -2481,6 +2481,30 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 			func() []string {
 				var o []string
 				for _, v := range AllEvidence {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource kinds": {"resource_intents", "kind",
+			func() []string {
+				var o []string
+				for _, v := range AllResourceKinds {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource roles": {"resource_intents", "role",
+			func() []string {
+				var o []string
+				for _, v := range AllResourceRoles {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource states": {"resource_intents", "state       TEXT",
+			func() []string {
+				var o []string
+				for _, v := range AllResourceStates {
 					o = append(o, string(v))
 				}
 				return o

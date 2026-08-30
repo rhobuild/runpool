@@ -113,7 +113,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-abandoned")
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-abandoned")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-abandoned")
 		if err != nil {
 			return err
 		}

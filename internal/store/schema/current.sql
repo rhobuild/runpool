@@ -1,4 +1,4 @@
--- Code generated from internal/store/migrations (schema version 3). DO NOT EDIT.
+-- Code generated from internal/store/migrations (schema version 4). DO NOT EDIT.
 -- Regenerate with: go run ./internal/store/schema/gen
 
 CREATE TABLE assignment_attempts (
@@ -186,11 +186,11 @@ CREATE TABLE provider_bindings (
 	UNIQUE (provider_kind, source_binding_key)
 );
 
-CREATE TABLE resource_intents (
+CREATE TABLE "resource_intents" (
 	id          INTEGER PRIMARY KEY,
 	lease_id    TEXT NOT NULL REFERENCES capsule_leases (id),
 	kind        TEXT NOT NULL CHECK (kind IN ('container', 'network', 'volume')),
-	role        TEXT NOT NULL,
+	role        TEXT NOT NULL CHECK (role IN ('capsule', 'gateway', 'capsule-net', 'dind-data')),
 	name        TEXT NOT NULL CHECK (length(name) > 0),
 	docker_id   TEXT NOT NULL DEFAULT '',
 	state       TEXT NOT NULL DEFAULT 'planned'

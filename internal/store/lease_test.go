@@ -314,10 +314,10 @@ func TestResourceIntentLifecycleAndReleaseRule(t *testing.T) {
 	var netIntent, dindIntent assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if netIntent, err = tx.PlanResource(lease.ID, ResourceNetwork, "capsule-net", "runpool-net-x"); err != nil {
+		if netIntent, err = tx.PlanResource(lease.ID, ResourceNetwork, ResourceRoleCapsuleNetwork, "runpool-net-x"); err != nil {
 			return err
 		}
-		dindIntent, err = tx.PlanResource(lease.ID, ResourceContainer, "dind", "runpool-dind-x")
+		dindIntent, err = tx.PlanResource(lease.ID, ResourceContainer, ResourceRoleCapsule, "runpool-dind-x")
 		return err
 	})
 
@@ -416,10 +416,10 @@ func TestPendingRemovalsHonourBackoff(t *testing.T) {
 	var wedged, healthy assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if wedged, err = tx.PlanResource(lease.ID, ResourceVolume, "work", "runpool-work-x"); err != nil {
+		if wedged, err = tx.PlanResource(lease.ID, ResourceVolume, ResourceRoleDindData, "runpool-work-x"); err != nil {
 			return err
 		}
-		if healthy, err = tx.PlanResource(lease.ID, ResourceVolume, "run", "runpool-run-x"); err != nil {
+		if healthy, err = tx.PlanResource(lease.ID, ResourceVolume, ResourceRoleDindData, "runpool-run-x"); err != nil {
 			return err
 		}
 		return tx.MarkResourceCleanup(lease.ID)

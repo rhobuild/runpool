@@ -149,22 +149,22 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 		// nothing has been told the wrong thing.
 		if sb.Error != "" {
 			fmt.Fprintf(streams.Out, "\negress policy: every gateway closed to all egress %s (%s)\n",
-				ago(time.Now(), time.Unix(sb.At, 0)), sb.Error)
+				ago(time.Now(), sb.At), sb.Error)
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what closed them and what to do")
 		} else {
 			fmt.Fprintf(streams.Out, "\negress policy: in force, rechecked %s\n",
-				ago(time.Now(), time.Unix(sb.At, 0)))
+				ago(time.Now(), sb.At))
 		}
 	}
 
 	if p := snap.Pressure; p != nil {
 		if p.Level == "unknown" {
 			fmt.Fprintf(streams.Out, "\ndisk pressure: unknown (measurement unavailable, checked %s)\n",
-				ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+				ago(time.Now(), p.MeasuredAt))
 		} else {
 			fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
 				p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
-				ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+				ago(time.Now(), p.MeasuredAt))
 		}
 		if p.Level != "normal" {
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what this level means and what to do")

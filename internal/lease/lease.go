@@ -610,9 +610,9 @@ func (m *Manager) IntentsDue(ctx context.Context, leaseID assignment.LeaseID) (b
 		if err != nil {
 			return err
 		}
-		now := time.Now().Unix()
+		now := time.Now()
 		for _, in := range intents {
-			if in.NotBefore > now {
+			if in.NotBefore.After(now) {
 				return nil
 			}
 		}
@@ -672,7 +672,7 @@ func (r *intentRecorder) Plan(kind, role, name string) (assignment.ResourceInten
 	var id assignment.ResourceIntentID
 	err := r.store.Tx(r.ctx, func(tx *store.Tx) error {
 		var err error
-		id, err = tx.PlanResource(r.leaseID, store.ResourceKind(kind), role, name)
+		id, err = tx.PlanResource(r.leaseID, store.ResourceKind(kind), store.ResourceRole(role), name)
 		return err
 	})
 	return id, err

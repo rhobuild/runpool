@@ -83,9 +83,9 @@ func viewOf(a store.Attempt, now time.Time) attemptView {
 		ReviewReason: string(a.ReviewReason),
 		Resolution:   string(a.Resolution),
 		ReviewedBy:   a.ReviewedBy,
-		ReviewedAt:   epochRFC3339(a.ReviewedAt),
-		SettledAt:    epochRFC3339(a.SettledAt),
-		AgeSeconds:   int64(now.Sub(time.Unix(a.ReceivedAt, 0)).Seconds()),
+		ReviewedAt:   rfc3339(a.ReviewedAt),
+		SettledAt:    rfc3339(a.SettledAt),
+		AgeSeconds:   int64(now.Sub(a.ReceivedAt).Seconds()),
 	}
 }
 
@@ -279,7 +279,7 @@ func runAttemptsInspect(streams IO, id string, asJSON bool) error {
 		fmt.Fprintln(streams.Out, "lifecycle:")
 		for _, ev := range events {
 			fmt.Fprintf(streams.Out, "  %s  %-28s %s\n",
-				rfc3339(time.Unix(ev.CreatedAt, 0)), ev.Kind, ev.Detail)
+				rfc3339(ev.CreatedAt), ev.Kind, ev.Detail)
 		}
 		return nil
 	})
@@ -386,14 +386,4 @@ func runAttemptsResolve(streams IO, id string, retry, settle bool, reason, actor
 	}
 	fmt.Fprintf(streams.Out, "attempt %s: %s (by %s)\n", id, decision, actor)
 	return nil
-}
-
-// epochRFC3339 renders a unix-seconds timestamp, or nothing for the
-// zero: these columns are NULL until their event happens, and the zero
-// epoch rendered as 1970 would date every unreviewed attempt to it.
-func epochRFC3339(sec int64) string {
-	if sec == 0 {
-		return ""
-	}
-	return rfc3339(time.Unix(sec, 0))
 }

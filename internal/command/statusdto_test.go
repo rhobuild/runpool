@@ -513,7 +513,7 @@ func TestTheTextFormSaysTheGatewaysAreClosed(t *testing.T) {
 	}
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
 		return tx.SetSandboxPass(store.SandboxPass{
-			At:    time.Now().Add(-90 * time.Second).Unix(),
+			At:    time.Now().Add(-90 * time.Second),
 			Error: "host discovery: the probe could not run",
 		})
 	}); err != nil {
@@ -550,7 +550,7 @@ func TestTheTextFormSaysThePolicyIsInForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.SetSandboxPass(store.SandboxPass{At: time.Now().Unix()})
+		return tx.SetSandboxPass(store.SandboxPass{At: time.Now()})
 	}); err != nil {
 		t.Fatal(err)
 	}

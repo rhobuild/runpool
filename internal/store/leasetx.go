@@ -25,7 +25,7 @@ var (
 //
 // The claim runs first on purpose. Inserting the lease first would leave
 // an orphan runtime row behind whenever the claim lost the race.
-func (t *Tx) LeaseAttempt(attemptID assignment.AttemptID, bindingID assignment.BindingID, tierID string) (Lease, error) {
+func (t *Tx) LeaseAttempt(attemptID assignment.AttemptID, bindingID assignment.BindingID, tierID assignment.TierID) (Lease, error) {
 	affected, err := t.q.ClaimReadyAttempt(t.ctx, string(attemptID))
 	if err != nil {
 		return Lease{}, err
@@ -356,10 +356,15 @@ const selectIntent = `SELECT id, lease_id, kind, role, name, docker_id, state, r
 
 func (t *Tx) scanIntent(r rowScanner) (ResourceIntent, error) {
 	var in ResourceIntent
-	var created int64
-	err := r.Scan(&in.ID, &in.LeaseID, &in.Kind, &in.Role, &in.Name, &in.DockerID,
-		&in.State, &in.Retries, &in.LastError, &in.NotBefore, &created)
-	in.CreatedAt = time.Unix(created, 0).UTC()
+	var kind, role, state string
+	var notBefore, created int64
+	err := r.Scan(&in.ID, &in.LeaseID, &kind, &role, &in.Name, &in.DockerID,
+		&state, &in.Retries, &in.LastError, &notBefore, &created)
+	in.Kind = ResourceKind(kind)
+	in.Role = ResourceRole(role)
+	in.State = ResourceState(state)
+	in.NotBefore = optionalUnixTime(notBefore)
+	in.CreatedAt = unixTime(created)
 	return in, err
 }
 
@@ -367,7 +372,7 @@ func (t *Tx) scanIntent(r rowScanner) (ResourceIntent, error) {
 // external effect. The deterministic name is the recovery handle: a
 // crash after the create call finds the object — or proves its absence
 // — by the name this row already carries.
-func (t *Tx) PlanResource(leaseID assignment.LeaseID, kind ResourceKind, role, name string) (assignment.ResourceIntentID, error) {
+func (t *Tx) PlanResource(leaseID assignment.LeaseID, kind ResourceKind, role ResourceRole, name string) (assignment.ResourceIntentID, error) {
 	res, err := t.tx.Exec(
 		`INSERT INTO resource_intents (lease_id, kind, role, name) VALUES (?, ?, ?, ?)`,
 		leaseID, kind, role, name)
@@ -382,15 +387,16 @@ func (t *Tx) PlanResource(leaseID assignment.LeaseID, kind ResourceKind, role, n
 // window in which existence is ambiguous, resolved by the name.
 func (t *Tx) MarkResourceCreating(id assignment.ResourceIntentID) error {
 	return t.mustAffect(t.tx.Exec(
-		`UPDATE resource_intents SET state = 'creating', updated_at = unixepoch()
-		 WHERE id = ? AND state = 'planned'`, id))
+		`UPDATE resource_intents SET state = ?, updated_at = unixepoch()
+		 WHERE id = ? AND state = ?`, ResourceCreating, id, ResourcePlanned))
 }
 
 // MarkResourcePresent confirms the object exists under this id.
 func (t *Tx) MarkResourcePresent(id assignment.ResourceIntentID, dockerID string) error {
 	return t.mustAffect(t.tx.Exec(
-		`UPDATE resource_intents SET state = 'present', docker_id = ?, updated_at = unixepoch()
-		 WHERE id = ? AND state IN ('planned', 'creating')`, dockerID, id))
+		`UPDATE resource_intents SET state = ?, docker_id = ?, updated_at = unixepoch()
+		 WHERE id = ? AND state IN (?, ?)`,
+		ResourcePresent, dockerID, id, ResourcePlanned, ResourceCreating))
 }
 
 // MarkResourceCleanup queues every one of a lease's intents for
@@ -398,16 +404,18 @@ func (t *Tx) MarkResourcePresent(id assignment.ResourceIntentID, dockerID string
 // intent's object may exist, and only the delete path proves otherwise.
 func (t *Tx) MarkResourceCleanup(leaseID assignment.LeaseID) error {
 	_, err := t.tx.Exec(
-		`UPDATE resource_intents SET state = 'cleanup_pending', updated_at = unixepoch()
-		 WHERE lease_id = ? AND state IN ('planned', 'creating', 'present')`, leaseID)
+		`UPDATE resource_intents SET state = ?, updated_at = unixepoch()
+		 WHERE lease_id = ? AND state IN (?, ?, ?)`,
+		ResourceCleanupPending, leaseID, ResourcePlanned, ResourceCreating, ResourcePresent)
 	return err
 }
 
 // MarkResourceDeleting records that the delete call is about to run.
 func (t *Tx) MarkResourceDeleting(id assignment.ResourceIntentID) error {
 	return t.mustAffect(t.tx.Exec(
-		`UPDATE resource_intents SET state = 'deleting', updated_at = unixepoch()
-		 WHERE id = ? AND state IN ('cleanup_pending', 'deleting')`, id))
+		`UPDATE resource_intents SET state = ?, updated_at = unixepoch()
+		 WHERE id = ? AND state IN (?, ?)`,
+		ResourceDeleting, id, ResourceCleanupPending, ResourceDeleting))
 }
 
 // ForgetResource is the intent reaching absent: the object is proven
@@ -455,8 +463,9 @@ func (t *Tx) Resources(leaseID assignment.LeaseID) ([]ResourceIntent, error) {
 // ordering is pinned.
 func (t *Tx) pendingRemovals(now time.Time, limit int) ([]ResourceIntent, error) {
 	rows, err := t.tx.Query(selectIntent+`
-		WHERE state IN ('cleanup_pending', 'deleting') AND not_before <= ?
-		ORDER BY not_before, id LIMIT ?`, now.Unix(), limit)
+		WHERE state IN (?, ?) AND not_before <= ?
+		ORDER BY not_before, id LIMIT ?`,
+		ResourceCleanupPending, ResourceDeleting, now.Unix(), limit)
 	if err != nil {
 		return nil, err
 	}

@@ -52,7 +52,7 @@ func (f *fakeCapsule) Prepare(_ context.Context, spec capsule.Spec, rec capsule.
 	// A successful preparation records its objects the way the real one
 	// does — plan, creating, confirm — so the finalizing transaction has
 	// real intents to verify and remove.
-	id, err := rec.Plan("container", "runner", "runpool-runner-fake")
+	id, err := rec.Plan("container", "capsule", "runpool-runner-fake")
 	if err != nil {
 		return capsule.PreparedRuntime{}, err
 	}
@@ -419,7 +419,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	}
 	lease, attempt := leaseFor(t, h, "job-wedged")
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-wedge")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-wedge")
 		if err != nil {
 			return err
 		}
@@ -787,7 +787,7 @@ func TestTheReconcilerStopsRecoveringWhenTheShutdownBegins(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-blocked")
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-blocked")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-blocked")
 		if err != nil {
 			return err
 		}
@@ -987,7 +987,7 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 	// A capsule left behind by a previous process owns objects, which is
 	// what makes the unwind have anything to do.
 	recorder := h.srv.executor.leases.Recorder(t.Context(), lease.ID)
-	intent, err := recorder.Plan("container", "runner", "adopted-runner")
+	intent, err := recorder.Plan("container", "capsule", "adopted-runner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1083,7 +1083,7 @@ func TestAProofSurvivesThePeriodicPass(t *testing.T) {
 		if err := tx.Advance(attempt, store.AttemptStarting, store.AttemptRunning); err != nil {
 			return err
 		}
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-proof")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-proof")
 		if err != nil {
 			return err
 		}
@@ -1190,7 +1190,7 @@ func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
 		if err := tx.Advance(attempt, store.AttemptStarting, store.AttemptRunning); err != nil {
 			return err
 		}
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-overruled")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-overruled")
 		if err != nil {
 			return err
 		}

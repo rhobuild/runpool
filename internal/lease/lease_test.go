@@ -280,7 +280,7 @@ func TestFinalizeIsAtomic(t *testing.T) {
 	f.recordEvidence(store.EvidenceExitObserved)
 
 	f.tx(func(tx *store.Tx) error {
-		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, "runner", "runpool-runner-leftover")
+		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-leftover")
 		if err != nil {
 			return err
 		}
@@ -314,13 +314,13 @@ func TestReleaseRemovesEverythingAndDisposes(t *testing.T) {
 	f.tx(func(tx *store.Tx) error {
 		for _, in := range []struct {
 			kind store.ResourceKind
-			role string
+			role store.ResourceRole
 			name string
 		}{
-			{store.ResourceNetwork, "capsule-net", "runpool-net-1"},
-			{store.ResourceVolume, "dind-data", "runpool-dind-1"},
-			{store.ResourceContainer, "runner", "runpool-runner-1"},
-			{store.ResourceVolume, "workspace", "runpool-ws-1"},
+			{store.ResourceNetwork, store.ResourceRoleCapsuleNetwork, "runpool-net-1"},
+			{store.ResourceVolume, store.ResourceRoleDindData, "runpool-dind-1"},
+			{store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-1"},
+			{store.ResourceContainer, store.ResourceRoleGateway, "runpool-gateway-1"},
 		} {
 			id, err := tx.PlanResource(f.lease.ID, in.kind, in.role, in.name)
 			if err != nil {
@@ -380,7 +380,7 @@ func TestReleaseQuarantinesOnAWedgedDaemon(t *testing.T) {
 	f := newFixture(t, remover)
 	f.driveTo(store.LeaseWorkloadRunning)
 	f.tx(func(tx *store.Tx) error {
-		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, "runner", "runpool-runner-wedge")
+		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-wedge")
 		if err != nil {
 			return err
 		}
@@ -438,7 +438,7 @@ func TestRecorderCommitsEachStepSeparately(t *testing.T) {
 	f := newFixture(t, nopRemover{})
 	rec := f.m.Recorder(t.Context(), f.lease.ID)
 
-	id, err := rec.Plan("container", "runner", "runpool-runner-x")
+	id, err := rec.Plan("container", "capsule", "runpool-runner-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -769,7 +769,7 @@ func TestARecordedProofSurvivesAFailedCleanup(t *testing.T) {
 		if err := tx.RecordEvidence(f.lease.AttemptID, store.EvidenceRunningObserved); err != nil {
 			return err
 		}
-		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, "runner", "runpool-runner-proof")
+		id, err := tx.PlanResource(f.lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-proof")
 		if err != nil {
 			return err
 		}

@@ -66,9 +66,10 @@ type Attempt struct {
 	ReviewReason      ReviewReason
 	Resolution        assignment.Resolution
 	ReviewedBy        string
-	ReceivedAt        int64
-	ReviewedAt        int64
-	SettledAt         int64
+	ReceivedAt        time.Time
+	// ReviewedAt and SettledAt are zero until their respective events.
+	ReviewedAt time.Time
+	SettledAt  time.Time
 }
 
 // MaxAttemptPageSize is the largest operator-facing page the store will
@@ -108,9 +109,9 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		ReviewReason:      ReviewReason(r.ReviewReason.String),
 		Resolution:        assignment.Resolution(r.Resolution.String),
 		ReviewedBy:        r.ReviewedBy.String,
-		ReceivedAt:        r.ReceivedAt,
-		ReviewedAt:        r.ReviewedAt.Int64,
-		SettledAt:         r.SettledAt.Int64,
+		ReceivedAt:        unixTime(r.ReceivedAt),
+		ReviewedAt:        optionalUnixTime(r.ReviewedAt.Int64),
+		SettledAt:         optionalUnixTime(r.SettledAt.Int64),
 	}
 }
 
@@ -119,7 +120,7 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 type Event struct {
 	Kind      string
 	Detail    string
-	CreatedAt int64
+	CreatedAt time.Time
 }
 
 // Events lists an attempt's lifecycle, oldest first.
@@ -130,7 +131,7 @@ func (t *Tx) Events(attemptID assignment.AttemptID) ([]Event, error) {
 	}
 	out := make([]Event, len(rows))
 	for i, r := range rows {
-		out[i] = Event{Kind: r.Kind, Detail: r.DetailJson, CreatedAt: r.CreatedAt}
+		out[i] = Event{Kind: r.Kind, Detail: r.DetailJson, CreatedAt: unixTime(r.CreatedAt)}
 	}
 	return out, nil
 }
@@ -196,7 +197,7 @@ func newAttemptPage(rows []sqlitedb.AssignmentAttempt, total int64, pageSize int
 	if hasMore {
 		last := page.Attempts[len(page.Attempts)-1]
 		page.Next = &AttemptCursor{
-			ReceivedAt: time.Unix(last.ReceivedAt, 0).UTC(),
+			ReceivedAt: last.ReceivedAt,
 			ID:         last.ID,
 		}
 	}

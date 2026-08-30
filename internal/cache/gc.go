@@ -131,9 +131,9 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 	}
 
 	if opts.TTL > 0 {
-		cutoff := opts.Now.Add(-opts.TTL).Unix()
+		cutoff := opts.Now.Add(-opts.TTL)
 		for _, lane := range free {
-			if lane.LastUsed < cutoff {
+			if lane.LastUsed.Before(cutoff) {
 				evict(lane, "ttl")
 			}
 		}
@@ -153,8 +153,8 @@ func (m *LaneManager) PlanGC(ctx context.Context, opts GCOptions) (GCPlan, error
 		// Deterministic LRU: oldest first, id as the tiebreak so two
 		// plans over the same facts are the same plan.
 		sort.Slice(free, func(i, j int) bool {
-			if free[i].LastUsed != free[j].LastUsed {
-				return free[i].LastUsed < free[j].LastUsed
+			if !free[i].LastUsed.Equal(free[j].LastUsed) {
+				return free[i].LastUsed.Before(free[j].LastUsed)
 			}
 			return free[i].ID < free[j].ID
 		})

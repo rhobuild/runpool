@@ -71,7 +71,7 @@ func TestPressureWithholdsCredit(t *testing.T) {
 	}
 
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.SetPressure(store.PressureInfo{Level: disk.SoftEmergency.String()})
+		return tx.SetPressure(store.PressureVerdict{Level: disk.SoftEmergency.String()})
 	}); err != nil {
 		t.Fatal(err)
 	}
