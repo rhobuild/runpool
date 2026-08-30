@@ -44,7 +44,7 @@ func heldIn(t *testing.T) (string, assignment.AttemptID) {
 			[]store.WorkloadRow{{SourceWorkloadKey: "job-1", TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
-		ready, err := tx.ReadyAttempts(binding)
+		ready, err := tx.AllReadyAttempts(binding)
 		if err != nil {
 			return err
 		}

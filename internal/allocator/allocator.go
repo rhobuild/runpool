@@ -294,6 +294,34 @@ func (a *Allocator) Active(key assignment.BindingKey) int {
 	return 0
 }
 
+// ReservableCapacity reports how many additional local admissions a binding
+// can claim at this instant. It accounts for the tier hold and both capacity
+// ceilings; TryReserve remains the authority because another binding may spend
+// global capacity after this snapshot.
+func (a *Allocator) ReservableCapacity(key assignment.BindingKey) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pool := a.poolOf(key)
+	if pool == nil {
+		return 0
+	}
+	binding := pool.state[key]
+	if binding == nil || binding.held {
+		return 0
+	}
+	available := pool.parallelism - pool.active
+	if a.globalParallelism > 0 {
+		globalAvailable := a.globalParallelism - a.activeCount
+		if globalAvailable < available {
+			available = globalAvailable
+		}
+	}
+	if available < 0 {
+		return 0
+	}
+	return available
+}
+
 // SessionOpened records that the provider accepted a new session for key.
 // The provider refuses a second live session for the same binding, so this
 // proves any predecessor is gone and its capacity has returned to zero.

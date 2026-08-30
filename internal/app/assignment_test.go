@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -180,7 +181,7 @@ func (h *harness) ready() []store.Attempt {
 	var out []store.Attempt
 	h.inStore(func(s *store.Tx) error {
 		var err error
-		out, err = s.ReadyAttempts(h.bind.bindingID)
+		out, err = s.AllReadyAttempts(h.bind.bindingID)
 		return err
 	})
 	return out
@@ -382,6 +383,25 @@ func TestAttemptsWaitForACreditAndSurvive(t *testing.T) {
 	}
 }
 
+func TestSchedulerDrainsSeveralBoundedBatches(t *testing.T) {
+	const attempts = maxReadyAttemptBatch*2 + 2
+	h := newHarness(t, attempts)
+	workloads := make([]assignment.WorkloadAssignment, attempts)
+	for index := range workloads {
+		workloads[index] = demand(fmt.Sprintf("job-%03d", index), "app", int64(index+1))
+	}
+	if err := h.deliver(workloads...); err != nil {
+		t.Fatal(err)
+	}
+	h.serve()
+	if got := len(h.launchedAttempts()); got != attempts {
+		t.Fatalf("launched %d attempts; want all %d across bounded batches", got, attempts)
+	}
+	if ready := h.ready(); len(ready) != 0 {
+		t.Fatalf("%d attempts remain ready after capacity admitted the complete backlog", len(ready))
+	}
+}
+
 // The lease machine's own contracts — disposition by evidence, the
 // atomicity of the finalizing transaction, the cleanup saga's backoff —
 // live with the code that owns them, in internal/lease. What stays here
@@ -447,7 +467,7 @@ func leaseFor(t *testing.T, h *harness, workloadKey assignment.SourceWorkloadKey
 	var lease store.Lease
 	var attemptID assignment.AttemptID
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
-		ready, err := tx.ReadyAttempts(h.bind.bindingID)
+		ready, err := tx.AllReadyAttempts(h.bind.bindingID)
 		if err != nil {
 			return err
 		}

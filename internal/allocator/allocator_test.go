@@ -649,6 +649,32 @@ func TestGlobalParallelismConstrainsEveryTier(t *testing.T) {
 	}
 }
 
+func TestReservableCapacityAccountsForBothLimitsAndHolds(t *testing.T) {
+	a := NewWithGlobalParallelism(3)
+	mustRegister(t, a, "small", "small-a", 2)
+	mustRegister(t, a, "large", "large-a", 4)
+
+	if got := a.ReservableCapacity("small-a"); got != 2 {
+		t.Fatalf("small reservable capacity = %d; want its tier limit 2", got)
+	}
+	if !a.TryReserve("large-a") {
+		t.Fatal("large binding could not reserve the first global credit")
+	}
+	if !a.TryReserve("large-a") {
+		t.Fatal("large binding could not reserve the second global credit")
+	}
+	if got := a.ReservableCapacity("small-a"); got != 1 {
+		t.Fatalf("small reservable capacity = %d; want the one remaining global credit", got)
+	}
+	a.Hold(true)
+	if got := a.ReservableCapacity("small-a"); got != 0 {
+		t.Fatalf("held binding reports %d reservable credits; want 0", got)
+	}
+	if got := a.ReservableCapacity("unknown"); got != 0 {
+		t.Fatalf("unknown binding reports %d reservable credits; want 0", got)
+	}
+}
+
 func TestGlobalDiscoveryRotatesAcrossTiers(t *testing.T) {
 	a := NewWithGlobalParallelism(1)
 	mustRegister(t, a, "small", "small-a", 1)

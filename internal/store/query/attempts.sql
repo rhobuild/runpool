@@ -34,13 +34,22 @@ WHERE binding_id = @binding_id
   AND state IN ('ready', 'leased', 'preparing', 'prepared',
                 'starting', 'running', 'manual_review');
 
--- name: ListReadyAttempts :many
+-- name: ListAllReadyAttempts :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at
 FROM assignment_attempts
 WHERE binding_id = @binding_id AND state = 'ready'
 ORDER BY received_at, id;
+
+-- name: ListReadyAttemptBatch :many
+SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
+       state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at
+FROM assignment_attempts
+WHERE binding_id = @binding_id AND state = 'ready'
+ORDER BY received_at, id
+LIMIT @batch_size;
 
 -- name: ListManualReviewAttempts :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,

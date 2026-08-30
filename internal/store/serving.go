@@ -122,9 +122,27 @@ func fromRows(rows []sqlitedb.AssignmentAttempt) []Attempt {
 	return out
 }
 
-// ReadyAttempts lists a binding's servable work, oldest first.
-func (t *Tx) ReadyAttempts(bindingID assignment.BindingID) ([]Attempt, error) {
-	rows, err := t.q.ListReadyAttempts(t.ctx, int64(bindingID))
+// AllReadyAttempts lists all of a binding's servable work, oldest first. It is
+// an inspection API; scheduling uses ReadyAttemptBatch so backlog depth cannot
+// determine memory use.
+func (t *Tx) AllReadyAttempts(bindingID assignment.BindingID) ([]Attempt, error) {
+	rows, err := t.q.ListAllReadyAttempts(t.ctx, int64(bindingID))
+	if err != nil {
+		return nil, err
+	}
+	return fromRows(rows), nil
+}
+
+// ReadyAttemptBatch returns at most batchSize servable attempts in FIFO order.
+// Scheduling uses this query so the amount materialized from SQLite is bounded
+// by local admission, regardless of durable backlog depth.
+func (t *Tx) ReadyAttemptBatch(bindingID assignment.BindingID, batchSize int) ([]Attempt, error) {
+	if batchSize < 1 {
+		return nil, fmt.Errorf("ready attempt batch size must be positive, got %d", batchSize)
+	}
+	rows, err := t.q.ListReadyAttemptBatch(t.ctx, sqlitedb.ListReadyAttemptBatchParams{
+		BindingID: int64(bindingID), BatchSize: int64(batchSize),
+	})
 	if err != nil {
 		return nil, err
 	}

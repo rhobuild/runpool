@@ -136,7 +136,7 @@ func listAttempts(s *store.Tx, stateFilter string) ([]store.Attempt, error) {
 	}
 	var out []store.Attempt
 	for _, b := range bindings {
-		ready, err := s.ReadyAttempts(b.ID)
+		ready, err := s.AllReadyAttempts(b.ID)
 		if err != nil {
 			return nil, err
 		}

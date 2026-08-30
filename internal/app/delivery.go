@@ -12,6 +12,10 @@ import (
 	"github.com/rhobuild/runpool/internal/store"
 )
 
+// maxReadyAttemptBatch amortizes queue reads without letting one scheduling
+// pass retain an arbitrarily large result set or monopolize SQLite.
+const maxReadyAttemptBatch = 64
+
 // loop is one binding's demand cycle: announce the allocator's credit,
 // translate what the broker committed, and queue it. Messages are
 // hints; the state store carries the truth.
@@ -531,19 +535,35 @@ func (s *Controller) scheduleReadyAttempts(ctx context.Context, b *binding) {
 		return
 	}
 
-	var ready []store.Attempt
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-		var err error
-		ready, err = tx.ReadyAttempts(b.bindingID)
-		return err
-	}); err != nil {
-		s.log.Error("cannot read the ready attempts", "binding", b.key, "error", err)
-		return
-	}
+	for {
+		batchSize := s.alloc.ReservableCapacity(b.key)
+		if batchSize == 0 {
+			return
+		}
+		if batchSize > maxReadyAttemptBatch {
+			batchSize = maxReadyAttemptBatch
+		}
 
-	for _, attempt := range ready {
-		if !s.admit(ctx, b, attempt) {
-			return // admission is full; the attempt stays durable and waits
+		var ready []store.Attempt
+		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+			var err error
+			ready, err = tx.ReadyAttemptBatch(b.bindingID, batchSize)
+			return err
+		}); err != nil {
+			s.log.Error("cannot read the ready attempts", "binding", b.key, "error", err)
+			return
+		}
+		if len(ready) == 0 {
+			return
+		}
+
+		for _, attempt := range ready {
+			if !s.admit(ctx, b, attempt) {
+				return // admission is full; the attempt stays durable and waits
+			}
+		}
+		if len(ready) < batchSize {
+			return
 		}
 	}
 }

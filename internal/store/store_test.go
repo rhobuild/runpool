@@ -271,7 +271,7 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	})
 
 	inTx(t, s, func(tx *Tx) error {
-		ready, err := tx.ReadyAttempts(binding)
+		ready, err := tx.AllReadyAttempts(binding)
 		if err != nil {
 			return err
 		}
@@ -1039,7 +1039,7 @@ func TestReadyAttemptsAreServedOldestFirst(t *testing.T) {
 	var ready []Attempt
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		ready, err = tx.ReadyAttempts(binding)
+		ready, err = tx.AllReadyAttempts(binding)
 		return err
 	})
 
@@ -1450,7 +1450,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 				if _, err := tx.RecordDelivery(binding, "msg-1", payload("first"), workloads); err != nil {
 					return err
 				}
-				ready, err := tx.ReadyAttempts(binding)
+				ready, err := tx.AllReadyAttempts(binding)
 				if err != nil {
 					return err
 				}

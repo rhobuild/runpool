@@ -289,7 +289,7 @@ func TestTxRollsBackOnError(t *testing.T) {
 			t.Errorf("rolled-back lease persisted: %+v", leases)
 		}
 		// The claim rolled back with it, so the work is servable again.
-		ready, err := tx.ReadyAttempts(assignment.BindingID(binding))
+		ready, err := tx.AllReadyAttempts(assignment.BindingID(binding))
 		if err != nil {
 			return err
 		}

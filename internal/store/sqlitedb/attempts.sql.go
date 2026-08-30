@@ -252,6 +252,53 @@ func (q *Queries) InsertAttempt(ctx context.Context, arg InsertAttemptParams) (i
 	return result.RowsAffected()
 }
 
+const listAllReadyAttempts = `-- name: ListAllReadyAttempts :many
+SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
+       state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at
+FROM assignment_attempts
+WHERE binding_id = ?1 AND state = 'ready'
+ORDER BY received_at, id
+`
+
+func (q *Queries) ListAllReadyAttempts(ctx context.Context, bindingID int64) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listAllReadyAttempts, bindingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AssignmentAttempt{}
+	for rows.Next() {
+		var i AssignmentAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeliveryID,
+			&i.BindingID,
+			&i.SourceWorkloadKey,
+			&i.TenantKey,
+			&i.ProjectKey,
+			&i.State,
+			&i.ExecutionEvidence,
+			&i.Resolution,
+			&i.ReviewReason,
+			&i.ReviewedAt,
+			&i.ReviewedBy,
+			&i.ReceivedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttemptsByDelivery = `-- name: ListAttemptsByDelivery :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
@@ -346,17 +393,23 @@ func (q *Queries) ListManualReviewAttempts(ctx context.Context) ([]AssignmentAtt
 	return items, nil
 }
 
-const listReadyAttempts = `-- name: ListReadyAttempts :many
+const listReadyAttemptBatch = `-- name: ListReadyAttemptBatch :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at
 FROM assignment_attempts
 WHERE binding_id = ?1 AND state = 'ready'
 ORDER BY received_at, id
+LIMIT ?2
 `
 
-func (q *Queries) ListReadyAttempts(ctx context.Context, bindingID int64) ([]AssignmentAttempt, error) {
-	rows, err := q.db.QueryContext(ctx, listReadyAttempts, bindingID)
+type ListReadyAttemptBatchParams struct {
+	BindingID int64
+	BatchSize int64
+}
+
+func (q *Queries) ListReadyAttemptBatch(ctx context.Context, arg ListReadyAttemptBatchParams) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listReadyAttemptBatch, arg.BindingID, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}

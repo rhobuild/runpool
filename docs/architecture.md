@@ -189,6 +189,13 @@ instance-wide ceiling across every tier and target. Provider announcements and
 local admission consume the same credits, and startup adoption restores the
 count before new work can enter. With no global limit, tiers remain independent.
 
+Ready work remains in SQLite until a credit can serve it. The scheduler reads
+that FIFO in batches bounded by both currently reservable capacity and a fixed
+64-row ceiling, then claims each attempt and creates its lease in one
+compare-and-swap transaction. Backlog depth therefore does not determine the
+controller's query result size, and concurrent scheduling passes cannot create
+two leases for one attempt.
+
 ## The host is a budget too
 
 A monitor measures the daemon's filesystem from inside it and the

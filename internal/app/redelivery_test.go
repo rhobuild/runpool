@@ -597,7 +597,7 @@ func TestALostLeaseClaimReturnsItsCredit(t *testing.T) {
 	// so the compare-and-swap refuses.
 	var raced store.Attempt
 	h.inStore(func(tx *store.Tx) error {
-		ready, err := tx.ReadyAttempts(h.bind.bindingID)
+		ready, err := tx.AllReadyAttempts(h.bind.bindingID)
 		if err != nil {
 			return err
 		}
