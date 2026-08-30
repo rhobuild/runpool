@@ -25,14 +25,16 @@ jobs:
   build:
     runs-on: runpool-standard
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Every job gets its own Docker daemon inside its own capsule, so
       # this needs no service, no socket mount and no privileged runner.
       - name: The job has a Docker daemon of its own
         run: |
           docker version
-          docker run --rm alpine:3 echo "hello from a container this job started"
+          docker run --rm \
+            busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 \
+            echo "hello from a container this job started"
 
       # Under the default network profile the capsule has no route out.
       # Its only egress is a relay that applies the deployment's policy,
