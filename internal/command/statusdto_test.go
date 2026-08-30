@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,23 @@ import (
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
+
+func TestStatusReferenceNamesTheImplementedContract(t *testing.T) {
+	body, err := os.ReadFile("../../docs/reference/status-api.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := string(body)
+	if !strings.Contains(reference, "**Current version: `"+statusAPIVersion+"`.**") {
+		t.Errorf("status reference does not name implemented API %s", statusAPIVersion)
+	}
+	if !strings.Contains(reference, "`configured_binding_key`") {
+		t.Error("status reference omits the configured binding identity field")
+	}
+	if strings.Contains(reference, "`source_binding_key`") {
+		t.Error("status reference exposes the persistence column replaced by configured_binding_key")
+	}
+}
 
 // TestStatusDocumentShape pins the reporting contract: versioned,
 // snake_case, and every collection an array even when empty — a
@@ -289,7 +307,7 @@ func TestStatusReportsWithoutAResolvableCapsuleImage(t *testing.T) {
 	}
 }
 
-// TestBothStatusAnswersShareOneEnvelope: the two forms of a v1 status
+// TestBothStatusAnswersShareOneEnvelope: the two forms of the status
 // document are the same document.
 //
 // The pre-serve form used to be a hand-built map that re-spelled every

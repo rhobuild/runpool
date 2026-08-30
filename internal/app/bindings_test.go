@@ -426,20 +426,8 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 	}
 }
 
-// TestTheBindingKeyFormatIsNamedAndPinned: the durable binding key is a
-// literal here, not a comparison against itself.
-//
-// Its sibling in internal/assignment pins the delivery key this way, and
-// that is the cheaper of the two to move: a re-keyed delivery is
-// processed again and finds its attempts by workload key. This one is
-// the expensive one. Moving it renames every binding — the old row is
-// forgotten on the next startup with the scale set id recorded against
-// it, and each binding then meets a provider that already holds its
-// scale set and refuses to adopt one it has no record of creating.
-//
-// The test that existed compared configuredBindingKey's output to
-// configuredBindingKey's output, so any change to the encoding left the suite
-// green. The costly one was the unpinned one.
+// TestTheBindingKeyFormatIsNamedAndPinned holds the durable encoding against a
+// literal. Changing it requires a migration of the binding-owned graph.
 func TestTheBindingKeyFormatIsNamedAndPinned(t *testing.T) {
 	got := configuredBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
 	if want := assignment.ConfiguredBindingKey("target-runner-group-scale-set|app|default|runpool-standard"); got != want {
@@ -449,16 +437,8 @@ func TestTheBindingKeyFormatIsNamedAndPinned(t *testing.T) {
 	}
 }
 
-// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser: a binding's
-// durable identity is what an operator configured, not a parsed form of
-// the address they wrote.
-//
-// The key was built from the parsed scope and the canonical URL, so a
-// change to how a URL is read moves the key of a deployment that changed
-// nothing: the next start inserts a second binding beside the first, and
-// the original is left in `status` for good with no command that removes
-// it. Every delivery, attempt and lease hangs off that row, so the
-// history goes with it.
+// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser keeps parsed provider
+// identity out of the operator-configured durable key.
 func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	base := config.Target{ID: "app", RunnerGroup: "default"}
 	want := configuredBindingKey(base, "runpool-standard")

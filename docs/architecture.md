@@ -110,12 +110,12 @@ assignment carries the same workload key, so the index does not tell the
 two apart: it is what forces the requeue to supersede the open attempt
 instead of opening a second one beside it.
 
-The delivery also carries a versioned digest of its assigned payload. The
-current encoding is canonical and length-prefixed; a row written by an older
-release is compared using the encoding version stored beside its digest. An
-exact historical redelivery therefore remains idempotent, while structurally
-different content under the same provider key still fails closed as contract
-drift.
+The delivery also carries a digest of its assigned payload and the semantic
+name of the encoding that produced it. The current encoding is canonical and
+length-prefixed; a historical row is compared with the encoder named beside
+its digest. An exact historical redelivery therefore remains idempotent, while
+structurally different content under the same provider key still fails closed
+as contract drift.
 
 Nothing is acknowledged before it is durable. Execution evidence is
 monotonic and never guesses: `not_started`, `runtime_prepared`,

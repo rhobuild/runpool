@@ -61,19 +61,9 @@ func (a WorkloadAssignment) Validate() error {
 	return nil
 }
 
-// deliveryKeyFormat identifies the fields encoded into a delivery key. It is
-// named separately from the binding key's format because the two are unrelated
-// identities and changing them has different consequences.
-//
-// Changing this one re-keys deliveries. A message already recorded stops
-// matching, so it is processed again; the attempts it created are still
-// there, and the redelivery finds them by workload key rather than
-// creating a second set. Recoverable.
-//
-// Changing the binding key's format is a rename of every binding. See
-// configuredBindingKeyFormat in internal/app, which says what that costs, and
-// do not treat the two as one value because their current encodings happen to
-// have the same delimiter.
+// deliveryKeyFormat names the fields encoded into a delivery key. A change
+// requires a forward migration of source_delivery_key; it is unrelated to the
+// configured binding key format.
 const deliveryKeyFormat = "queue-delivery"
 
 // NewDeliveryKey encodes a provider's delivery identity as the opaque key the
@@ -90,8 +80,7 @@ func NewDeliveryKey(sourceQueueID SourceQueueID, sourceID SourceDeliveryID) Deli
 }
 
 // DeliveryFingerprintFormat is the persisted selector for a canonical
-// encoder. Its values describe the encoding rather than its place in a
-// sequence, so adding one never creates identifiers such as V10.
+// encoder. Each value describes the representation it identifies.
 type DeliveryFingerprintFormat string
 
 const (

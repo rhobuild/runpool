@@ -29,7 +29,7 @@ const statusAPIVersion = "v2"
 // could not be asked".
 type statusHead struct {
 	APIVersion string `json:"api_version"`
-	// Served discriminates v1's two forms: true carries the document
+	// Served discriminates the document's two forms: true carries the document
 	// below, false is the pre-serve form with only state_dir and detail.
 	// A consumer branches on this, not on which fields happen to exist.
 	Served bool `json:"served"`
@@ -134,8 +134,8 @@ type pressureDTO struct {
 }
 
 // bindingDTO reports one configured source of work. It is provider neutral:
-// configured_binding_key is derived from operator configuration, versioned,
-// and opaque. Provider-issued metadata belongs to its adapter.
+// configured_binding_key is a named, opaque encoding of operator
+// configuration. Provider-issued metadata belongs to its adapter.
 type bindingDTO struct {
 	TargetID             string `json:"target_id"`
 	ProviderKind         string `json:"provider_kind"`

@@ -280,35 +280,15 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 	return nil
 }
 
-// configuredBindingKeyFormat identifies the fields encoded into a binding key;
-// it is unrelated to the delivery key's format.
-//
-// Changing it renames every binding. The new key matches no row, so a row
-// is written for it and the old one is unclaimed — ForgetUnclaimedBindings
-// deletes it on the same startup, taking the scale set id recorded
-// against it, unless it still holds deliveries. Every binding then meets
-// a provider that already has its scale set under the unchanged name and
-// refuses to adopt one it has no record of creating, once each, before
-// settling. The contact history does not come back.
-//
-// That is a migration, not an encoding change. Anything that makes this
-// value move deserves the same reading as renaming a targets[].id, which
-// docs/adrs/2026-08-17-target-hosts-and-scopes.md records.
+// configuredBindingKeyFormat names the fields encoded into a binding key. A
+// change requires a forward migration: every delivery, attempt, lease and
+// provider metadata row is owned through the existing binding id.
 const configuredBindingKeyFormat = "target-runner-group-scale-set"
 
 // configuredBindingKey is a binding's durable identity: the row every
-// delivery, attempt and lease hangs off.
-//
-// It is built from what an operator configured and never from a parsed
-// form of the target's URL. A key carrying the parsed scope and the
-// canonical URL moves whenever the parser changes how it reads an
-// address a deployment did not touch, and a key that moves is a rename:
-// the new one matches no row, so a row is written for it, and the old
-// one is forgotten by ForgetUnclaimedBindings on the same startup —
-// taking the scale set id recorded against it. The next pass then has to
-// adopt a set it has no record of creating, which is a refusal before it
-// is an adoption. Scope and canonical URL still travel, in the adapter's
-// own metadata, which is where provider identity belongs.
+// delivery, attempt and lease hangs off. It uses operator configuration rather
+// than parsed URL output, so parser changes cannot rename a binding. Canonical
+// provider identity remains in adapter metadata.
 func configuredBindingKey(target config.Target, scaleSetName string) assignment.ConfiguredBindingKey {
 	return assignment.ConfiguredBindingKey(fmt.Sprintf("%s|%s|%s|%s",
 		configuredBindingKeyFormat, target.ID, target.RunnerGroup, scaleSetName))

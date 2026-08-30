@@ -19,28 +19,15 @@ const (
 	labelRoutingWorkflow    = "label-routing.yml"
 	labelRoutingFixturePath = ".github/workflows/label-routing.yml"
 
-	// A dispatched job that is going to be offered is offered within
-	// seconds; this is long enough that a slow queue is not read as a
-	// refusal, and short enough that a refusal is not a five-minute
-	// test. Both outcomes are answers, so the bound decides how long an
-	// answer takes rather than whether one arrives.
+	// A timeout is the negative observation, so this window must be stable
+	// across ordinary provider latency.
 	routingWindow = 90 * time.Second
 
-	// The budget for everything before the measurement: reading the
-	// installed fixture, resolving the runner group, creating the scale
-	// set, opening a session, dispatching, and polling for the run the
-	// dispatch created -- which is allowed a minute on its own. testCtx's
-	// ninety seconds would leave that minute sharing the rest with four
-	// network calls and no slack, and while a shortfall there is now a
-	// loud failure rather than a wrong answer, it is still a red run that
-	// measured nothing. The identity suite budgets the same one-minute
-	// ceiling inside ten minutes, for the same reason.
+	// Setup has a separate budget so it cannot shorten the observation window.
 	routingSetup = 5 * time.Minute
 )
 
-// routingCtx is the budget for setting an experiment up. It is separate
-// from the measurement window, which takes its own clock, so nothing
-// spent here can shorten the observation that decides the answer.
+// routingCtx bounds setup independently of the observation window.
 func routingCtx(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), routingSetup)
@@ -154,19 +141,10 @@ func TestObservationScaleSetWithExtraLabelAnswersToName(t *testing.T) {
 	}
 }
 
-// waitForAnyJob reports whether the session was offered any job before
-// the window closed. Both answers are the measurement, so a window that
-// closes is not a failure here -- unlike messagePoller, which is used
-// where an assignment is the contract and its absence is a broken one.
+// waitForAnyJob reports whether the session was offered work before the
+// observation window closed. Silence is a valid observation in this suite.
 func waitForAnyJob(t *testing.T, session *scaleset.MessageSessionClient, within time.Duration) bool {
 	t.Helper()
-	// Its own clock, deliberately not the caller's. Setting up costs
-	// real time -- finding the dispatched run is allowed a minute of
-	// polling on its own -- and a window carved out of an already-ticking
-	// budget shrinks by however long that took. Here silence is the
-	// answer that means "exact matching", so a window that quietly
-	// closed early would not fail: it would report a measurement, and
-	// the wrong one.
 	deadline, cancel := context.WithTimeout(t.Context(), within)
 	defer cancel()
 	for {
