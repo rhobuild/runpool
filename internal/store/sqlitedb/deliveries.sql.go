@@ -12,7 +12,7 @@ import (
 const getDeliveryByKey = `-- name: GetDeliveryByKey :one
 SELECT id, binding_id, source_delivery_key, payload_sha256, ack_state,
        received_at, ack_updated_at, acknowledged_at,
-       payload_fingerprint_version
+       payload_fingerprint_format
 FROM broker_deliveries
 WHERE binding_id = ?1
   AND source_delivery_key = ?2
@@ -35,7 +35,7 @@ func (q *Queries) GetDeliveryByKey(ctx context.Context, arg GetDeliveryByKeyPara
 		&i.ReceivedAt,
 		&i.AckUpdatedAt,
 		&i.AcknowledgedAt,
-		&i.PayloadFingerprintVersion,
+		&i.PayloadFingerprintFormat,
 	)
 	return i, err
 }
@@ -43,19 +43,19 @@ func (q *Queries) GetDeliveryByKey(ctx context.Context, arg GetDeliveryByKeyPara
 const insertDelivery = `-- name: InsertDelivery :one
 
 INSERT INTO broker_deliveries (
-  binding_id, source_delivery_key, payload_sha256, payload_fingerprint_version
+  binding_id, source_delivery_key, payload_sha256, payload_fingerprint_format
 )
 VALUES (?1, ?2, ?3, ?4)
 RETURNING id, binding_id, source_delivery_key, payload_sha256, ack_state,
           received_at, ack_updated_at, acknowledged_at,
-          payload_fingerprint_version
+          payload_fingerprint_format
 `
 
 type InsertDeliveryParams struct {
-	BindingID                 int64
-	SourceDeliveryKey         string
-	PayloadSha256             []byte
-	PayloadFingerprintVersion int64
+	BindingID                int64
+	SourceDeliveryKey        string
+	PayloadSha256            []byte
+	PayloadFingerprintFormat string
 }
 
 // Broker deliveries: at-least-once messages made durable before any
@@ -68,7 +68,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		arg.BindingID,
 		arg.SourceDeliveryKey,
 		arg.PayloadSha256,
-		arg.PayloadFingerprintVersion,
+		arg.PayloadFingerprintFormat,
 	)
 	var i BrokerDelivery
 	err := row.Scan(
@@ -80,7 +80,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.ReceivedAt,
 		&i.AckUpdatedAt,
 		&i.AcknowledgedAt,
-		&i.PayloadFingerprintVersion,
+		&i.PayloadFingerprintFormat,
 	)
 	return i, err
 }

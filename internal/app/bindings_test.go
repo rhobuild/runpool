@@ -426,7 +426,7 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 	}
 }
 
-// TestTheBindingKeyIsVersionedAndPinned: the durable binding key is a
+// TestTheBindingKeyFormatIsNamedAndPinned: the durable binding key is a
 // literal here, not a comparison against itself.
 //
 // Its sibling in internal/assignment pins the delivery key this way, and
@@ -438,11 +438,11 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 // scale set and refuses to adopt one it has no record of creating.
 //
 // The test that existed compared configuredBindingKey's output to
-// configuredBindingKey's output, so any change to the encoding, version
-// included, left the suite green. The costly one was the unpinned one.
-func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
+// configuredBindingKey's output, so any change to the encoding left the suite
+// green. The costly one was the unpinned one.
+func TestTheBindingKeyFormatIsNamedAndPinned(t *testing.T) {
 	got := configuredBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
-	if want := assignment.ConfiguredBindingKey("v2|app|default|runpool-standard"); got != want {
+	if want := assignment.ConfiguredBindingKey("target-runner-group-scale-set|app|default|runpool-standard"); got != want {
 		t.Errorf("configuredBindingKey = %q; want %q. This value keys every delivery, attempt "+
 			"and lease a binding owns, and moving it is a migration rather than an encoding change",
 			got, want)

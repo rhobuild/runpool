@@ -280,10 +280,10 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 	return nil
 }
 
-// configuredBindingKeyFormat prefixes the binding key, and is not the delivery
-// key's version even though it reads the same today.
+// configuredBindingKeyFormat identifies the fields encoded into a binding key;
+// it is unrelated to the delivery key's format.
 //
-// Bumping it renames every binding. The new key matches no row, so a row
+// Changing it renames every binding. The new key matches no row, so a row
 // is written for it and the old one is unclaimed — ForgetUnclaimedBindings
 // deletes it on the same startup, taking the scale set id recorded
 // against it, unless it still holds deliveries. Every binding then meets
@@ -294,7 +294,7 @@ func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Confi
 // That is a migration, not an encoding change. Anything that makes this
 // value move deserves the same reading as renaming a targets[].id, which
 // docs/adrs/2026-08-17-target-hosts-and-scopes.md records.
-const configuredBindingKeyFormat = "v2"
+const configuredBindingKeyFormat = "target-runner-group-scale-set"
 
 // configuredBindingKey is a binding's durable identity: the row every
 // delivery, attempt and lease hangs off.

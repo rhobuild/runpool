@@ -96,10 +96,10 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
 			BindingID: int64(binding), SourceDeliveryKey: "msg-7",
 		})
-		currentVersion, _ := assignment.CurrentDeliveryFingerprint(payload("payload-a"))
-		if err == nil && delivery.PayloadFingerprintVersion != int64(currentVersion) {
-			t.Errorf("new delivery fingerprint version = %d; want %d",
-				delivery.PayloadFingerprintVersion, currentVersion)
+		currentFormat, _ := assignment.CurrentDeliveryFingerprint(payload("payload-a"))
+		if err == nil && delivery.PayloadFingerprintFormat != string(currentFormat) {
+			t.Errorf("new delivery fingerprint format = %q; want %q",
+				delivery.PayloadFingerprintFormat, currentFormat)
 		}
 		return err
 	})
@@ -136,40 +136,40 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 func TestFingerprintEncoderRegistryMatchesTheSchema(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
-	versions := assignment.DeliveryFingerprintVersions()
-	if len(versions) == 0 {
+	formats := assignment.DeliveryFingerprintFormats()
+	if len(formats) == 0 {
 		t.Fatal("the delivery fingerprint registry is empty")
 	}
 	inTx(t, s, func(tx *Tx) error {
-		for _, version := range versions {
+		for _, format := range formats {
 			if _, err := tx.tx.Exec(`
 				INSERT INTO broker_deliveries (
 					binding_id, source_delivery_key, payload_sha256,
-					payload_fingerprint_version
+					payload_fingerprint_format
 				) VALUES (?, ?, ?, ?)`,
-				binding, fmt.Sprintf("version-%d", version), make([]byte, 32), version); err != nil {
-				t.Errorf("schema rejects registered fingerprint version %d: %v", version, err)
+				binding, "format-"+string(format), make([]byte, 32), format); err != nil {
+				t.Errorf("schema rejects registered fingerprint format %q: %v", format, err)
 			}
 		}
-		unsupported := versions[len(versions)-1] + 1
+		const unsupported = assignment.DeliveryFingerprintFormat("unregistered-sha256")
 		if _, err := tx.tx.Exec(`
 			INSERT INTO broker_deliveries (
 				binding_id, source_delivery_key, payload_sha256,
-				payload_fingerprint_version
+				payload_fingerprint_format
 			) VALUES (?, ?, ?, ?)`,
-			binding, "unsupported-version", make([]byte, 32), unsupported); err == nil {
-			t.Errorf("schema accepted unregistered fingerprint version %d", unsupported)
+			binding, "unsupported-format", make([]byte, 32), unsupported); err == nil {
+			t.Errorf("schema accepted unregistered fingerprint format %q", unsupported)
 		}
 		return nil
 	})
 }
 
 // TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint
-// proves the compatibility reason for persisting a version. v1.0.0 and
-// v1.1.0 shipped the same schema and delimiter encoding; after migration,
-// their rows use that encoder while new rows use the current one.
+// proves the compatibility reason for persisting an encoding name. v1.0.0
+// and v1.1.0 shipped the same delimiter encoding; after migration, their rows
+// name that encoder while new rows use the current one.
 func TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint(t *testing.T) {
-	const publishedFingerprintVersion assignment.DeliveryFingerprintVersion = 1
+	const publishedFingerprintFormat = assignment.FingerprintFormatDelimiterSeparatedSHA256
 
 	migrations, err := loadMigrations()
 	if err != nil {
@@ -189,9 +189,9 @@ func TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint(t *tes
 		SourceRequestID: 7, SourceRunID: 41, Labels: []string{"self-hosted", "linux"},
 	}
 	assigned := []assignment.WorkloadAssignment{workload}
-	published, ok := assignment.DeliveryFingerprintForVersion(assigned, publishedFingerprintVersion)
+	published, ok := assignment.DeliveryFingerprintForFormat(assigned, publishedFingerprintFormat)
 	if !ok {
-		t.Fatal("this build cannot compute the published fingerprint version")
+		t.Fatal("this build cannot compute the published fingerprint format")
 	}
 	if _, err := old.db.Exec(`
 		INSERT INTO provider_bindings (id, target_id, provider_kind, source_binding_key)
@@ -229,10 +229,83 @@ func TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint(t *tes
 		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
 			BindingID: 1, SourceDeliveryKey: "msg-old",
 		})
-		if err == nil && delivery.PayloadFingerprintVersion != int64(publishedFingerprintVersion) {
-			t.Errorf("historical row was rewritten to fingerprint version %d", delivery.PayloadFingerprintVersion)
+		if err == nil && delivery.PayloadFingerprintFormat != string(publishedFingerprintFormat) {
+			t.Errorf("historical row uses fingerprint format %q; want %q",
+				delivery.PayloadFingerprintFormat, publishedFingerprintFormat)
 		}
 		return err
+	})
+}
+
+// TestSemanticFormatMigrationPreservesPublishedDurableIdentity proves that
+// replacing ordinal tags is a representation migration, not a
+// delete-and-reinsert. The row ids and fingerprint bytes from the published
+// schema remain stable while every durable selector is translated to the
+// format name this build understands.
+func TestSemanticFormatMigrationPreservesPublishedDurableIdentity(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 2 {
+		t.Fatal("the semantic-format migration is absent")
+	}
+
+	dir := t.TempDir()
+	old := openRaw(t, dir)
+	if err := old.applyMigrations(migrations[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO provider_bindings
+			(id, target_id, provider_kind, source_binding_key)
+		VALUES (17, 'app', 'github_actions', 'v2|app|default|runpool-standard')`); err != nil {
+		t.Fatal(err)
+	}
+	wantFingerprint := make([]byte, 32)
+	wantFingerprint[0] = 0x5a
+	if _, err := old.db.Exec(`
+		INSERT INTO broker_deliveries
+			(id, binding_id, source_delivery_key, payload_sha256)
+		VALUES (23, 17, 'v2|71|41', ?)`, wantFingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dir, DefaultRetryBudget)
+	if err != nil {
+		t.Fatalf("upgrade published schema: %v", err)
+	}
+	defer upgraded.Close()
+	inTx(t, upgraded, func(tx *Tx) error {
+		bindings, err := tx.Bindings()
+		if err != nil {
+			return err
+		}
+		if len(bindings) != 1 || bindings[0].ID != 17 ||
+			bindings[0].ConfiguredBindingKey != "target-runner-group-scale-set|app|default|runpool-standard" {
+			t.Errorf("migrated binding = %+v; want row 17 with its semantic key", bindings)
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 17, SourceDeliveryKey: "queue-delivery|71|41",
+		})
+		if err != nil {
+			return err
+		}
+		if delivery.ID != 23 {
+			t.Errorf("migrated delivery id = %d; want row 23 preserved", delivery.ID)
+		}
+		if !slices.Equal(delivery.PayloadSha256, wantFingerprint) {
+			t.Errorf("migrated fingerprint = %x; want %x preserved",
+				delivery.PayloadSha256, wantFingerprint)
+		}
+		if delivery.PayloadFingerprintFormat != string(assignment.FingerprintFormatDelimiterSeparatedSHA256) {
+			t.Errorf("migrated fingerprint format = %q; want %q",
+				delivery.PayloadFingerprintFormat, assignment.FingerprintFormatDelimiterSeparatedSHA256)
+		}
+		return nil
 	})
 }
 
@@ -1540,13 +1613,13 @@ func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 	var kept, dropped, withWork assignment.BindingID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if kept, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-standard"); err != nil {
+		if kept, err = tx.EnsureBinding("app", "github_actions", "target-runner-group-scale-set|app|default|runpool-standard"); err != nil {
 			return err
 		}
-		if dropped, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-renamed"); err != nil {
+		if dropped, err = tx.EnsureBinding("app", "github_actions", "target-runner-group-scale-set|app|default|runpool-renamed"); err != nil {
 			return err
 		}
-		if withWork, err = tx.EnsureBinding("old", "github_actions", "v2|old|default|runpool-old"); err != nil {
+		if withWork, err = tx.EnsureBinding("old", "github_actions", "target-runner-group-scale-set|old|default|runpool-old"); err != nil {
 			return err
 		}
 		_, err = tx.RecordDelivery(withWork, "msg-old", payload("old"),
@@ -2839,9 +2912,9 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if delivery.PayloadFingerprintVersion != 1 {
-			t.Errorf("migrated delivery fingerprint version = %d; want published value 1 preserved",
-				delivery.PayloadFingerprintVersion)
+		if delivery.PayloadFingerprintFormat != string(assignment.FingerprintFormatDelimiterSeparatedSHA256) {
+			t.Errorf("migrated delivery fingerprint format = %q; want published delimiter format preserved",
+				delivery.PayloadFingerprintFormat)
 		}
 		return nil
 	}); err != nil {

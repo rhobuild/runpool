@@ -8,27 +8,27 @@ import (
 )
 
 func fingerprintFor(t *testing.T, payload []WorkloadAssignment,
-	version DeliveryFingerprintVersion) PayloadFingerprint {
+	format DeliveryFingerprintFormat) PayloadFingerprint {
 	t.Helper()
-	digest, ok := DeliveryFingerprintForVersion(payload, version)
+	digest, ok := DeliveryFingerprintForFormat(payload, format)
 	if !ok {
-		t.Fatalf("fingerprint version %d is unavailable", version)
+		t.Fatalf("fingerprint format %q is unavailable", format)
 	}
 	return digest
 }
 
-func TestFingerprintEncodingsAreVersionedContracts(t *testing.T) {
+func TestFingerprintEncodingsAreNamedContracts(t *testing.T) {
 	payload := []WorkloadAssignment{{
 		SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "app",
 		SourceRequestID: 7, SourceRunID: 41, Labels: []string{"self-hosted", "linux"},
 	}}
-	for version, want := range map[DeliveryFingerprintVersion]string{
-		1:                                 "afa259201b084fbd9ae269769c205995d2a480c0616aa17a1aceb514dec8211e",
-		currentDeliveryFingerprintVersion: "122fb51719df68053f6e058ead239c213b790d5699fdbca288a9008d7d40d55f",
+	for format, want := range map[DeliveryFingerprintFormat]string{
+		FingerprintFormatDelimiterSeparatedSHA256: "afa259201b084fbd9ae269769c205995d2a480c0616aa17a1aceb514dec8211e",
+		FingerprintFormatLengthPrefixedSHA256:     "122fb51719df68053f6e058ead239c213b790d5699fdbca288a9008d7d40d55f",
 	} {
-		digest := fingerprintFor(t, payload, version)
+		digest := fingerprintFor(t, payload, format)
 		if got := hex.EncodeToString(digest[:]); got != want {
-			t.Errorf("fingerprint v%d = %s; want immutable encoding %s", version, got, want)
+			t.Errorf("fingerprint %q = %s; want immutable encoding %s", format, got, want)
 		}
 	}
 }
@@ -43,21 +43,21 @@ func TestFingerprintIsCanonical(t *testing.T) {
 	b := WorkloadAssignment{SourceWorkloadKey: "job-b", TenantKey: "acme",
 		ProjectKey: "app", SourceRequestID: 2, SourceRunID: 10, Labels: []string{"y", "x"}}
 
-	for version := range deliveryFingerprintEncoders {
-		forwardDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, version)
-		swappedDigest := fingerprintFor(t, []WorkloadAssignment{b, a}, version)
+	for format := range deliveryFingerprintEncoders {
+		forwardDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, format)
+		swappedDigest := fingerprintFor(t, []WorkloadAssignment{b, a}, format)
 		if forwardDigest != swappedDigest {
-			t.Errorf("fingerprint v%d depends on assignment order", version)
+			t.Errorf("fingerprint %q depends on assignment order", format)
 		}
 	}
 
 	bLabels := b
 	bLabels.Labels = []string{"x", "y"}
-	for version := range deliveryFingerprintEncoders {
-		forwardDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, version)
-		swappedDigest := fingerprintFor(t, []WorkloadAssignment{a, bLabels}, version)
+	for format := range deliveryFingerprintEncoders {
+		forwardDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, format)
+		swappedDigest := fingerprintFor(t, []WorkloadAssignment{a, bLabels}, format)
 		if forwardDigest != swappedDigest {
-			t.Errorf("fingerprint v%d depends on label order", version)
+			t.Errorf("fingerprint %q depends on label order", format)
 		}
 	}
 
@@ -72,11 +72,11 @@ func TestFingerprintIsCanonical(t *testing.T) {
 	for i, mutate := range mutations {
 		mutated := a
 		mutate(&mutated)
-		for version := range deliveryFingerprintEncoders {
-			originalDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, version)
-			changedDigest := fingerprintFor(t, []WorkloadAssignment{mutated, b}, version)
+		for format := range deliveryFingerprintEncoders {
+			originalDigest := fingerprintFor(t, []WorkloadAssignment{a, b}, format)
+			changedDigest := fingerprintFor(t, []WorkloadAssignment{mutated, b}, format)
 			if originalDigest == changedDigest {
-				t.Errorf("mutation %d did not change fingerprint v%d; that field is uncovered", i, version)
+				t.Errorf("mutation %d did not change fingerprint %q; that field is uncovered", i, format)
 			}
 		}
 	}
@@ -120,25 +120,25 @@ func TestCanonicalFingerprintSeparatesDelimitedAmbiguities(t *testing.T) {
 	}
 }
 
-func TestFingerprintVersionSelectionIsTotal(t *testing.T) {
+func TestFingerprintFormatSelectionIsTotal(t *testing.T) {
 	payload := []WorkloadAssignment{{SourceWorkloadKey: "job"}}
-	for version := range deliveryFingerprintEncoders {
-		if _, ok := DeliveryFingerprintForVersion(payload, version); !ok {
-			t.Errorf("supported fingerprint version %d is unavailable", version)
+	for format := range deliveryFingerprintEncoders {
+		if _, ok := DeliveryFingerprintForFormat(payload, format); !ok {
+			t.Errorf("supported fingerprint format %q is unavailable", format)
 		}
 	}
-	if _, ok := DeliveryFingerprintForVersion(payload, 0); ok {
-		t.Error("version zero was accepted")
+	if _, ok := DeliveryFingerprintForFormat(payload, ""); ok {
+		t.Error("an empty format was accepted")
 	}
-	if _, ok := DeliveryFingerprintForVersion(payload, currentDeliveryFingerprintVersion+1); ok {
-		t.Error("a future version was accepted")
+	if _, ok := DeliveryFingerprintForFormat(payload, "future-encoding-sha256"); ok {
+		t.Error("an unknown format was accepted")
 	}
-	if _, ok := deliveryFingerprintEncoders[currentDeliveryFingerprintVersion]; !ok {
-		t.Error("the current fingerprint version has no encoder")
+	if _, ok := deliveryFingerprintEncoders[currentDeliveryFingerprintFormat]; !ok {
+		t.Error("the current fingerprint format has no encoder")
 	}
-	for version := range deliveryFingerprintEncoders {
-		if version < 1 || version > currentDeliveryFingerprintVersion {
-			t.Errorf("encoder version %d falls outside the persisted range", version)
+	for _, format := range DeliveryFingerprintFormats() {
+		if format == "" {
+			t.Error("the fingerprint registry contains an unnamed format")
 		}
 	}
 }
@@ -167,9 +167,9 @@ func FuzzCanonicalFingerprintFieldBoundaries(f *testing.F) {
 	})
 }
 
-func TestDeliveryKeyIsVersioned(t *testing.T) {
-	if got := NewDeliveryKey(7, 41); got != "v2|7|41" {
-		t.Errorf("NewDeliveryKey(7, 41) = %q; the versioned encoding is the stored identity", got)
+func TestDeliveryKeyNamesItsFormat(t *testing.T) {
+	if got := NewDeliveryKey(7, 41); got != "queue-delivery|7|41" {
+		t.Errorf("NewDeliveryKey(7, 41) = %q; the named encoding is the stored identity", got)
 	}
 }
 

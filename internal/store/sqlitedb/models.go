@@ -44,15 +44,15 @@ type AuditLog struct {
 }
 
 type BrokerDelivery struct {
-	ID                        int64
-	BindingID                 int64
-	SourceDeliveryKey         string
-	PayloadSha256             []byte
-	AckState                  string
-	ReceivedAt                int64
-	AckUpdatedAt              sql.NullInt64
-	AcknowledgedAt            sql.NullInt64
-	PayloadFingerprintVersion int64
+	ID                       int64
+	BindingID                int64
+	SourceDeliveryKey        string
+	PayloadSha256            []byte
+	AckState                 string
+	ReceivedAt               int64
+	AckUpdatedAt             sql.NullInt64
+	AcknowledgedAt           sql.NullInt64
+	PayloadFingerprintFormat string
 }
 
 type CacheLane struct {

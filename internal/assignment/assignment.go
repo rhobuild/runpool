@@ -61,25 +61,24 @@ func (a WorkloadAssignment) Validate() error {
 	return nil
 }
 
-// DeliveryKeyVersion prefixes the delivery key. It is named, and named
-// separately from the binding key's version, because the two are
-// unrelated encodings that happen to be at the same number, and the
-// cost of bumping them is not the same.
+// deliveryKeyFormat identifies the fields encoded into a delivery key. It is
+// named separately from the binding key's format because the two are unrelated
+// identities and changing them has different consequences.
 //
-// Bumping this one re-keys deliveries. A message already recorded stops
+// Changing this one re-keys deliveries. A message already recorded stops
 // matching, so it is processed again; the attempts it created are still
 // there, and the redelivery finds them by workload key rather than
 // creating a second set. Recoverable.
 //
-// Bumping the binding key's is a rename of every binding. See
+// Changing the binding key's format is a rename of every binding. See
 // configuredBindingKeyFormat in internal/app, which says what that costs, and
-// do not treat the two as one value because they read alike.
-const DeliveryKeyVersion = "v2"
+// do not treat the two as one value because their current encodings happen to
+// have the same delimiter.
+const deliveryKeyFormat = "queue-delivery"
 
-// NewDeliveryKey encodes a provider's delivery identity as the opaque,
-// versioned key the store deduplicates on. The version prefix is what
-// lets the encoding evolve without two encodings of one delivery ever
-// comparing equal.
+// NewDeliveryKey encodes a provider's delivery identity as the opaque key the
+// store deduplicates on. The semantic format prefix lets the encoding evolve
+// without two encodings of one delivery ever comparing equal.
 //
 // The queue's identity is part of it, because a delivery id is only
 // unique within the queue that issued it. A queue destroyed upstream and
@@ -87,61 +86,69 @@ const DeliveryKeyVersion = "v2"
 // on the id alone, a fresh message can collide with a delivery this
 // binding already recorded and confirmed.
 func NewDeliveryKey(sourceQueueID SourceQueueID, sourceID SourceDeliveryID) DeliveryKey {
-	return DeliveryKey(fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID))
+	return DeliveryKey(fmt.Sprintf("%s|%d|%d", deliveryKeyFormat, sourceQueueID, sourceID))
 }
 
-// DeliveryFingerprintVersion is the persisted selector for a canonical
-// encoder. Individual historical numbers stay inside the registry; callers
-// only read the version already stored or ask for the current one.
-type DeliveryFingerprintVersion int64
+// DeliveryFingerprintFormat is the persisted selector for a canonical
+// encoder. Its values describe the encoding rather than its place in a
+// sequence, so adding one never creates identifiers such as V10.
+type DeliveryFingerprintFormat string
 
-const currentDeliveryFingerprintVersion DeliveryFingerprintVersion = 2
+const (
+	// FingerprintFormatDelimiterSeparatedSHA256 identifies the original
+	// delimiter-separated canonical encoding retained for durable rows.
+	FingerprintFormatDelimiterSeparatedSHA256 DeliveryFingerprintFormat = "delimiter-separated-sha256"
+	// FingerprintFormatLengthPrefixedSHA256 identifies the unambiguous
+	// length-prefixed canonical encoding written by this build.
+	FingerprintFormatLengthPrefixedSHA256 DeliveryFingerprintFormat = "length-prefixed-sha256"
+	currentDeliveryFingerprintFormat                                = FingerprintFormatLengthPrefixedSHA256
+)
 
 // PayloadFingerprint is the fixed-size digest persisted for one broker
 // delivery payload.
 type PayloadFingerprint [sha256.Size]byte
 
-var deliveryFingerprintEncoders = map[DeliveryFingerprintVersion]func([]WorkloadAssignment) PayloadFingerprint{
-	1: fingerprintDelimited,
-	2: func(assignments []WorkloadAssignment) PayloadFingerprint {
+var deliveryFingerprintEncoders = map[DeliveryFingerprintFormat]func([]WorkloadAssignment) PayloadFingerprint{
+	FingerprintFormatDelimiterSeparatedSHA256: fingerprintDelimited,
+	FingerprintFormatLengthPrefixedSHA256: func(assignments []WorkloadAssignment) PayloadFingerprint {
 		return PayloadFingerprint(sha256.Sum256(canonicalFingerprintPreimage(assignments)))
 	},
 }
 
-// DeliveryFingerprintVersions returns the durable encoder vocabulary in
-// ascending order. The store uses it to hold its schema constraint in parity
-// with the algorithms this build can read.
-func DeliveryFingerprintVersions() []DeliveryFingerprintVersion {
-	versions := make([]DeliveryFingerprintVersion, 0, len(deliveryFingerprintEncoders))
-	for version := range deliveryFingerprintEncoders {
-		versions = append(versions, version)
+// DeliveryFingerprintFormats returns the durable encoder vocabulary in stable
+// order. The store uses it to hold its schema constraint in parity with the
+// algorithms this build can read.
+func DeliveryFingerprintFormats() []DeliveryFingerprintFormat {
+	formats := make([]DeliveryFingerprintFormat, 0, len(deliveryFingerprintEncoders))
+	for format := range deliveryFingerprintEncoders {
+		formats = append(formats, format)
 	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
-	return versions
+	sort.Slice(formats, func(i, j int) bool { return formats[i] < formats[j] })
+	return formats
 }
 
-// CurrentDeliveryFingerprint returns the version and digest written for a new
+// CurrentDeliveryFingerprint returns the format and digest written for a new
 // delivery. Only the current encoder runs on this path; retaining historical
 // readers does not make new deliveries progressively more expensive.
-func CurrentDeliveryFingerprint(assignments []WorkloadAssignment) (DeliveryFingerprintVersion, PayloadFingerprint) {
-	return currentDeliveryFingerprintVersion,
-		deliveryFingerprintEncoders[currentDeliveryFingerprintVersion](assignments)
+func CurrentDeliveryFingerprint(assignments []WorkloadAssignment) (DeliveryFingerprintFormat, PayloadFingerprint) {
+	return currentDeliveryFingerprintFormat,
+		deliveryFingerprintEncoders[currentDeliveryFingerprintFormat](assignments)
 }
 
-// DeliveryFingerprintForVersion computes a payload with the encoder named by
-// a durable row. It returns false for a version this build cannot interpret.
-func DeliveryFingerprintForVersion(assignments []WorkloadAssignment,
-	version DeliveryFingerprintVersion) (PayloadFingerprint, bool) {
-	encode, ok := deliveryFingerprintEncoders[version]
+// DeliveryFingerprintForFormat computes a payload with the encoder named by a
+// durable row. It returns false for a format this build cannot interpret.
+func DeliveryFingerprintForFormat(assignments []WorkloadAssignment,
+	format DeliveryFingerprintFormat) (PayloadFingerprint, bool) {
+	encode, ok := deliveryFingerprintEncoders[format]
 	if !ok {
 		return PayloadFingerprint{}, false
 	}
 	return encode(assignments), true
 }
 
-// fingerprintDelimited is retained only for rows written before the
-// fingerprint version was persisted. Its bytes are a durable compatibility
-// contract, but its historical number is not part of the Go vocabulary.
+// fingerprintDelimited is retained for rows whose persisted format names this
+// encoding. Its bytes are a durable compatibility contract; the format name
+// describes it without assigning it a historical ordinal.
 func fingerprintDelimited(assignments []WorkloadAssignment) PayloadFingerprint {
 	lines := make([]string, len(assignments))
 	for i, a := range assignments {

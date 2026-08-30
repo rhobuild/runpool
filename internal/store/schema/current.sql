@@ -76,8 +76,10 @@ CREATE TABLE broker_deliveries (
 		CHECK (ack_state IN ('pending', 'requested', 'confirmed', 'uncertain')),
 	received_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	ack_updated_at       INTEGER,
-	acknowledged_at      INTEGER, payload_fingerprint_version INTEGER NOT NULL DEFAULT 1
-		CHECK (payload_fingerprint_version IN (1, 2)),
+	acknowledged_at      INTEGER, payload_fingerprint_format TEXT NOT NULL
+		DEFAULT 'delimiter-separated-sha256'
+		CHECK (payload_fingerprint_format IN (
+			'delimiter-separated-sha256', 'length-prefixed-sha256')),
 	FOREIGN KEY (binding_id) REFERENCES provider_bindings (id),
 	UNIQUE (binding_id, source_delivery_key),
 	-- The composite key assignment_attempts points at, so an attempt can

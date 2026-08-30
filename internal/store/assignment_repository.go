@@ -62,11 +62,11 @@ func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey as
 	})
 	switch {
 	case err == nil:
-		version := assignment.DeliveryFingerprintVersion(delivery.PayloadFingerprintVersion)
-		expected, ok := assignment.DeliveryFingerprintForVersion(assigned, version)
+		format := assignment.DeliveryFingerprintFormat(delivery.PayloadFingerprintFormat)
+		expected, ok := assignment.DeliveryFingerprintForFormat(assigned, format)
 		if !ok {
-			return 0, fmt.Errorf("delivery %s of binding %d uses unsupported fingerprint version %d",
-				sourceDeliveryKey, bindingID, version)
+			return 0, fmt.Errorf("delivery %s of binding %d uses unsupported fingerprint format %q",
+				sourceDeliveryKey, bindingID, format)
 		}
 		if !bytes.Equal(delivery.PayloadSha256, expected[:]) {
 			return 0, fmt.Errorf("%w: delivery %s of binding %d",
@@ -78,12 +78,12 @@ func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey as
 		// resolving inside this very transaction — would otherwise leave
 		// a delivery whose work no query can ever find.
 	case errors.Is(err, sql.ErrNoRows):
-		version, fingerprint := assignment.CurrentDeliveryFingerprint(assigned)
+		format, fingerprint := assignment.CurrentDeliveryFingerprint(assigned)
 		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
-			BindingID:                 int64(bindingID),
-			SourceDeliveryKey:         string(sourceDeliveryKey),
-			PayloadSha256:             fingerprint[:],
-			PayloadFingerprintVersion: int64(version),
+			BindingID:                int64(bindingID),
+			SourceDeliveryKey:        string(sourceDeliveryKey),
+			PayloadSha256:            fingerprint[:],
+			PayloadFingerprintFormat: string(format),
 		})
 		if err != nil {
 			return 0, err
