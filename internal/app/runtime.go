@@ -51,7 +51,6 @@ func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.At
 // cancelling serve stops admission, not a running job — drain waits, and
 // whatever outlives the drain window is adopted on the next start.
 func (s *Controller) runCapsule(b *binding, lease store.Lease) {
-	defer s.ownership.activeDone()
 	attemptID := lease.AttemptID
 	// startObs carries the classification of an ambiguous start into the
 	// finalizing transaction. Recovery does not re-take it: the pass that
@@ -60,11 +59,9 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// it is recorded with the lease on the way into cleanup, and a retry
 	// reads it back rather than measuring again.
 	var startObs assignment.ExecutionObservation
-	// The scheduler claims the lease before this goroutine is started, so
-	// the claim is unbroken from the moment the lease row exists. Claiming
-	// again is a no-op that covers a direct caller; releasing is registered
-	// before the credit defer, so it runs after it.
-	s.ownership.claim(lease.ID)
+	// The scheduler claims the lease before this goroutine is started, so the
+	// claim is unbroken from the moment the lease row exists. Releasing is
+	// registered before the credit defer, so it runs after it.
 	defer s.ownership.release(lease.ID)
 	// The credit is released by whoever reaches `released` — not here.
 	// A lease that ends quarantined still owns privileged containers,

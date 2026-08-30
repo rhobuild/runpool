@@ -144,7 +144,6 @@ func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, 
 		t.Fatal(err)
 	}
 	lease, attemptID := leaseFor(t, h, workload)
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 	return lease, string(attemptID)
 }
@@ -620,7 +619,6 @@ func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
 	aged := lease
 	aged.CreatedAt = time.Now().Add(-90 * time.Minute)
 	before := time.Now()
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, aged)
 
 	if wait.deadline.IsZero() {
@@ -740,7 +738,6 @@ func TestASupersededAttemptIsNeverStarted(t *testing.T) {
 		})
 	}
 
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if caps.starts != 0 {
@@ -853,7 +850,6 @@ func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 		})
 	}
 
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if caps.starts != 1 {
@@ -901,7 +897,6 @@ func TestAnObservationIsAlwaysBounded(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-observed")
 
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if !observed {
@@ -1266,7 +1261,6 @@ func TestTheFirstTransitionUnwindsLikeEveryOther(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {

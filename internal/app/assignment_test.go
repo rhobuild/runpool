@@ -118,12 +118,19 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	}
 	// The default launch records the claim and leaves the lease running,
 	// so a test decides its outcome explicitly.
-	h.srv.launch = func(_ *binding, lease store.Lease) {
-		defer h.srv.ownership.activeDone()
-		h.mu.Lock()
-		h.launched = append(h.launched, lease.AttemptID)
-		h.leases[lease.AttemptID] = lease
-		h.mu.Unlock()
+	h.srv.scheduler = &attemptScheduler{
+		log:         log,
+		store:       st,
+		allocator:   h.srv.alloc,
+		ownership:   h.srv.ownership,
+		pressure:    h.srv.currentPressure,
+		createLease: h.srv.createLease,
+		launch: func(_ *binding, lease store.Lease) {
+			h.mu.Lock()
+			h.launched = append(h.launched, lease.AttemptID)
+			h.leases[lease.AttemptID] = lease
+			h.mu.Unlock()
+		},
 	}
 	return h
 }
@@ -144,7 +151,7 @@ func (h *harness) deliver(workloads ...assignment.WorkloadAssignment) error {
 }
 
 func (h *harness) serve() {
-	h.srv.scheduleReadyAttempts(h.t.Context(), h.bind)
+	h.srv.scheduler.schedule(h.t.Context(), h.bind)
 	<-h.srv.ownership.wait()
 }
 

@@ -12,10 +12,6 @@ import (
 	"github.com/rhobuild/runpool/internal/store"
 )
 
-// maxReadyAttemptBatch amortizes queue reads without letting one scheduling
-// pass retain an arbitrarily large result set or monopolize SQLite.
-const maxReadyAttemptBatch = 64
-
 // loop is one binding's demand cycle: announce the allocator's credit,
 // translate what the broker committed, and queue it. Messages are
 // hints; the state store carries the truth.
@@ -67,7 +63,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		// Local work drains whether or not the broker is reachable, so
 		// this runs before the session is required — and after the scale
 		// set, which it needs.
-		s.scheduleReadyAttempts(ctx, b)
+		s.scheduler.schedule(ctx, b)
 
 		if b.session == nil {
 			if err := s.openSession(ctx, b); err == nil {
@@ -264,7 +260,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 			s.alloc.SetAssignedDemand(b.key, msg.Statistics.Assigned)
 		}
 
-		s.scheduleReadyAttempts(ctx, b)
+		s.scheduler.schedule(ctx, b)
 
 		if !advanced {
 			// The cursor did not move, so the next poll is answered with
@@ -517,84 +513,6 @@ func (s *Controller) cancelIfReady(tx *store.Tx, attemptID assignment.AttemptID)
 		return nil // nothing ready to cancel; running work drains instead
 	}
 	return err
-}
-
-// scheduleReadyAttempts claims ready attempts while admission has capacity.
-// The queue is the store, not memory, so a restart resumes
-// exactly where this left off, and the claim is a compare-and-swap only
-// one caller can win.
-func (s *Controller) scheduleReadyAttempts(ctx context.Context, b *binding) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// The disk-pressure admission gate. Ready attempts are durable and
-	// lose nothing by waiting; what an emergency must never do is stack
-	// more work onto a filesystem that is running out. The monitor logs
-	// the closure once, at the transition — not here, every pass.
-	if s.currentPressure().AdmissionClosed() {
-		return
-	}
-
-	for {
-		batchSize := s.alloc.ReservableCapacity(b.key)
-		if batchSize == 0 {
-			return
-		}
-		if batchSize > maxReadyAttemptBatch {
-			batchSize = maxReadyAttemptBatch
-		}
-
-		var ready []store.Attempt
-		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
-			var err error
-			ready, err = tx.ReadyAttemptBatch(b.bindingID, batchSize)
-			return err
-		}); err != nil {
-			s.log.Error("cannot read the ready attempts", "binding", b.key, "error", err)
-			return
-		}
-		if len(ready) == 0 {
-			return
-		}
-
-		for _, attempt := range ready {
-			if !s.admit(ctx, b, attempt) {
-				return // admission is full; the attempt stays durable and waits
-			}
-		}
-		if len(ready) < batchSize {
-			return
-		}
-	}
-}
-
-// admit takes one credit and turns one ready attempt into a running
-// launch. It reports false only when admission is full, because that is
-// the one answer that stops the pass: everything after the reserve keeps
-// going, and everything after the reserve that fails returns the credit
-// -- the claim is a compare-and-swap two passes can race for, so losing
-// it is ordinary, and a credit reserved for a lease that was never
-// created would otherwise be burned for the life of the process.
-func (s *Controller) admit(ctx context.Context, b *binding, attempt store.Attempt) bool {
-	if !s.alloc.TryReserve(b.key) {
-		return false
-	}
-	lease, err := s.createLease(ctx, b, attempt)
-	if err != nil {
-		s.alloc.Release(b.key)
-		if !errors.Is(err, store.ErrConflict) {
-			s.log.Error("lease creation failed", "binding", b.key, "error", err)
-		}
-		return true
-	}
-	// Claim before the goroutine exists. The lease is already committed
-	// and `reserved` is a live state, so between this commit and
-	// runCapsule's own claim the periodic reconciler could see it as
-	// ownerless and tear down a job that is starting.
-	s.ownership.claim(lease.ID)
-	s.ownership.addActive()
-	go s.launch(b, lease)
-	return true
 }
 
 // sessionGrace is how long a run of broker session conflicts stays the

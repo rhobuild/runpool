@@ -339,7 +339,15 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	if err := s.disk.initialize(ctx); err != nil {
 		return fmt.Errorf("initialize disk pressure: %w", err)
 	}
-	s.launch = func(b *binding, lease store.Lease) { s.runCapsule(b, lease) }
+	s.scheduler = &attemptScheduler{
+		log:         log,
+		store:       st,
+		allocator:   s.alloc,
+		ownership:   s.ownership,
+		pressure:    s.currentPressure,
+		createLease: s.createLease,
+		launch:      s.runCapsule,
+	}
 	if err := s.buildBindings(ctx, cfg, opts.Environ); err != nil {
 		return err
 	}
@@ -524,6 +532,9 @@ type Controller struct {
 	leases *lease.Manager
 	cache  *cache.LaneManager
 	alloc  *allocator.Allocator
+	// scheduler owns admission from the durable ready queue through the
+	// committed handoff to capsule execution.
+	scheduler *attemptScheduler
 
 	// ownership coordinates active lease goroutines and recovery claims. The
 	// controller lifecycle only waits for it or marks unfinished work for a
@@ -554,11 +565,6 @@ type Controller struct {
 
 	bindings  []*binding
 	byBinding map[assignment.BindingID]*binding
-
-	// launch runs one served attempt. Production points it at
-	// runCapsule; tests replace it to drive the assignment machine
-	// through failures Docker and GitHub cannot be asked to produce.
-	launch func(b *binding, lease store.Lease)
 
 	// drainWindow overrides DrainTimeout in tests; zero means the
 	// default. Held for the same reason as pollBackoff: a minute is not

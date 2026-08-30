@@ -46,7 +46,7 @@ func TestFailedBeforeAnyRunnerRequeuesItsAttempt(t *testing.T) {
 	// is back in the queue left the second serving untested, and it could
 	// not happen: the attempt already held a lease, and one per attempt
 	// was all the schema allowed.
-	h.srv.scheduleReadyAttempts(t.Context(), h.bind)
+	h.srv.scheduler.schedule(t.Context(), h.bind)
 	if got := len(h.ready()); got != 0 {
 		t.Fatalf("%d attempts still ready after a scheduling pass; the requeued "+
 			"attempt was not served again, so it waits at the head of a queue "+
@@ -606,7 +606,7 @@ func TestALostLeaseClaimReturnsItsCredit(t *testing.T) {
 	})
 	leaseFor(t, h, "job-raced")
 
-	if !h.srv.admit(t.Context(), h.bind, raced) {
+	if !h.srv.scheduler.admit(t.Context(), h.bind, raced) {
 		t.Fatal("a lost claim reported admission full; the pass would stop instead of continuing")
 	}
 	if got := h.srv.alloc.Active(h.bind.key); got != 0 {
