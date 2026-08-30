@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -190,17 +193,13 @@ func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkload
 	return err
 }
 
-// isUniqueViolation reports whether err is SQLite's unique-constraint
-// failure. The driver exposes it in the error string with the standard
-// extended code; matching the stable prefix is the portable check the
-// driver offers without a typed error.
+// isUniqueViolation reports only SQLite's extended UNIQUE result. Other
+// constraints are programming or data errors and must not be translated into
+// an open-attempt conflict merely because their message happens to contain a
+// familiar phrase.
 func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return bytes.Contains([]byte(msg), []byte("UNIQUE constraint failed")) ||
-		bytes.Contains([]byte(msg), []byte("constraint failed: UNIQUE"))
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
 func newAttemptID() (string, error) {

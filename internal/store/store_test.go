@@ -289,6 +289,36 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	})
 }
 
+// Attempt insertion translates one particular SQLite invariant into an
+// open-attempt conflict. Error prose is not an invariant: a wrapped
+// application error may contain the same words, and a different SQLite
+// constraint requires a different response.
+func TestUniqueViolationClassificationUsesTheDriverCode(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-a', 'provider-a', 'same-key')`); err != nil {
+		t.Fatal(err)
+	}
+	_, uniqueErr := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-b', 'provider-a', 'same-key')`)
+	if !isUniqueViolation(uniqueErr) {
+		t.Fatalf("driver UNIQUE error classified as non-unique: %v", uniqueErr)
+	}
+
+	lookalike := errors.New("upstream said UNIQUE constraint failed while parsing a payload")
+	if isUniqueViolation(lookalike) {
+		t.Fatal("message text was classified as a SQLite UNIQUE result")
+	}
+	_, checkErr := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-c', '', 'other-key')`)
+	if isUniqueViolation(checkErr) {
+		t.Fatalf("a different SQLite constraint was classified as UNIQUE: %v", checkErr)
+	}
+}
+
 // The one-open-attempt rule is the database's, not a map's: two
 // transactions racing to open an attempt for the same workload cannot
 // both win, whatever the interleaving.
