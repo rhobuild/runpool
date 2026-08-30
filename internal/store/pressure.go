@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 )
 
 // PressureVerdict is one disk measurement to persist. An unknown verdict uses
@@ -26,34 +28,29 @@ type PressureInfo struct {
 
 // SetPressure records the monitor's verdict, replacing the previous one.
 func (t *Tx) SetPressure(p PressureVerdict) error {
-	_, err := t.tx.Exec(`
-		INSERT INTO pressure (id, level, free_bytes, free_inodes, managed_bytes, measured_at)
-		VALUES (1, ?, ?, ?, ?, unixepoch())
-		ON CONFLICT (id) DO UPDATE SET
-			level = excluded.level, free_bytes = excluded.free_bytes,
-			free_inodes = excluded.free_inodes, managed_bytes = excluded.managed_bytes,
-			measured_at = excluded.measured_at`,
-		p.Level, p.FreeBytes, p.FreeInodes, p.ManagedBytes)
-	return err
+	return t.q.UpsertPressure(t.ctx, sqlitedb.UpsertPressureParams{
+		Level: p.Level, FreeBytes: p.FreeBytes, FreeInodes: p.FreeInodes,
+		ManagedBytes: p.ManagedBytes,
+	})
 }
 
 // Pressure returns the last verdict, or nil when the monitor has never
 // run — which callers must treat as "unknown", not "normal".
 func (t *Tx) Pressure() (*PressureInfo, error) {
-	var p PressureInfo
-	var measuredAt int64
-	err := t.tx.QueryRow(`
-		SELECT level, free_bytes, free_inodes, managed_bytes, measured_at
-		FROM pressure WHERE id = 1`).
-		Scan(&p.Level, &p.FreeBytes, &p.FreeInodes, &p.ManagedBytes, &measuredAt)
+	r, err := t.q.GetPressure(t.ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	p.MeasuredAt = unixTime(measuredAt)
-	return &p, nil
+	return &PressureInfo{
+		PressureVerdict: PressureVerdict{
+			Level: r.Level, FreeBytes: r.FreeBytes, FreeInodes: r.FreeInodes,
+			ManagedBytes: r.ManagedBytes,
+		},
+		MeasuredAt: unixTime(r.MeasuredAt),
+	}, nil
 }
 
 // AuditEntry is one maintenance action against a durable resource that
@@ -69,30 +66,23 @@ type AuditEntry struct {
 
 // RecordAudit appends to the maintenance audit trail.
 func (t *Tx) RecordAudit(actor, action, subject, detail string) error {
-	_, err := t.tx.Exec(`
-		INSERT INTO audit_log (actor, action, subject, detail) VALUES (?, ?, ?, ?)`,
-		actor, action, subject, detail)
-	return err
+	return t.q.InsertAuditEntry(t.ctx, sqlitedb.InsertAuditEntryParams{
+		Actor: actor, Action: action, Subject: subject, Detail: detail,
+	})
 }
 
 // AuditTail returns the most recent entries, newest first.
 func (t *Tx) AuditTail(limit int) ([]AuditEntry, error) {
-	rows, err := t.tx.Query(`
-		SELECT id, at, actor, action, subject, detail
-		FROM audit_log ORDER BY at DESC, id DESC LIMIT ?`, limit)
+	rows, err := t.q.ListAuditTail(t.ctx, int64(limit))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []AuditEntry
-	for rows.Next() {
-		var e AuditEntry
-		var at int64
-		if err := rows.Scan(&e.ID, &at, &e.Actor, &e.Action, &e.Subject, &e.Detail); err != nil {
-			return nil, err
+	out := make([]AuditEntry, len(rows))
+	for i, r := range rows {
+		out[i] = AuditEntry{
+			ID: r.ID, At: unixTime(r.At), Actor: r.Actor,
+			Action: r.Action, Subject: r.Subject, Detail: r.Detail,
 		}
-		e.At = unixTime(at)
-		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, nil
 }

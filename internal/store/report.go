@@ -158,25 +158,18 @@ func (s *Store) Snapshot() (Snapshot, error) {
 // CacheLanes lists every lane. GC plans over it (free lanes, LRU by
 // LastUsed) and the snapshot reports it; both need the same rows.
 func (t *Tx) CacheLanes() ([]CacheLaneInfo, error) {
-	rows, err := t.tx.Query(`
-		SELECT l.id, p.source_project_key, l.generation, coalesce(l.leased_by, ''), l.last_used
-		FROM cache_lanes l JOIN cache_projects p ON p.id = l.project_id
-		ORDER BY p.source_project_key, l.generation, l.id`)
+	rows, err := t.q.ListCacheLanes(t.ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []CacheLaneInfo
-	for rows.Next() {
-		var c CacheLaneInfo
-		var lastUsed int64
-		if err := rows.Scan(&c.ID, &c.SourceProjectKey, &c.Generation, &c.LeasedBy, &lastUsed); err != nil {
-			return nil, err
+	out := make([]CacheLaneInfo, len(rows))
+	for i, r := range rows {
+		out[i] = CacheLaneInfo{
+			ID: r.ID, SourceProjectKey: r.SourceProjectKey, Generation: r.Generation,
+			LeasedBy: assignment.LeaseID(r.LeasedBy), LastUsed: unixTime(r.LastUsed),
 		}
-		c.LastUsed = unixTime(lastUsed)
-		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // selectAttempt is the attempt column list this file's set read scans.

@@ -366,10 +366,8 @@ const DefaultRetryBudget = 3
 // those rows would silently reset this to zero and reopen the unbounded
 // retry it exists to close.
 func (t *Tx) servingsSoFar(attemptID assignment.AttemptID) (int, error) {
-	var n int
-	err := t.tx.QueryRow(
-		`SELECT count(*) FROM capsule_leases WHERE attempt_id = ?`, attemptID).Scan(&n)
-	return n, err
+	n, err := t.q.CountLeasesByAttempt(t.ctx, string(attemptID))
+	return int(n), err
 }
 
 // withinRetryBudget refuses a requeue that would exceed the budget. It
@@ -747,4 +745,11 @@ func (t *Tx) ForgetUnclaimedBindings(claimed []assignment.BindingID) (int, error
 // table and a stored value is always one the vocabulary can answer for.
 func nullVocabulary[T ~string](v T) sql.NullString {
 	return sql.NullString{String: string(v), Valid: v != ""}
+}
+
+// requiredText adapts a non-null domain field to a nullable driver type. Empty
+// remains present so the schema's CHECK rejects it; turning it into NULL here
+// would bypass the invariant the column exists to enforce.
+func requiredText[T ~string](v T) sql.NullString {
+	return sql.NullString{String: string(v), Valid: true}
 }

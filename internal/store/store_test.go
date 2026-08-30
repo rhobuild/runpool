@@ -2882,15 +2882,13 @@ func quotedStates(list string) []AttemptState {
 	return out
 }
 
-// TestTheOpenAttemptSetIsSpelledOnceForEveryReader: four readers decide
-// which attempts are still live, and each carries its own copy of the
-// answer.
+// TestTheOpenAttemptSetIsSpelledOnceForEveryReader: the index and each
+// generated query that decides which attempts are still live carry their own
+// copy of the answer.
 //
-// The index enforces one open attempt per workload; openAttemptStates
-// gates the two hand-written queries that prune lease history and find
-// stranded work; and two generated queries ask the same question again.
-// The comment above openAttemptStates already names the index as the
-// authority the others agree with — and nothing checked that they do.
+// The index enforces one open attempt per workload. Generated queries gate
+// attempt lookup, reporting, lease retention and individual lease purge. The
+// index is the authority all of them must agree with.
 //
 // A state added to the index and missed in the Go copy makes a live
 // attempt's lease prunable, and an attempt whose lease was pruned is
@@ -2915,12 +2913,6 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 	authority := quotedStates(indexed[1])
 	if len(authority) == 0 {
 		t.Fatal("the index names no state, so this proves nothing")
-	}
-
-	if got := quotedStates(openAttemptStates); !slices.Equal(got, authority) {
-		t.Errorf("openAttemptStates is %v; the index is %v. The Go copy gates pruning "+
-			"lease history, and a state it omits makes a live attempt's lease prunable",
-			got, authority)
 	}
 
 	known := make(map[AttemptState]bool, len(AllAttemptStates))
@@ -2969,8 +2961,8 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no query selects by attempt state, so this proves nothing")
 	}
-	if agreed < 2 {
-		t.Errorf("%d generated queries ask the open-attempt question; two did, and a "+
+	if agreed < 5 {
+		t.Errorf("%d generated queries ask the open-attempt question; five did, and a "+
 			"reader that stopped matching the index by length is one this no longer compares", agreed)
 	}
 }

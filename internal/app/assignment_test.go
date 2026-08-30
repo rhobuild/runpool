@@ -507,7 +507,7 @@ func leaseFor(t *testing.T, h *harness, workloadKey assignment.SourceWorkloadKey
 				continue
 			}
 			attemptID = a.ID
-			lease, err = tx.LeaseAttempt(a.ID, h.bind.bindingID, h.bind.tier.ID)
+			lease, err = tx.LeaseAttempt(a.ID, h.bind.bindingID, assignment.TierID(h.bind.tier.ID))
 			return err
 		}
 		t.Fatalf("no ready attempt for workload %q", workloadKey)

@@ -56,7 +56,7 @@ func (e *leaseExecutor) createLease(ctx context.Context, b *binding, attempt sto
 	var lease store.Lease
 	err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		lease, err = tx.LeaseAttempt(attempt.ID, b.bindingID, b.tier.ID)
+		lease, err = tx.LeaseAttempt(attempt.ID, b.bindingID, assignment.TierID(b.tier.ID))
 		return err
 	})
 	if err != nil {
