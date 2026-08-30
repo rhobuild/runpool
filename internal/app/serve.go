@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/allocator"
@@ -331,6 +330,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		netSandbox:          netSandbox,
 		cgroupDriver:        hostInfo.CgroupDriver,
 		byBinding:           map[assignment.BindingID]*binding{},
+		ownership:           newLeaseOwnership(),
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: capacity stays closed until a current
@@ -352,7 +352,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		// error for every store and client call made under a process that
 		// is already exiting -- a burst of failures describing the
 		// shutdown rather than the start that failed.
-		s.abandoning.Store(true)
+		s.ownership.abandonUnfinished()
 		return fmt.Errorf("startup reconciliation: %w", err)
 	}
 
@@ -525,19 +525,10 @@ type Controller struct {
 	cache  *cache.LaneManager
 	alloc  *allocator.Allocator
 
-	// inFlight holds the id of every lease a goroutine is currently
-	// driving. It is what tells the periodic reconciler which live leases
-	// are stranded — nobody's — and which are simply being worked on, and
-	// it is the mutual exclusion that keeps two owners from releasing the
-	// same admission credit twice.
-	//
-	// A typed map under a mutex rather than a sync.Map: a sync.Map keys on
-	// `any`, so a caller passing a plain string where the id type is
-	// meant compiles, misses every entry, and hands two owners the same
-	// lease. The type checker covers the key here, and the map is only
-	// ever as large as the live leases, so the lock is uncontended.
-	inFlightMu sync.Mutex
-	inFlight   map[assignment.LeaseID]struct{}
+	// ownership coordinates active lease goroutines and recovery claims. The
+	// controller lifecycle only waits for it or marks unfinished work for a
+	// successor; launch and reconciliation own the individual claims.
+	ownership *leaseOwnership
 
 	// disk owns the pressure level and everything that moves it. The
 	// controller reads the level in force on the admission path and does
@@ -569,15 +560,6 @@ type Controller struct {
 	// through failures Docker and GitHub cannot be asked to produce.
 	launch func(b *binding, lease store.Lease)
 
-	wg sync.WaitGroup // capsule goroutines, for drain
-
-	// abandoning is set when the drain window elapses. From then on the
-	// destructive recovery paths leave leases exactly as they are: the
-	// successor's adoption owns recovery now, and a dying process that
-	// rewrites a running lease to cleaning hands the next start a
-	// failure to dismantle instead of a capsule to adopt.
-	abandoning atomic.Bool
-
 	// drainWindow overrides DrainTimeout in tests; zero means the
 	// default. Held for the same reason as pollBackoff: a minute is not
 	// something a test waits.
@@ -605,10 +587,8 @@ func (s *Controller) drain() error {
 	if window == 0 {
 		window = DrainTimeout
 	}
-	done := make(chan struct{})
-	go func() { s.wg.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-s.ownership.wait():
 		s.log.Info("drained cleanly")
 		return nil
 	case <-time.After(window):
@@ -616,7 +596,7 @@ func (s *Controller) drain() error {
 		// by the client and store closing under them, and their failure
 		// paths would rewrite running leases on the way down. Marking
 		// the abandonment first is what turns those paths into no-ops.
-		s.abandoning.Store(true)
+		s.ownership.abandonUnfinished()
 		s.log.Warn("drain window elapsed; live capsules are left for the next start to adopt")
 		return nil
 	}
@@ -648,27 +628,4 @@ func (s *Controller) closeSessions() {
 		}(b)
 	}
 	wg.Wait()
-}
-
-// claimLease takes ownership of a lease's recovery. It reports false when
-// another goroutine already holds it, which is what keeps the periodic
-// reconciler off a lease that is still being driven — and keeps two owners
-// from each concluding the lease is done and releasing its credit.
-func (s *Controller) claimLease(leaseID assignment.LeaseID) bool {
-	s.inFlightMu.Lock()
-	defer s.inFlightMu.Unlock()
-	if _, held := s.inFlight[leaseID]; held {
-		return false
-	}
-	if s.inFlight == nil {
-		s.inFlight = map[assignment.LeaseID]struct{}{}
-	}
-	s.inFlight[leaseID] = struct{}{}
-	return true
-}
-
-func (s *Controller) releaseLease(leaseID assignment.LeaseID) {
-	s.inFlightMu.Lock()
-	defer s.inFlightMu.Unlock()
-	delete(s.inFlight, leaseID)
 }

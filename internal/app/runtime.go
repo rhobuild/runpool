@@ -51,7 +51,7 @@ func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.At
 // cancelling serve stops admission, not a running job — drain waits, and
 // whatever outlives the drain window is adopted on the next start.
 func (s *Controller) runCapsule(b *binding, lease store.Lease) {
-	defer s.wg.Done()
+	defer s.ownership.activeDone()
 	attemptID := lease.AttemptID
 	// startObs carries the classification of an ambiguous start into the
 	// finalizing transaction. Recovery does not re-take it: the pass that
@@ -64,8 +64,8 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// the claim is unbroken from the moment the lease row exists. Claiming
 	// again is a no-op that covers a direct caller; releasing is registered
 	// before the credit defer, so it runs after it.
-	s.claimLease(lease.ID)
-	defer s.releaseLease(lease.ID)
+	s.ownership.claim(lease.ID)
+	defer s.ownership.release(lease.ID)
 	// The credit is released by whoever reaches `released` — not here.
 	// A lease that ends quarantined still owns privileged containers,
 	// networks and volumes, so releasing its capacity would admit work
@@ -431,7 +431,7 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 	// failure to dismantle instead of a capsule to adopt. A recovery
 	// already past this point runs to completion: its transitions are
 	// durable, and the successor resumes whatever it left.
-	if s.abandoning.Load() {
+	if s.ownership.isAbandoning() {
 		// The lease is left as it is, but what this pass measured is not:
 		// nothing re-takes it, and the successor arrives with an evidence
 		// state past the one that would make it inspect. Recording is a

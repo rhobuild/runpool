@@ -123,7 +123,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	}
 	before := reloadLease(t, h, lease.ID).State
 
-	h.srv.abandoning.Store(true)
+	h.srv.ownership.abandonUnfinished()
 	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("abandoned recovery reported an error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 
 	// The mutation half: the same call without the abandonment is the
 	// destructive path, so the assertions above are proven able to fail.
-	h.srv.abandoning.Store(false)
+	h.srv.ownership.resumeRecovery()
 	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("live recovery failed: %v", err)
 	}
@@ -154,12 +154,12 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 func TestDrainWindowExpiryMarksAbandonment(t *testing.T) {
 	h := newHarness(t, 1)
 	h.srv.drainWindow = 30 * time.Millisecond
-	h.srv.wg.Add(1) // a capsule goroutine that will not finish in time
-	defer h.srv.wg.Done()
+	h.srv.ownership.addActive() // a capsule goroutine that will not finish in time
+	defer h.srv.ownership.activeDone()
 	if err := h.srv.drain(); err != nil {
 		t.Fatal(err)
 	}
-	if !h.srv.abandoning.Load() {
+	if !h.srv.ownership.isAbandoning() {
 		t.Fatal("the drain window elapsed and abandonment was not marked")
 	}
 
@@ -168,7 +168,7 @@ func TestDrainWindowExpiryMarksAbandonment(t *testing.T) {
 	if err := clean.srv.drain(); err != nil {
 		t.Fatal(err)
 	}
-	if clean.srv.abandoning.Load() {
+	if clean.srv.ownership.isAbandoning() {
 		t.Fatal("a clean drain marked abandonment")
 	}
 }

@@ -591,8 +591,8 @@ func (s *Controller) admit(ctx context.Context, b *binding, attempt store.Attemp
 	// and `reserved` is a live state, so between this commit and
 	// runCapsule's own claim the periodic reconciler could see it as
 	// ownerless and tear down a job that is starting.
-	s.claimLease(lease.ID)
-	s.wg.Add(1)
+	s.ownership.claim(lease.ID)
+	s.ownership.addActive()
 	go s.launch(b, lease)
 	return true
 }

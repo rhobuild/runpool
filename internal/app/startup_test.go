@@ -39,7 +39,7 @@ func TestReconcileAdoptsWhatIsStillRunning(t *testing.T) {
 	if err := h.srv.reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	h.srv.wg.Wait()
+	<-h.srv.ownership.wait()
 
 	// The adopted lease was awaited to its exit and then released; the
 	// one with no capsule was resolved without ever being awaited.

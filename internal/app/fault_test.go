@@ -144,7 +144,7 @@ func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, 
 		t.Fatal(err)
 	}
 	lease, attemptID := leaseFor(t, h, workload)
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 	return lease, string(attemptID)
 }
@@ -546,10 +546,10 @@ func TestPeriodicReconcileSkipsOwnedLeases(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-owned")
 
-	if !h.srv.claimLease(lease.ID) {
+	if !h.srv.ownership.claim(lease.ID) {
 		t.Fatal("the lease should be claimable")
 	}
-	defer h.srv.releaseLease(lease.ID)
+	defer h.srv.ownership.release(lease.ID)
 
 	before := reloadLease(t, h, lease.ID).State
 	h.srv.retryStranded(t.Context())
@@ -620,7 +620,7 @@ func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
 	aged := lease
 	aged.CreatedAt = time.Now().Add(-90 * time.Minute)
 	before := time.Now()
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, aged)
 
 	if wait.deadline.IsZero() {
@@ -740,7 +740,7 @@ func TestASupersededAttemptIsNeverStarted(t *testing.T) {
 		})
 	}
 
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if caps.starts != 0 {
@@ -853,7 +853,7 @@ func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 		})
 	}
 
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if caps.starts != 1 {
@@ -901,7 +901,7 @@ func TestAnObservationIsAlwaysBounded(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-observed")
 
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if !observed {
@@ -1004,7 +1004,7 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 	}
 
 	h.srv.adopt(h.bind, lease, "adopted-runner")
-	h.srv.wg.Wait()
+	<-h.srv.ownership.wait()
 
 	if !rec.seen {
 		t.Fatal("the adopted lease was unwound without removing anything; this test asserted nothing")
@@ -1147,7 +1147,7 @@ func TestAbandonmentKeepsWhatThisServingMeasured(t *testing.T) {
 	lease, _ := leaseFor(t, h, "job-drained")
 	before := reloadLease(t, h, lease.ID).State
 
-	h.srv.abandoning.Store(true)
+	h.srv.ownership.abandonUnfinished()
 	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.ObservedCreated); err != nil {
 		t.Fatalf("abandoned recovery reported an error: %v", err)
@@ -1266,7 +1266,7 @@ func TestTheFirstTransitionUnwindsLikeEveryOther(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h.srv.wg.Add(1)
+	h.srv.ownership.addActive()
 	h.srv.runCapsule(h.bind, lease)
 
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {

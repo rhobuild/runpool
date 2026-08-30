@@ -271,11 +271,11 @@ func recoveryContext(ctx context.Context) (context.Context, context.CancelFunc) 
 func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string) {
 	// Claimed here rather than inside the goroutine, so no pass can see the
 	// lease as ownerless in the gap before it is scheduled.
-	s.claimLease(lease.ID)
-	s.wg.Add(1)
+	s.ownership.claim(lease.ID)
+	s.ownership.addActive()
 	go func() {
-		defer s.wg.Done()
-		defer s.releaseLease(lease.ID)
+		defer s.ownership.activeDone()
+		defer s.ownership.release(lease.ID)
 		defer s.releaseCreditIfDone(b, lease.ID)
 		// What is left of this lease's ceiling, not a fresh one: a capsule
 		// that stopped reporting is exactly what the ceiling bounds, and
@@ -582,7 +582,7 @@ func (s *Controller) retryStranded(ctx context.Context) {
 			// gap that exists here, so it is what the pass waits on.
 			continue
 		}
-		if !s.claimLease(lease.ID) {
+		if !s.ownership.claim(lease.ID) {
 			continue // a goroutine is driving it; not this pass's business
 		}
 		stranded++
@@ -590,7 +590,7 @@ func (s *Controller) retryStranded(ctx context.Context) {
 			// Deferred so a panic cannot leak the claim. A leaked claim
 			// makes the lease invisible to every later pass, which is the
 			// leak this whole mechanism exists to prevent.
-			defer s.releaseLease(lease.ID)
+			defer s.ownership.release(lease.ID)
 			s.resolveStranded(ctx, lease, &retried, &converged)
 		}()
 	}
