@@ -19,7 +19,7 @@ import (
 // The announcement is a whole number of credits, which may be zero. Zero is
 // blind upstream, so the allocator moves one discovery credit only after its
 // current holder completes an empty poll and revokes it before transfer.
-func (s *Controller) loop(ctx context.Context, b *binding) {
+func (s *bindingSupervisor) loop(ctx context.Context, b *binding) {
 	failures := 0
 	for {
 		if ctx.Err() != nil {
@@ -145,7 +145,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 		}
 
 		msg, err := b.session.Receive(ctx)
-		s.alloc.CompletePoll(poll, err == nil, err == nil && msg == nil)
+		s.allocator.CompletePoll(poll, err == nil, err == nil && msg == nil)
 		if err == nil {
 			s.recordProviderContact(ctx, b)
 		} else {
@@ -257,7 +257,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 			// GitHub has committed to this scale set. Availables are
 			// offers that only become demand once acquired, and counting
 			// them would overstate what this binding owes.
-			s.alloc.SetAssignedDemand(b.key, msg.Statistics.Assigned)
+			s.allocator.SetAssignedDemand(b.key, msg.Statistics.Assigned)
 		}
 
 		s.scheduler.schedule(ctx, b)
@@ -287,7 +287,7 @@ func (s *Controller) loop(ctx context.Context, b *binding) {
 // delivery already confirmed, and an acknowledgement that failed - and on
 // both of them the next poll returns this same message with no long-poll
 // delay, so the caller has to wait rather than spin.
-func (s *Controller) acknowledgeDelivery(ctx context.Context, b *binding, deliveryID assignment.DeliveryID, messageID int) bool {
+func (s *bindingSupervisor) acknowledgeDelivery(ctx context.Context, b *binding, deliveryID assignment.DeliveryID, messageID int) bool {
 	var proceed bool
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
@@ -349,7 +349,7 @@ func (s *Controller) acknowledgeDelivery(ctx context.Context, b *binding, delive
 // got further resolves through its own lifecycle first, and this
 // message simply stays unacknowledged until it has — never are two
 // attempts of one workload live together.
-func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githubactions.Message) (int64, error) {
+func (s *bindingSupervisor) persistDelivery(ctx context.Context, b *binding, msg *githubactions.Message) (int64, error) {
 	// Everything this message hands over: what the broker assigned plus
 	// what the session acquired from its availables.
 	admitted := make([]assignment.WorkloadAssignment, 0, len(msg.Assigned)+len(msg.Acquired))
@@ -440,7 +440,7 @@ func (s *Controller) persistDelivery(ctx context.Context, b *binding, msg *githu
 // the message stays unacknowledged, the broker sends it again, and
 // recording is idempotent -- so a redelivery replays the whole message
 // rather than the tail of one.
-func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg *githubactions.Message) error {
+func (s *bindingSupervisor) recordLifecycleEvents(ctx context.Context, b *binding, msg *githubactions.Message) error {
 	// One correlation per event, and everything the event causes acts on
 	// what it resolved. Cancelling by workload key instead was a second,
 	// independent answer to the same question: after a requeue it named
@@ -507,7 +507,7 @@ func (s *Controller) recordLifecycleEvents(ctx context.Context, b *binding, msg 
 // It runs in the caller's transaction, on the attempt the caller
 // resolved. Resolving one of its own is how a cancellation of a run that
 // has already been superseded reached the successor instead.
-func (s *Controller) cancelIfReady(tx *store.Tx, attemptID assignment.AttemptID) error {
+func (s *bindingSupervisor) cancelIfReady(tx *store.Tx, attemptID assignment.AttemptID) error {
 	err := tx.CancelReady(attemptID, assignment.ResolutionRemoteCanceled)
 	if errors.Is(err, store.ErrConflict) {
 		return nil // nothing ready to cancel; running work drains instead
@@ -516,18 +516,18 @@ func (s *Controller) cancelIfReady(tx *store.Tx, attemptID assignment.AttemptID)
 }
 
 // sessionGrace is how long a run of broker session conflicts stays the
-// ordinary shape of a restart. Held on the controller for the same
+// ordinary shape of a restart. Held on the supervisor for the same
 // reason as backoff below.
-func (s *Controller) sessionGrace() time.Duration {
+func (s *bindingSupervisor) sessionGrace() time.Duration {
 	if s.conflictGrace != 0 {
 		return s.conflictGrace
 	}
 	return sessionConflictGrace
 }
 
-// backoff is the pause between failed polls. Held on the controller so a
+// backoff is the pause between failed polls. Held on the supervisor so a
 // test can exercise the failure run without waiting out real seconds.
-func (s *Controller) backoff() time.Duration {
+func (s *bindingSupervisor) backoff() time.Duration {
 	if s.pollBackoff > 0 {
 		return s.pollBackoff
 	}
@@ -549,7 +549,7 @@ func (s *Controller) backoff() time.Duration {
 // The runtime name stays as the fallback. An observation about a workload
 // this instance never recorded, or whose attempt is already settled, is
 // still worth keeping against the attempt whose lease owns that runner.
-func (s *Controller) attemptForObservation(tx *store.Tx, b *binding,
+func (s *bindingSupervisor) attemptForObservation(tx *store.Tx, b *binding,
 	ev assignment.WorkloadLifecycleEvent) (assignment.AttemptID, error) {
 	attempt, err := tx.OpenAttemptByWorkload(b.bindingID, assignment.SourceWorkloadKey(ev.SourceWorkloadKey))
 	switch {
@@ -629,14 +629,14 @@ func (s *Controller) attemptForObservation(tx *store.Tx, b *binding,
 // and leaving it in place is what would have the loop poll and announce
 // through it, and shutdown close it a second time and report a broker
 // still holding a session nobody holds.
-func (s *Controller) discardSpentSession(ctx context.Context, b *binding, failures int) int {
+func (s *bindingSupervisor) discardSpentSession(ctx context.Context, b *binding, failures int) int {
 	if failures < receiveFailuresBeforeReopen || b.newSession == nil {
 		return failures
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	err := b.session.Close(cctx)
-	s.alloc.SessionClosed(b.key, err == nil)
+	s.allocator.SessionClosed(b.key, err == nil)
 	if err != nil {
 		// Expected on the path that brought us here: the session the
 		// broker holds is the one that stopped answering.
@@ -656,13 +656,13 @@ func (s *Controller) discardSpentSession(ctx context.Context, b *binding, failur
 // whatever was not acknowledged, which is free: recording a delivery is
 // idempotent on its natural key, and an unacknowledged message was going
 // to be redelivered anyway.
-func (s *Controller) openSession(ctx context.Context, b *binding) error {
+func (s *bindingSupervisor) openSession(ctx context.Context, b *binding) error {
 	session, err := b.newSession(ctx)
 	if err != nil {
 		return err
 	}
 	b.session = session
-	s.alloc.SessionOpened(b.key)
+	s.allocator.SessionOpened(b.key)
 	b.lastAdvertised = -1
 	initial := session.Initial()
 	if initial == nil {
@@ -674,7 +674,7 @@ func (s *Controller) openSession(ctx context.Context, b *binding) error {
 			"binding", b.key)
 		return nil
 	}
-	s.alloc.SetAssignedDemand(b.key, initial.Assigned)
+	s.allocator.SetAssignedDemand(b.key, initial.Assigned)
 	s.log.Warn("message session opened", "binding", b.key, "assigned_backlog", initial.Assigned)
 	return nil
 }
@@ -684,8 +684,8 @@ func (s *Controller) openSession(ctx context.Context, b *binding) error {
 // sets the session's capacity — the broker holds a total, not a delta —
 // but only a change is worth a log line, or a quiet pool would fill the
 // log with the same number every poll.
-func (s *Controller) announce(b *binding) allocator.Poll {
-	poll := s.alloc.BeginPoll(b.key)
+func (s *bindingSupervisor) announce(b *binding) allocator.Poll {
+	poll := s.allocator.BeginPoll(b.key)
 	if !poll.Valid() {
 		return poll
 	}
@@ -695,7 +695,7 @@ func (s *Controller) announce(b *binding) allocator.Poll {
 		return poll
 	}
 	b.lastAdvertised = credit
-	parallelism, rows := s.alloc.PoolReport(assignment.TierID(b.tier.ID))
+	parallelism, rows := s.allocator.PoolReport(assignment.TierID(b.tier.ID))
 	desiredTotal, remoteTotal := 0, 0
 	for _, r := range rows {
 		desiredTotal += r.Advertised
@@ -704,7 +704,7 @@ func (s *Controller) announce(b *binding) allocator.Poll {
 	s.log.Info("advertised capacity changed", "binding", b.key, "advertised", credit,
 		"tier", b.tier.ID, "tier_parallelism", parallelism,
 		"tier_advertised", desiredTotal, "tier_remote_capacity", remoteTotal,
-		"discovery", s.alloc.DiscoveryHolder(assignment.TierID(b.tier.ID)), "instance_capacity", s.alloc.CapacityReport(),
+		"discovery", s.allocator.DiscoveryHolder(assignment.TierID(b.tier.ID)), "instance_capacity", s.allocator.CapacityReport(),
 		"credits", rows)
 	return poll
 }

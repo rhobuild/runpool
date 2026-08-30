@@ -86,13 +86,12 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cacheMgr := cache.New(st, nopVolumes{}, st.InstanceID())
 	h.objects = &fakeObjects{wedged: map[string]bool{}}
+	byBinding := map[assignment.BindingID]*binding{bindingID: b}
 	h.srv = &Controller{
 		log:       log,
 		store:     st,
 		alloc:     allocator.New(),
 		ownership: newLeaseOwnership(),
-		bindings:  []*binding{b},
-		byBinding: map[assignment.BindingID]*binding{bindingID: b},
 	}
 	h.srv.executor = &leaseExecutor{
 		log:       log,
@@ -109,7 +108,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		allocator: h.srv.alloc,
 		executor:  h.srv.executor,
 		ownership: h.srv.ownership,
-		byBinding: h.srv.byBinding,
+		byBinding: byBinding,
 		// A lease this harness calls stranded was written moments ago,
 		// because no test here simulates the passage of time. The grace
 		// exists for a real gap between a lease committing and its owner
@@ -146,13 +145,21 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 			h.mu.Unlock()
 		},
 	}
+	h.srv.supervisor = &bindingSupervisor{
+		log:       log,
+		store:     st,
+		allocator: h.srv.alloc,
+		scheduler: h.srv.scheduler,
+		bindings:  []*binding{b},
+		byBinding: byBinding,
+	}
 	return h
 }
 
 // deliverMsg persists one broker message through the production path.
 // The message id is explicit so a test can redeliver the same message.
 func (h *harness) deliverMsg(msgID int, workloads ...assignment.WorkloadAssignment) error {
-	_, err := h.srv.persistDelivery(h.t.Context(), h.bind, &githubactions.Message{
+	_, err := h.srv.supervisor.persistDelivery(h.t.Context(), h.bind, &githubactions.Message{
 		ID: msgID, Assigned: workloads,
 	})
 	return err

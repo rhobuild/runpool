@@ -484,7 +484,7 @@ func TestRemoteCancellationClosesOnlyReadyWork(t *testing.T) {
 		{SourceWorkloadKey: "job-idle", Result: "canceled", Canceled: true},
 		{SourceWorkloadKey: "job-busy", Result: "canceled", Canceled: true},
 	}}
-	s := h.srv
+	s := h.srv.supervisor
 	s.recordLifecycleEvents(t.Context(), h.bind, cancelled)
 
 	idle := h.ready()

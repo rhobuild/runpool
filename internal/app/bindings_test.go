@@ -49,7 +49,7 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	h.bind.scaleSetID = 0
 	sets := &flakyScaleSets{failures: 2}
 	h.bind.gh = sets
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 	// The broker stays unreachable too, so the loop is exercised in the
 	// state this test is about: connected to nothing, still running.
 	// Reaching the session open is the loop's own statement that the
@@ -70,7 +70,7 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 
 	select {
@@ -153,7 +153,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 	h.bind.gh = &refusingScaleSets{calls: &attempts, reached: func() {
 		once.Do(func() { close(tried) })
 	}}
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 	h.bind.newSession = func(context.Context) (providerSession, error) {
 		return nil, errors.New("broker unreachable")
 	}
@@ -162,7 +162,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	<-tried
 	// Wait for the second pass rather than sleeping a window and hoping
@@ -234,7 +234,7 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 	}
 
 	same := errors.New("provider unreachable")
-	h.srv.recordProviderFailure(ctx, h.bind, same)
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, same)
 	first := read()
 	if first.LastError != same.Error() {
 		t.Fatalf("first failure not recorded: %+v", first)
@@ -245,7 +245,7 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 	// "did not write" observable at all, since the only evidence of a
 	// write is a moment that moved.
 	time.Sleep(5 * time.Millisecond)
-	h.srv.recordProviderFailure(ctx, h.bind, same)
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, same)
 	if again := read(); !again.LastErrorAt.Equal(first.LastErrorAt) {
 		t.Errorf("a repeated failure moved its own start from %v to %v",
 			first.LastErrorAt, again.LastErrorAt)
@@ -253,13 +253,13 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 
 	// A different failure is a transition and is written at once.
 	time.Sleep(5 * time.Millisecond)
-	h.srv.recordProviderFailure(ctx, h.bind, errors.New("401 Unauthorized"))
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, errors.New("401 Unauthorized"))
 	if got := read(); got.LastError != "401 Unauthorized" {
 		t.Errorf("a changed failure was not recorded: %+v", got)
 	}
 
 	// Recovery is a transition too, and must not wait out the heartbeat.
-	h.srv.recordProviderContact(ctx, h.bind)
+	h.srv.supervisor.recordProviderContact(ctx, h.bind)
 	got := read()
 	if got.LastError != "" {
 		t.Errorf("recovery left the failure in place: %+v", got)
@@ -318,7 +318,7 @@ func TestACrashBetweenCreatingAndRecordingConverges(t *testing.T) {
 				})
 			}}
 			h.bind.gh = sets
-			if err := h.srv.ensureScaleSet(t.Context(), h.bind); err != nil {
+			if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err != nil {
 				t.Fatalf("ensureScaleSet: %v", err)
 			}
 			if sets.lastIntended != tc.wantIntended {
@@ -383,10 +383,10 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 		}
 		t.Cleanup(func() { st.Close() })
 		var buf strings.Builder
-		s := &Controller{
+		s := &bindingSupervisor{
 			log:       slog.New(slog.NewTextHandler(&buf, nil)),
 			store:     st,
-			alloc:     allocator.New(),
+			allocator: allocator.New(),
 			byBinding: map[assignment.BindingID]*binding{},
 		}
 		cfg := &config.Config{
@@ -525,10 +525,10 @@ func TestARefusedNameStaysRefusedOnTheNextPass(t *testing.T) {
 	sets := &occupiedScaleSets{}
 	h.bind.gh = sets
 
-	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+	if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err == nil {
 		t.Fatal("the first pass adopted a scale set this instance did not create")
 	}
-	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+	if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err == nil {
 		t.Fatal("the second pass adopted it: the refusal was defeated by the intention the refused pass wrote")
 	}
 	if sets.adopted != 0 {
@@ -553,10 +553,10 @@ func TestTheTierImageIsResolvedWhereBindingsAreBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	s := &Controller{
+	s := &bindingSupervisor{
 		log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 		store:               st,
-		alloc:               allocator.New(),
+		allocator:           allocator.New(),
 		byBinding:           map[assignment.BindingID]*binding{},
 		shippedCapsuleImage: "runpool-capsule:dev",
 	}

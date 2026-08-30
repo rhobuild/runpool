@@ -34,6 +34,21 @@ type leaseExecutor struct {
 	cgroupDriver string
 }
 
+// capsuleRuntime is the execution surface the lease lifecycle consumes.
+// The consumer-owned seam makes preparation, start, and inspection failures
+// independently testable.
+type capsuleRuntime interface {
+	Prepare(ctx context.Context, spec capsule.Spec, rec capsule.ResourceRecorder) (capsule.PreparedRuntime, error)
+	Start(ctx context.Context, prepared capsule.PreparedRuntime) error
+	InspectExecution(ctx context.Context, prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error)
+}
+
+// runtimeWaiter is the daemon surface used to await and diagnose a capsule.
+type runtimeWaiter interface {
+	WaitExit(ctx context.Context, id string) (int64, error)
+	TailLogs(ctx context.Context, id string, lines int) (string, error)
+}
+
 // createLease takes an admission credit for one ready attempt. The lease and the
 // attempt's claim commit together, so the two can never disagree about
 // whether a workload is being served.

@@ -49,7 +49,7 @@ func TestSessionsCloseTogether(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	s := &Controller{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &bindingSupervisor{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, key := range []assignment.BindingKey{"a", "b", "c"} {
 		s.bindings = append(s.bindings, &binding{
 			key:     key,

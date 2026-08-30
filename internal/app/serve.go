@@ -18,9 +18,7 @@ import (
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/doctor"
-	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/engine/docker"
-	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/lease"
 	"github.com/rhobuild/runpool/internal/netsandbox"
 	"github.com/rhobuild/runpool/internal/store"
@@ -131,86 +129,6 @@ type Options struct {
 	Environ      func(string) string
 }
 
-// binding is one (target, tier) pair: its own scale set and session.
-// The admission credit budget and advertised capacity are shared through
-// the allocator, keyed by binding. Deduplication needs no memory here:
-// delivery and attempt identity live in the store, and claiming an
-// attempt is a compare-and-swap only one caller can win.
-type binding struct {
-	key    assignment.BindingKey
-	target config.Target
-	tier   config.Tier
-	ref    config.TargetRef
-	// gh is the provider client, held as the one interface above: the
-	// binding must not know more about its provider than it serves
-	// through, and a concrete client here was how partial test doubles
-	// and untested paths accumulated.
-	gh provider
-	// scaleSetID is the provider's own id for this binding's scale set,
-	// held in memory for the session and JIT calls. bindingID is what the
-	// attempt and lease machinery keys on; this reaches the store in one
-	// place only, inside the opaque delivery key, because a delivery id
-	// is unique per queue rather than per binding and the binding
-	// outlives the queue.
-	scaleSetID int
-	// scaleSetName is the provider-side name the loop creates or adopts
-	// under. It is configuration rather than provider state, so it is
-	// known before any call.
-	scaleSetName string
-	// ensured records that this process has created-or-adopted the scale
-	// set. It starts false on every start, including a restart that read
-	// scaleSetID from the store: the recorded id is proof of ownership,
-	// not proof that the set still exists or still refuses runner
-	// self-update. Owned by the binding's own loop.
-	ensured bool
-	// lastContactWrite paces the recorded successes. Owned by the
-	// binding's own loop, like ensured above.
-	lastContactWrite time.Time
-	// reaching is what the store was last told about this binding's reach,
-	// and lastFailure the reason it was last told about. Together they
-	// make a write a transition rather than a repetition. Owned by the
-	// binding's own loop.
-	reaching    bool
-	lastFailure string
-	// conflictSince is when this binding's current run of broker session
-	// conflicts began, zero while it holds none. A conflict is the
-	// ordinary shape of a restart; one that outlasts the inactivity the
-	// broker expires a session on is not, and only elapsed time tells the
-	// two apart. Owned by the binding's own loop.
-	conflictSince time.Time
-	bindingID     assignment.BindingID
-	cacheEnabled  bool
-	generation    string
-	// capsuleImage is what this binding launches: its tier's image where
-	// one is configured, and the image this build ships otherwise. It is
-	// resolved once, per binding, so the launch path never re-decides it.
-	capsuleImage string
-	// maxLanes is the most leases this binding's tier can run at once, which
-	// is what bounds the cache lanes one project may hold. It is the tier's
-	// parallelism capped by the instance-wide limit, because a lane per
-	// possible tier lease overcounts when a global limit is the tighter one.
-	maxLanes int
-
-	session providerSession
-	// newSession builds a session for this binding, in one attempt. The
-	// loop's own backoff is the retry: a broker still holding this
-	// binding's session is holding the one this process just closed, not
-	// a predecessor's, and waiting that out in place would stall the loop
-	// for as long as the broker takes. Held as a closure so the loop can
-	// recover without knowing what a session is made of, and so a test
-	// can hand it one that fails.
-	newSession func(ctx context.Context) (providerSession, error)
-
-	// lastAdvertised is what this binding announced last, so the credit
-	// accounting is logged when it changes rather than every poll.
-	// Owned by the binding's own loop.
-	lastAdvertised int
-
-	// mu serialises scheduling passes per binding, so one poll's serve
-	// loop finishes deciding before the next begins.
-	mu sync.Mutex
-}
-
 // Serve runs the controller until ctx is cancelled, then drains.
 func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	log := newLogger(cfg.Observability.Log)
@@ -317,13 +235,11 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	cacheMgr := cache.New(st, dock, st.InstanceID())
 
 	s := &Controller{
-		log:                 log,
-		shippedCapsuleImage: capsuleImg,
-		store:               st,
-		alloc:               newAllocator(cfg),
-		netSandbox:          netSandbox,
-		byBinding:           map[assignment.BindingID]*binding{},
-		ownership:           newLeaseOwnership(),
+		log:        log,
+		store:      st,
+		alloc:      newAllocator(cfg),
+		netSandbox: netSandbox,
+		ownership:  newLeaseOwnership(),
 	}
 	s.executor = &leaseExecutor{
 		log:          log,
@@ -336,16 +252,6 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		ownership:    s.ownership,
 		network:      netSandbox,
 		cgroupDriver: hostInfo.CgroupDriver,
-	}
-	s.reconciler = &reconciler{
-		log:          log,
-		store:        st,
-		objects:      dock,
-		allocator:    s.alloc,
-		executor:     s.executor,
-		ownership:    s.ownership,
-		byBinding:    s.byBinding,
-		leaseHistory: cfg.Retention.Window(),
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: capacity stays closed until a current
@@ -363,8 +269,26 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		createLease: s.executor.createLease,
 		launch:      s.executor.runCapsule,
 	}
-	if err := s.buildBindings(ctx, cfg, opts.Environ); err != nil {
+	s.supervisor = &bindingSupervisor{
+		log:                 log,
+		store:               st,
+		allocator:           s.alloc,
+		scheduler:           s.scheduler,
+		shippedCapsuleImage: capsuleImg,
+		byBinding:           map[assignment.BindingID]*binding{},
+	}
+	if err := s.supervisor.buildBindings(ctx, cfg, opts.Environ); err != nil {
 		return err
+	}
+	s.reconciler = &reconciler{
+		log:          log,
+		store:        st,
+		objects:      dock,
+		allocator:    s.alloc,
+		executor:     s.executor,
+		ownership:    s.ownership,
+		byBinding:    s.supervisor.byBinding,
+		leaseHistory: cfg.Retention.Window(),
 	}
 
 	if err := s.reconciler.reconcile(ctx); err != nil {
@@ -384,15 +308,11 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	// was an assignment.InstanceID that had to be converted back at the
 	// call — a name derived from an id is not that id.
 	owner := "runpool-" + string(st.InstanceID())[:8]
-	for _, b := range s.bindings {
-		b.newSession = func(ctx context.Context) (providerSession, error) {
-			return b.gh.OpenSession(ctx, b.scaleSetID, owner)
-		}
-	}
+	s.supervisor.configureSessions(owner)
 	// A session the broker still holds is one the next start has to wait
 	// out, and it reports that wait as a predecessor's crash. Saying so
 	// here is what tells the two apart.
-	defer s.closeSessions()
+	defer s.supervisor.closeSessions()
 
 	var loops sync.WaitGroup
 	// Opened after the startup reconcile, so a resolution can never land
@@ -426,13 +346,11 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		defer loops.Done()
 		s.netSandbox.Watch(ctx, s.recordSandboxPass)
 	}()
-	for _, b := range s.bindings {
-		loops.Add(1)
-		go func(b *binding) {
-			defer loops.Done()
-			s.loop(ctx, b)
-		}(b)
-	}
+	loops.Add(1)
+	go func() {
+		defer loops.Done()
+		s.supervisor.run(ctx)
+	}()
 	loops.Wait()
 	return s.drain()
 }
@@ -444,98 +362,13 @@ func newAllocator(cfg *config.Config) *allocator.Allocator {
 	return allocator.NewWithGlobalParallelism(*cfg.Scheduling.Parallelism)
 }
 
-// capsuleRuntime is what serving needs from the capsule layer, defined
-// here because the consumer owns its interfaces. The fault matrix
-// depends on this seam: preparation, start and inspection failures are
-// exactly the outcomes Docker cannot be asked to produce on demand.
-type capsuleRuntime interface {
-	Prepare(ctx context.Context, spec capsule.Spec, rec capsule.ResourceRecorder) (capsule.PreparedRuntime, error)
-	Start(ctx context.Context, prepared capsule.PreparedRuntime) error
-	InspectExecution(ctx context.Context, prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error)
-}
-
-// runtimeWaiter is the slice of the Docker client the serving loop
-// awaits runners through.
-type runtimeWaiter interface {
-	WaitExit(ctx context.Context, id string) (int64, error)
-	TailLogs(ctx context.Context, id string, lines int) (string, error)
-}
-
-// provider is everything a binding needs from its provider client, as
-// one interface: the scale set it creates or adopts, the JIT
-// credentials it mints, the runners it deregisters, and the message
-// session it polls. One seam rather than a concrete client beside two
-// partial views, because they are one client holding one credential —
-// and because what the loop has to get right is the provider failing,
-// which is only testable against a provider that fails on demand. The
-// session keeps its own seam through newSession: the loop's session
-// handling is a subject of its own.
-type provider interface {
-	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool, recordIntent func() error) (githubactions.ScaleSet, error)
-	GenerateJITConfig(ctx context.Context, scaleSetID int, runnerName, workFolder string) (githubactions.JITConfig, error)
-	RemoveRunner(ctx context.Context, id int) error
-	OpenSession(ctx context.Context, scaleSetID int, owner string) (*githubactions.Session, error)
-}
-
-// providerSession is the message session as the serving loop uses it.
-//
-// Declared here, like the seams above, because what the loop has to get
-// right is the session failing: the upstream client refreshes an expired
-// session by itself, and when that refresh fails it leaves the handle
-// dead. Polling a dead handle is indistinguishable from a quiet provider
-// unless the loop can be shown one.
-type providerSession interface {
-	Receive(ctx context.Context) (*githubactions.Message, error)
-	Acknowledge(ctx context.Context, messageID int) error
-	SetCapacity(n int)
-	Initial() *githubactions.Statistics
-	Close(ctx context.Context) error
-}
-
-// ownedObjects is what reconciliation needs from the daemon: the
-// inventory of everything this instance labelled, and the removal of one
-// of them. Nothing here creates.
-//
-// Narrow, and declared by the consumer, for the same reason as the
-// seams above: what reconciliation has to get right is the daemon
-// refusing — a container that will not die, an inventory that cannot be
-// read — and a live daemon cannot be asked for those on demand. Held as
-// this interface rather than the client itself, the whole startup and
-// sweep path becomes reachable from a test.
-type ownedObjects interface {
-	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error)
-	ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
-	ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
-	RemoveContainer(ctx context.Context, id string) error
-	RemoveNetwork(ctx context.Context, id string) error
-	RemoveVolume(ctx context.Context, name string) error
-}
-
-// Controller is the running instance: it owns the durable store, the
-// daemon connection, the credit pool and the loops that keep them
-// agreeing with each other. One process, one state directory, one
-// Controller — the singleton lock enforces it.
+// Controller coordinates process lifecycle across the scheduler, lease
+// executor, reconciler, binding supervisor, and host monitors. Domain work
+// stays in those components; this type owns their startup and shutdown order.
 type Controller struct {
-	log *slog.Logger
-	// shippedCapsuleImage is the capsule this build carries. A binding
-	// launches its own resolved image; this is what a tier falls back to,
-	// and what the disk monitor probes with.
-	shippedCapsuleImage string
-	// pollBackoff is the pause between failed polls; zero means the
-	// package default. It exists so the session-recovery path is
-	// reachable from a test without waiting out real seconds.
-	pollBackoff time.Duration
-	// conflictBackoff overrides sessionConflictBackoff for the loop's
-	// reopen path; zero means the package default. Held for the same
-	// reason as pollBackoff: ten seconds is not something a test waits.
-	conflictBackoff time.Duration
-	// conflictGrace overrides sessionConflictGrace; zero means the
-	// package default. Held for the same reason as the two above: five
-	// minutes is not something a test waits, and what happens past it is
-	// the whole of this behaviour.
-	conflictGrace time.Duration
-	store         *store.Store
-	alloc         *allocator.Allocator
+	log   *slog.Logger
+	store *store.Store
+	alloc *allocator.Allocator
 	// executor owns one lease from its durable claim through disposition.
 	executor *leaseExecutor
 	// scheduler owns admission from the durable ready queue through the
@@ -544,6 +377,8 @@ type Controller struct {
 	// reconciler owns startup recovery and periodic convergence between the
 	// durable store and runtime resources.
 	reconciler *reconciler
+	// supervisor owns configured bindings and their provider sessions.
+	supervisor *bindingSupervisor
 
 	// ownership coordinates active lease goroutines and recovery claims. The
 	// controller lifecycle only waits for it or marks unfinished work for a
@@ -560,9 +395,6 @@ type Controller struct {
 	// running gateways. Nil is the explicit unsafe-open-egress profile,
 	// which its own methods answer for.
 	netSandbox *netsandbox.Manager
-
-	bindings  []*binding
-	byBinding map[assignment.BindingID]*binding
 
 	// drainWindow overrides DrainTimeout in tests; zero means the
 	// default. Held for the same reason as pollBackoff: a minute is not
@@ -589,32 +421,4 @@ func (s *Controller) drain() error {
 		s.log.Warn("drain window elapsed; live capsules are left for the next start to adopt")
 		return nil
 	}
-}
-
-// closeSessions closes every binding's message session concurrently
-// under one shared budget. The loops have already been waited out, so
-// each binding's session field is quiescent here.
-func (s *Controller) closeSessions() {
-	ctx, cancel := context.WithTimeout(context.Background(), SessionCloseBudget)
-	defer cancel()
-	var wg sync.WaitGroup
-	for _, b := range s.bindings {
-		if b.session == nil {
-			continue // never opened, or discarded by the loop
-		}
-		wg.Add(1)
-		go func(b *binding) {
-			defer wg.Done()
-			err := b.session.Close(ctx)
-			if s.alloc != nil {
-				s.alloc.SessionClosed(b.key, err == nil)
-			}
-			if err != nil {
-				s.log.Warn("cannot close the message session; the broker holds it until it "+
-					"expires and the next start waits that out",
-					"binding", b.key, "error", err)
-			}
-		}(b)
-	}
-	wg.Wait()
 }

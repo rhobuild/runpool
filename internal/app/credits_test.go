@@ -136,7 +136,7 @@ func TestAnnouncementsRevokeBeforeTransferringDiscovery(t *testing.T) {
 	firstSession, secondSession := &capacityRecorder{}, &capacityRecorder{}
 	first := &binding{key: "a", tier: config.Tier{ID: "std"}, session: firstSession, lastAdvertised: -1}
 	second := &binding{key: "b", tier: config.Tier{ID: "std"}, session: secondSession, lastAdvertised: -1}
-	s := &Controller{alloc: a, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &bindingSupervisor{allocator: a, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
 	firstPoll := s.announce(first)
 	if firstSession.capacity != 1 {

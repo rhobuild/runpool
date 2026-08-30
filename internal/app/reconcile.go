@@ -27,6 +27,17 @@ import (
 // within one pass of noticing.
 const defaultStrandedGrace = 2 * time.Minute
 
+// ownedObjects is the daemon inventory and removal surface reconciliation
+// consumes. It deliberately excludes creation and execution operations.
+type ownedObjects interface {
+	ListOwnedContainers(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedContainer, error)
+	ListOwnedNetworks(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
+	ListOwnedVolumes(ctx context.Context, instanceID assignment.InstanceID) ([]engine.OwnedResource, error)
+	RemoveContainer(ctx context.Context, id string) error
+	RemoveNetwork(ctx context.Context, id string) error
+	RemoveVolume(ctx context.Context, name string) error
+}
+
 // reconciler restores agreement between durable state and owned runtime
 // resources. It decides adoption, interrupted-work disposition, orphan
 // collection, and retention; it does not receive deliveries or launch new
