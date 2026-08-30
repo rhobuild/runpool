@@ -89,16 +89,10 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	h.srv = &Controller{
 		log:       log,
 		store:     st,
-		objects:   h.objects,
 		alloc:     allocator.New(),
 		ownership: newLeaseOwnership(),
 		bindings:  []*binding{b},
 		byBinding: map[assignment.BindingID]*binding{bindingID: b},
-		// A lease this harness calls stranded was written moments ago,
-		// because no test here simulates the passage of time. The grace
-		// exists for a real gap between a lease committing and its owner
-		// registering, and a test whose subject is that gap sets its own.
-		strandedGrace: time.Nanosecond,
 	}
 	h.srv.executor = &leaseExecutor{
 		log:       log,
@@ -107,6 +101,20 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		cache:     cacheMgr,
 		allocator: h.srv.alloc,
 		ownership: h.srv.ownership,
+	}
+	h.srv.reconciler = &reconciler{
+		log:       log,
+		store:     st,
+		objects:   h.objects,
+		allocator: h.srv.alloc,
+		executor:  h.srv.executor,
+		ownership: h.srv.ownership,
+		byBinding: h.srv.byBinding,
+		// A lease this harness calls stranded was written moments ago,
+		// because no test here simulates the passage of time. The grace
+		// exists for a real gap between a lease committing and its owner
+		// registering, and a test whose subject is that gap sets its own.
+		strandedGrace: time.Nanosecond,
 	}
 	if err := h.srv.alloc.Register(assignment.TierID(b.tier.ID), b.key, parallelism); err != nil {
 		t.Fatal(err)
@@ -226,7 +234,7 @@ func (h *harness) attemptByLease(leaseID assignment.LeaseID) store.Attempt {
 // resolveWithoutRuntime runs recovery for a lease whose capsule
 // no longer exists — the common crash shape these tests construct.
 func (h *harness) resolveWithoutRuntime(ctx context.Context, lease store.Lease) {
-	h.srv.resolveInterrupted(ctx, h.bind, lease, engine.OwnedContainer{}, false)
+	h.srv.reconciler.resolveInterrupted(ctx, h.bind, lease, engine.OwnedContainer{}, false)
 }
 
 func demand(workloadKey, project string, run int64) assignment.WorkloadAssignment {
@@ -549,6 +557,6 @@ func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target s
 // caller's to choose, because it is the fact under test.
 func (h *harness) resolveWithRuntime(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
 	h.srv.executor.capsule = &fakeCapsule{obs: obs}
-	h.srv.resolveInterrupted(ctx, h.bind, lease,
+	h.srv.reconciler.resolveInterrupted(ctx, h.bind, lease,
 		engine.OwnedContainer{ID: "runner-x", Role: engine.RoleCapsule, Running: false}, true)
 }

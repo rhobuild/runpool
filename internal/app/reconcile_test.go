@@ -177,8 +177,8 @@ func TestPrunePeriodicallyHonoursTheWindow(t *testing.T) {
 	})
 
 	for _, window := range []time.Duration{0, 24 * time.Hour} {
-		h.srv.leaseHistory = window
-		h.srv.prunePeriodically(h.t.Context())
+		h.srv.reconciler.leaseHistory = window
+		h.srv.reconciler.prunePeriodically(h.t.Context())
 		h.inStore(func(tx *store.Tx) error {
 			if _, err := tx.LeaseByID(lease.ID); err != nil {
 				t.Errorf("a %s window forgot a lease that finished a moment ago: %v", window, err)
@@ -370,7 +370,7 @@ func TestARecordedForgeryLosesToTheProviderToo(t *testing.T) {
 
 	// This pass measures nothing: the container is gone.
 	h.srv.executor.capsule = &fakeCapsule{obs: assignment.ObservedAbsent}
-	h.srv.resolveInterrupted(t.Context(), h.bind, reloadLease(t, h, lease.ID),
+	h.srv.reconciler.resolveInterrupted(t.Context(), h.bind, reloadLease(t, h, lease.ID),
 		engine.OwnedContainer{}, false)
 
 	if got := attemptState(t, h, attemptID); got.State == store.AttemptReady {

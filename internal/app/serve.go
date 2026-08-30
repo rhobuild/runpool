@@ -320,9 +320,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		log:                 log,
 		shippedCapsuleImage: capsuleImg,
 		store:               st,
-		objects:             dock,
 		alloc:               newAllocator(cfg),
-		leaseHistory:        cfg.Retention.Window(),
 		netSandbox:          netSandbox,
 		byBinding:           map[assignment.BindingID]*binding{},
 		ownership:           newLeaseOwnership(),
@@ -338,6 +336,16 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		ownership:    s.ownership,
 		network:      netSandbox,
 		cgroupDriver: hostInfo.CgroupDriver,
+	}
+	s.reconciler = &reconciler{
+		log:          log,
+		store:        st,
+		objects:      dock,
+		allocator:    s.alloc,
+		executor:     s.executor,
+		ownership:    s.ownership,
+		byBinding:    s.byBinding,
+		leaseHistory: cfg.Retention.Window(),
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: capacity stays closed until a current
@@ -359,7 +367,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		return err
 	}
 
-	if err := s.reconcile(ctx); err != nil {
+	if err := s.reconciler.reconcile(ctx); err != nil {
 		// Reconciliation starts a goroutine per adopted capsule before it
 		// can fail, and those outlive this return: the drain below is not
 		// registered yet, so nothing tells them the controller is going
@@ -406,7 +414,7 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 	loops.Add(1)
 	go func() {
 		defer loops.Done()
-		s.periodicReconcile(ctx)
+		s.reconciler.run(ctx)
 	}()
 	loops.Add(1)
 	go func() {
@@ -527,15 +535,15 @@ type Controller struct {
 	// the whole of this behaviour.
 	conflictGrace time.Duration
 	store         *store.Store
-	// objects is the daemon as reconciliation sees it: an inventory and a way
-	// to remove from it. Capsule execution owns creation and waiting.
-	objects ownedObjects
-	alloc   *allocator.Allocator
+	alloc         *allocator.Allocator
 	// executor owns one lease from its durable claim through disposition.
 	executor *leaseExecutor
 	// scheduler owns admission from the durable ready queue through the
 	// committed handoff to capsule execution.
 	scheduler *attemptScheduler
+	// reconciler owns startup recovery and periodic convergence between the
+	// durable store and runtime resources.
+	reconciler *reconciler
 
 	// ownership coordinates active lease goroutines and recovery claims. The
 	// controller lifecycle only waits for it or marks unfinished work for a
@@ -546,12 +554,6 @@ type Controller struct {
 	// controller reads the level in force on the admission path and does
 	// not otherwise take part.
 	disk *diskMonitor
-
-	// leaseHistory is how long a finished lease's record is kept; zero
-	// keeps every one. Captured at construction rather than read back out
-	// of the configuration, because the only *config.Config the
-	// controller holds belongs to the network sandbox.
-	leaseHistory time.Duration
 
 	// netSandbox owns the restricted profile's egress policy: the deny
 	// set, the snapshot each launch is cut from, and the installs into
@@ -566,21 +568,6 @@ type Controller struct {
 	// default. Held for the same reason as pollBackoff: a minute is not
 	// something a test waits.
 	drainWindow time.Duration
-
-	// strandedGrace overrides defaultStrandedGrace in tests; zero means
-	// the default. A test that fabricates a stranded lease writes it in
-	// the same instant it sweeps for one, and the production window is
-	// two minutes.
-	strandedGrace time.Duration
-}
-
-// strandedAfter is how long a live lease must have gone untouched
-// before the periodic pass may claim it as ownerless.
-func (s *Controller) strandedAfter() time.Duration {
-	if s.strandedGrace > 0 {
-		return s.strandedGrace
-	}
-	return defaultStrandedGrace
 }
 
 func (s *Controller) drain() error {

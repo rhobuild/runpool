@@ -241,7 +241,7 @@ func TestAttemptStrandedOnAReleasedLeaseIsRecovered(t *testing.T) {
 	// ReadyAttempts, and retried by nothing -- the sweep that pulls it
 	// back in by the attempt is the only thing that ever will, and a
 	// build that deleted the sweep kept every other test green.
-	if err := h.srv.reconcile(t.Context()); err != nil {
+	if err := h.srv.reconciler.reconcile(t.Context()); err != nil {
 		t.Fatalf("startup reconciliation: %v", err)
 	}
 

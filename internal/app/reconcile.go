@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/engine"
@@ -13,8 +15,8 @@ import (
 )
 
 // defaultStrandedGrace is how long a live lease is left alone before the
-// periodic pass may consider it ownerless. A test overrides it through
-// the controller's own strandedGrace field.
+// periodic pass may consider it ownerless. Tests may shorten it through
+// the reconciler's strandedGrace field.
 //
 // It is keyed on the last transition rather than on creation, so it also
 // keeps the pass off a lease a goroutine is actively moving: every
@@ -25,20 +27,36 @@ import (
 // within one pass of noticing.
 const defaultStrandedGrace = 2 * time.Minute
 
+// reconciler restores agreement between durable state and owned runtime
+// resources. It decides adoption, interrupted-work disposition, orphan
+// collection, and retention; it does not receive deliveries or launch new
+// leases.
+type reconciler struct {
+	log           *slog.Logger
+	store         *store.Store
+	objects       ownedObjects
+	allocator     *allocator.Allocator
+	executor      *leaseExecutor
+	ownership     *leaseOwnership
+	byBinding     map[assignment.BindingID]*binding
+	leaseHistory  time.Duration
+	strandedGrace time.Duration
+}
+
 // reconcile aligns the books with the daemon at startup, across every
 // binding. A lease whose capsule still runs is adopted, awaited
 // and cleaned; every other live lease is released, and the resource
 // sweep then removes any owned Docker object — registered or orphaned
 // from a crash between create and record — that no adopted lease needs.
 // Foreign objects are never touched: the instance label is the boundary.
-func (s *Controller) reconcile(ctx context.Context) error {
-	containers, err := s.objects.ListOwnedContainers(ctx, s.store.InstanceID())
+func (r *reconciler) reconcile(ctx context.Context) error {
+	containers, err := r.objects.ListOwnedContainers(ctx, r.store.InstanceID())
 	if err != nil {
 		return err
 	}
 
 	var live []store.Lease
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 		live, err = tx.LeasesInStates(store.LiveLeaseStates...)
 		if err != nil {
 			return err
@@ -65,7 +83,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		return err
 	}
 	if n := len(live); n > 0 {
-		s.log.Info("reconciling interrupted leases", "count", n)
+		r.log.Info("reconciling interrupted leases", "count", n)
 	}
 
 	runnerByLease := make(map[assignment.LeaseID]engine.OwnedContainer, len(containers))
@@ -77,7 +95,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 
 	adopted := make(map[assignment.LeaseID]bool)
 	for _, lease := range live {
-		b := s.byBinding[lease.BindingID] // may be nil if the target was removed
+		b := r.byBinding[lease.BindingID] // may be nil if the target was removed
 		// Adoption means "this lease is still executing; wait it out".
 		// A lease already past draining is not executing — it is being
 		// unwound, and adopting it would run WalkToRunning and then a
@@ -86,9 +104,9 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		// and its privileged container forever, because being marked
 		// adopted also exempts it from the orphan sweep.
 		if runner, ok := runnerByLease[lease.ID]; ok && runner.Running && b != nil && adoptable(lease.State) {
-			s.log.Info("adopting running capsule", "binding", b.key, "lease", lease.ID)
-			s.reportAdoption(b, s.alloc.Adopt(b.key))
-			s.adopt(b, lease, runner.ID)
+			r.log.Info("adopting running capsule", "binding", b.key, "lease", lease.ID)
+			r.reportAdoption(b, r.allocator.Adopt(b.key))
+			r.adopt(b, lease, runner.ID)
 			adopted[lease.ID] = true
 			continue
 		}
@@ -97,17 +115,17 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		// resolution below can end in quarantine, which keeps consuming
 		// capacity until cleanup succeeds.
 		if b != nil {
-			s.reportAdoption(b, s.alloc.Adopt(b.key))
-			defer s.executor.releaseCreditIfDone(b, lease.ID)
+			r.reportAdoption(b, r.allocator.Adopt(b.key))
+			defer r.executor.releaseCreditIfDone(b, lease.ID)
 		}
 		runner, hasRunner := runnerByLease[lease.ID]
-		s.resolveInterrupted(ctx, b, lease, runner, hasRunner)
+		r.resolveInterrupted(ctx, b, lease, runner, hasRunner)
 	}
 
 	// Nothing else runs yet at this point, so the set cannot move under
 	// the enumeration; it is passed as a reader so one sweep serves both
 	// callers.
-	return s.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) { return adopted, nil })
+	return r.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) { return adopted, nil })
 }
 
 // reportAdoption says when a restart has left the instance holding more
@@ -123,16 +141,16 @@ func (s *Controller) reconcile(ctx context.Context) error {
 // past the limit every tier shares. With independent tiers the instance
 // figure is left out — the report's fallback is a sum, not a limit anyone
 // configured, and printing it beside a warning invites reading it as one.
-func (s *Controller) reportAdoption(b *binding, overBudget bool) {
+func (r *reconciler) reportAdoption(b *binding, overBudget bool) {
 	if !overBudget {
 		return
 	}
 	fields := []any{"binding", b.key, "tier", b.tier.ID, "tier_parallelism", b.tier.Parallelism}
-	if report := s.alloc.CapacityReport(); report.Global {
+	if report := r.allocator.CapacityReport(); report.Global {
 		fields = append(fields,
 			"instance_active", report.Active, "instance_parallelism", report.Parallelism)
 	}
-	s.log.Warn("adopted past the budget; capacity stays over its limit until these leases release",
+	r.log.Warn("adopted past the budget; capacity stays over its limit until these leases release",
 		fields...)
 }
 
@@ -148,7 +166,7 @@ func (s *Controller) reportAdoption(b *binding, overBudget bool) {
 //     dispose;
 //   - already released with its attempt still open: nothing to clean,
 //     only the disposition runs.
-func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease store.Lease, runner engine.OwnedContainer, hasRunner bool) {
+func (r *reconciler) resolveInterrupted(ctx context.Context, b *binding, lease store.Lease, runner engine.OwnedContainer, hasRunner bool) {
 	// Recovery bookkeeping runs detached from the caller's context.
 	// Reconciliation happens at startup, where a shutdown can cancel
 	// mid-pass, and releasing a lease while failing to requeue its
@@ -159,13 +177,13 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptedLeaseBudget)
 	defer cancel()
 
-	evidence, err := s.executor.leases.EvidenceOf(ctx, lease)
+	evidence, err := r.executor.leases.EvidenceOf(ctx, lease)
 	if err != nil {
-		s.log.Error("cannot read the attempt's evidence; leaving the lease for the next pass",
+		r.log.Error("cannot read the attempt's evidence; leaving the lease for the next pass",
 			"lease", lease.ID, "error", err)
 		return
 	}
-	log := s.log.With("lease", lease.ID,
+	log := r.log.With("lease", lease.ID,
 		"state", string(lease.State), "evidence", string(evidence))
 
 	// The observation is taken before any cleanup: the container is the
@@ -186,7 +204,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	if hasRunner && (evidence == store.EvidenceStartAuthorized ||
 		evidence == store.EvidenceRunningObserved) {
 		var err error
-		obs, err = s.executor.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
+		obs, err = r.executor.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
 		if err != nil {
 			log.Error("cannot observe the runtime of an ambiguous start", "error", err)
 		}
@@ -198,7 +216,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	// whole point — nothing below reads the local copy, because every
 	// disposition re-reads the row inside its own transaction.
 	if obs == assignment.ObservedExited {
-		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 			return tx.RecordEvidence(lease.AttemptID, store.EvidenceExitObserved)
 		}); err != nil {
 			log.Error("cannot record the observed exit", "error", err)
@@ -215,13 +233,13 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// cannot return an assignment to the queue while the provider
 		// still holds the runner busy, and that promise was only kept on
 		// the failure path: this one believed the capsule.
-		obs = s.executor.deregisterAndOverrule(ctx, b, lease, obs, log)
+		obs = r.executor.deregisterAndOverrule(ctx, b, lease, obs, log)
 		// Resume the interrupted release: external cleanup, then the
 		// finalizing transaction disposes of the attempt atomically.
 		log.Info("resuming an interrupted release")
-		if err := s.executor.leases.FinishCleaning(ctx, lease, obs); err != nil {
+		if err := r.executor.leases.FinishCleaning(ctx, lease, obs); err != nil {
 			log.Error("resuming the release failed; the lease stays quarantined", "error", err)
-			s.executor.leases.Quarantine(lease.ID)
+			r.executor.leases.Quarantine(lease.ID)
 		}
 
 	case store.LeaseReleased:
@@ -235,7 +253,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// invariant already broken is the one place a forged account is
 		// still believed.
 		log.Warn("disposing of an attempt left open by a released lease")
-		s.executor.leases.DisposeStranded(ctx, lease, s.executor.deregisterAndOverrule(ctx, b, lease, obs, log))
+		r.executor.leases.DisposeStranded(ctx, lease, r.executor.deregisterAndOverrule(ctx, b, lease, obs, log))
 
 	case store.LeaseReserved, store.LeaseProvisioning,
 		store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning,
@@ -243,7 +261,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// recoverCapsuleFailure finishes with the same finalizing
 		// transaction, so release and disposition cannot come apart.
 		log.Info("releasing an interrupted lease")
-		if err := s.executor.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
+		if err := r.executor.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
 			log.Error("recovery could not resolve the lease; reconciliation will retry", "error", err)
 		}
 
@@ -268,15 +286,15 @@ func recoveryContext(ctx context.Context) (context.Context, context.CancelFunc) 
 	return context.WithTimeout(context.WithoutCancel(ctx), recoveryBudget)
 }
 
-func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string) {
+func (r *reconciler) adopt(b *binding, lease store.Lease, runnerContainer string) {
 	// Claimed here rather than inside the goroutine, so no pass can see the
 	// lease as ownerless in the gap before it is scheduled.
-	s.ownership.claim(lease.ID)
-	s.ownership.addActive()
+	r.ownership.claim(lease.ID)
+	r.ownership.addActive()
 	go func() {
-		defer s.ownership.activeDone()
-		defer s.ownership.release(lease.ID)
-		defer s.executor.releaseCreditIfDone(b, lease.ID)
+		defer r.ownership.activeDone()
+		defer r.ownership.release(lease.ID)
+		defer r.executor.releaseCreditIfDone(b, lease.ID)
 		// What is left of this lease's ceiling, not a fresh one: a capsule
 		// that stopped reporting is exactly what the ceiling bounds, and
 		// restarting the clock on every controller restart would let it
@@ -287,13 +305,13 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// Through the same seam the ordinary launch awaits its runner:
 		// an adopted capsule is a capsule, and one of the two paths
 		// reaching around it is how they come to behave differently.
-		exit, err := s.executor.waiter.WaitExit(ctx, runnerContainer)
+		exit, err := r.executor.waiter.WaitExit(ctx, runnerContainer)
 		done, endRecovery := recoveryContext(ctx)
 		defer endRecovery()
 		if err != nil {
-			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
-			if err := s.executor.recoverCapsuleFailure(done, b, lease.ID, assignment.NoObservation); err != nil {
-				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
+			r.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
+			if err := r.executor.recoverCapsuleFailure(done, b, lease.ID, assignment.NoObservation); err != nil {
+				r.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
 			return
@@ -303,11 +321,11 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// the job over, and discarding the status here settled it as a
 		// run that finished.
 		if obs := capsule.ClassifyExit(int(exit)); obs != assignment.ObservedExited {
-			s.log.Warn("the adopted capsule reports the runner never started; the attempt "+
+			r.log.Warn("the adopted capsule reports the runner never started; the attempt "+
 				"returns to the queue unless the provider says otherwise",
 				"lease", lease.ID, "exit", exit)
-			if err := s.executor.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
-				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
+			if err := r.executor.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
+				r.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
 			return
@@ -315,17 +333,17 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// The adopted capsule was awaited to its exit. Recording the
 		// observation is what lets the finalizing transaction settle the
 		// attempt from evidence, like any other completed run.
-		if err := s.executor.leases.RecordEvidence(done, lease.ID, store.EvidenceExitObserved); err != nil {
-			s.log.Error("cannot record the adopted capsule's exit", "lease", lease.ID, "error", err)
+		if err := r.executor.leases.RecordEvidence(done, lease.ID, store.EvidenceExitObserved); err != nil {
+			r.log.Error("cannot record the adopted capsule's exit", "lease", lease.ID, "error", err)
 		}
-		if err := s.executor.leases.WalkToRunning(done, lease); err != nil {
-			s.log.Error("adopted capsule state repair failed", "lease", lease.ID, "error", err)
+		if err := r.executor.leases.WalkToRunning(done, lease); err != nil {
+			r.log.Error("adopted capsule state repair failed", "lease", lease.ID, "error", err)
 		}
-		if err := s.executor.leases.Release(done, lease.ID, store.LeaseWorkloadRunning); err != nil {
-			s.log.Error("adopted capsule cleanup failed", "lease", lease.ID, "error", err)
+		if err := r.executor.leases.Release(done, lease.ID, store.LeaseWorkloadRunning); err != nil {
+			r.log.Error("adopted capsule cleanup failed", "lease", lease.ID, "error", err)
 			return
 		}
-		s.log.Info("adopted capsule released", "binding", b.key, "lease", lease.ID)
+		r.log.Info("adopted capsule released", "binding", b.key, "lease", lease.ID)
 	}()
 }
 
@@ -365,11 +383,11 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 // released, and retention refuses a lease that still owns an intent —
 // deliberately, so the leak stays visible in `status` rather than being
 // quietly forgotten.
-func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[assignment.LeaseID]bool, error)) error {
+func (r *reconciler) sweepOrphans(ctx context.Context, liveLeases func() (map[assignment.LeaseID]bool, error)) error {
 	wedged := 0
 	fail := func(kind, name string, err error) {
 		wedged++
-		s.log.Error("cannot sweep an orphan; it stays labelled for the next pass",
+		r.log.Error("cannot sweep an orphan; it stays labelled for the next pass",
 			"kind", kind, "id", name, "error", err)
 	}
 
@@ -382,15 +400,15 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 	// running and deletes the records that would have cleaned up after
 	// it. Cache lane collection states the same order for the same
 	// reason.
-	containers, err := s.objects.ListOwnedContainers(ctx, s.store.InstanceID())
+	containers, err := r.objects.ListOwnedContainers(ctx, r.store.InstanceID())
 	if err != nil {
 		return err
 	}
-	networks, err := s.objects.ListOwnedNetworks(ctx, s.store.InstanceID())
+	networks, err := r.objects.ListOwnedNetworks(ctx, r.store.InstanceID())
 	if err != nil {
 		return err
 	}
-	volumes, err := s.objects.ListOwnedVolumes(ctx, s.store.InstanceID())
+	volumes, err := r.objects.ListOwnedVolumes(ctx, r.store.InstanceID())
 	if err != nil {
 		return err
 	}
@@ -406,8 +424,8 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 		if c.HelperInFlight() {
 			continue
 		}
-		s.log.Info("sweeping orphan container", "name", c.Name, "lease", c.LeaseID)
-		if err := s.objects.RemoveContainer(ctx, c.ID); err != nil {
+		r.log.Info("sweeping orphan container", "name", c.Name, "lease", c.LeaseID)
+		if err := r.objects.RemoveContainer(ctx, c.ID); err != nil {
 			fail("container", c.Name, err)
 			continue
 		}
@@ -415,7 +433,7 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 		// one without the other leaves the daemon and the books
 		// disagreeing, and the foreign key then blocks the lease from
 		// ever being purged.
-		if err := s.executor.leases.ForgetResource(ctx, c.LeaseID, c.ID); err != nil {
+		if err := r.executor.leases.ForgetResource(ctx, c.LeaseID, c.ID); err != nil {
 			return err
 		}
 	}
@@ -426,11 +444,11 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 		if n.InstanceInfrastructure() {
 			continue
 		}
-		if err := s.objects.RemoveNetwork(ctx, n.ID); err != nil {
+		if err := r.objects.RemoveNetwork(ctx, n.ID); err != nil {
 			fail("network", n.ID, err)
 			continue
 		}
-		if err := s.executor.leases.ForgetResource(ctx, n.LeaseID, n.ID); err != nil {
+		if err := r.executor.leases.ForgetResource(ctx, n.LeaseID, n.ID); err != nil {
 			return err
 		}
 	}
@@ -441,23 +459,23 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 		if v.InstanceInfrastructure() {
 			continue
 		}
-		if err := s.objects.RemoveVolume(ctx, v.ID); err != nil {
+		if err := r.objects.RemoveVolume(ctx, v.ID); err != nil {
 			fail("volume", v.ID, err)
 			continue
 		}
-		if err := s.executor.leases.ForgetResource(ctx, v.LeaseID, v.ID); err != nil {
+		if err := r.executor.leases.ForgetResource(ctx, v.LeaseID, v.ID); err != nil {
 			return err
 		}
 	}
 	if wedged > 0 {
-		s.log.Warn("some orphans could not be swept; they keep their labels and are retried next pass",
+		r.log.Warn("some orphans could not be swept; they keep their labels and are retried next pass",
 			"count", wedged)
 	}
 	return nil
 }
 
-// periodicReconcile retries what the serving paths gave up on, without
-// waiting for a restart. Its working set is every live lease no goroutine
+// run retries what the serving paths gave up on, without waiting for a
+// restart. Its working set is every live lease no goroutine
 // owns — quarantine is the common case, but it is not the only way an
 // owner stops: a failed finalization parks a lease in `cleaning`, and a
 // failed transition leaves one wherever it was. Those are just as
@@ -468,7 +486,7 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 // wedged object paces its own attempts instead of hammering the daemon;
 // and each pass is bounded, because an unbounded sweep is how a
 // reconciler becomes the load it was meant to absorb.
-func (s *Controller) periodicReconcile(ctx context.Context) {
+func (r *reconciler) run(ctx context.Context) {
 	const base = 45 * time.Second
 	for {
 		wait := base + time.Duration(rand.Int64N(int64(base/3)))
@@ -477,9 +495,9 @@ func (s *Controller) periodicReconcile(ctx context.Context) {
 			return
 		case <-time.After(wait):
 		}
-		s.retryStranded(ctx)
-		s.sweepPeriodically(ctx)
-		s.prunePeriodically(ctx)
+		r.retryStranded(ctx)
+		r.sweepPeriodically(ctx)
+		r.prunePeriodically(ctx)
 	}
 }
 
@@ -492,27 +510,27 @@ func (s *Controller) periodicReconcile(ctx context.Context) {
 // each eviction because a volume is an object an operator can look at; a
 // pass that forgets five thousand rows would flood the one table nothing
 // ever prunes.
-func (s *Controller) prunePeriodically(ctx context.Context) {
-	if s.leaseHistory <= 0 {
+func (r *reconciler) prunePeriodically(ctx context.Context) {
+	if r.leaseHistory <= 0 {
 		return // keep every lease record; the operator asked for it
 	}
 	const perPass = 500
-	before := time.Now().Add(-s.leaseHistory)
+	before := time.Now().Add(-r.leaseHistory)
 	var pruned int
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		pruned, err = tx.PruneLeaseHistory(before, perPass)
 		if err != nil || pruned == 0 {
 			return err
 		}
 		return tx.RecordAudit("retention", "retention_prune", "capsule_leases",
-			fmt.Sprintf("pruned=%d older_than=%s", pruned, s.leaseHistory))
+			fmt.Sprintf("pruned=%d older_than=%s", pruned, r.leaseHistory))
 	}); err != nil {
-		s.log.Error("retention pass failed", "error", err)
+		r.log.Error("retention pass failed", "error", err)
 		return
 	}
 	if pruned > 0 {
-		s.log.Info("pruned lease history", "leases", pruned, "older_than", s.leaseHistory.String())
+		r.log.Info("pruned lease history", "leases", pruned, "older_than", r.leaseHistory.String())
 	}
 }
 
@@ -528,10 +546,10 @@ func (s *Controller) prunePeriodically(ctx context.Context) {
 // retryStranded, and in both cases its objects are that owner's to remove.
 // What is left is a genuine orphan — an object whose lease is released or
 // gone entirely.
-func (s *Controller) sweepPeriodically(ctx context.Context) {
-	if err := s.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) {
+func (r *reconciler) sweepPeriodically(ctx context.Context) {
+	if err := r.sweepOrphans(ctx, func() (map[assignment.LeaseID]bool, error) {
 		var live []store.Lease
-		if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+		if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 			var err error
 			live, err = tx.LeasesInStates(store.LiveLeaseStates...)
 			return err
@@ -546,7 +564,7 @@ func (s *Controller) sweepPeriodically(ctx context.Context) {
 		}
 		return keep, nil
 	}); err != nil {
-		s.log.Error("periodic sweep failed", "error", err)
+		r.log.Error("periodic sweep failed", "error", err)
 	}
 }
 
@@ -555,14 +573,14 @@ func (s *Controller) sweepPeriodically(ctx context.Context) {
 // resolves a lease from anywhere in the machine; what must not happen is
 // touching one a goroutine is still driving, which is what the claim is
 // for. A lease that fails to claim is not stranded — it has an owner.
-func (s *Controller) retryStranded(ctx context.Context) {
+func (r *reconciler) retryStranded(ctx context.Context) {
 	var live []store.Lease
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := r.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		live, err = tx.LeasesInStates(store.LiveLeaseStates...)
 		return err
 	}); err != nil {
-		s.log.Error("periodic reconcile cannot list live leases", "error", err)
+		r.log.Error("periodic reconcile cannot list live leases", "error", err)
 		return
 	}
 	const perPass = 8
@@ -571,7 +589,7 @@ func (s *Controller) retryStranded(ctx context.Context) {
 		if retried >= perPass {
 			break
 		}
-		if time.Since(lease.UpdatedAt) < s.strandedAfter() {
+		if time.Since(lease.UpdatedAt) < r.strandedAfter() {
 			// Recently touched, so its owner is either running or about
 			// to register. The claim that marks a lease owned is taken
 			// in memory just after the row commits, and a pass that ran
@@ -582,7 +600,7 @@ func (s *Controller) retryStranded(ctx context.Context) {
 			// gap that exists here, so it is what the pass waits on.
 			continue
 		}
-		if !s.ownership.claim(lease.ID) {
+		if !r.ownership.claim(lease.ID) {
 			continue // a goroutine is driving it; not this pass's business
 		}
 		stranded++
@@ -590,38 +608,47 @@ func (s *Controller) retryStranded(ctx context.Context) {
 			// Deferred so a panic cannot leak the claim. A leaked claim
 			// makes the lease invisible to every later pass, which is the
 			// leak this whole mechanism exists to prevent.
-			defer s.ownership.release(lease.ID)
-			s.resolveStranded(ctx, lease, &retried, &converged)
+			defer r.ownership.release(lease.ID)
+			r.resolveStranded(ctx, lease, &retried, &converged)
 		}()
 	}
 	if retried > 0 {
-		s.log.Info("periodic reconcile pass",
+		r.log.Info("periodic reconcile pass",
 			"stranded", stranded, "retried", retried, "converged", converged)
 	}
 }
 
 // resolveStranded is one claimed lease's recovery, split out so the claim
 // is released on every path out.
-func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, retried, converged *int) {
-	due, err := s.executor.leases.IntentsDue(ctx, lease.ID)
+func (r *reconciler) resolveStranded(ctx context.Context, lease store.Lease, retried, converged *int) {
+	due, err := r.executor.leases.IntentsDue(ctx, lease.ID)
 	if err != nil {
-		s.log.Error("periodic reconcile cannot read intents", "lease", lease.ID, "error", err)
+		r.log.Error("periodic reconcile cannot read intents", "lease", lease.ID, "error", err)
 		return
 	}
 	if !due {
 		return // its backoff has not elapsed; let it breathe
 	}
 	*retried++
-	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
-	if err := s.executor.recoverCapsuleFailure(ctx, b, lease.ID, assignment.NoObservation); err != nil {
-		s.log.Warn("stranded lease still unresolved",
+	b := r.byBinding[lease.BindingID] // may be nil if the target was removed
+	if err := r.executor.recoverCapsuleFailure(ctx, b, lease.ID, assignment.NoObservation); err != nil {
+		r.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)
 		return
 	}
 	*converged++
 	if b != nil {
-		s.executor.releaseCreditIfDone(b, lease.ID)
+		r.executor.releaseCreditIfDone(b, lease.ID)
 	}
+}
+
+// strandedAfter is how long a live lease must have gone untouched before
+// the periodic pass may claim it as ownerless.
+func (r *reconciler) strandedAfter() time.Duration {
+	if r.strandedGrace > 0 {
+		return r.strandedGrace
+	}
+	return defaultStrandedGrace
 }
 
 // adoptable reports whether a lease found with a running capsule can be

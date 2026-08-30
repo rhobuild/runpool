@@ -32,7 +32,7 @@ func TestSweepOrphansSparesWhatIsNotGarbage(t *testing.T) {
 		{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"},
 	}
 
-	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
+	if err := h.srv.reconciler.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
 		return map[assignment.LeaseID]bool{"lse-adopted": true}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestSweepOrphansSurvivesAnObjectThatWillNotDie(t *testing.T) {
 	h.objects.volumes = []engine.OwnedResource{{ID: "vol-gone", Role: "dind-data", LeaseID: "lse-gone"}}
 	h.objects.wedged["wedged"] = true
 
-	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err != nil {
+	if err := h.srv.reconciler.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err != nil {
 		t.Fatalf("one object that would not die failed the whole pass: %v", err)
 	}
 	if !slices.Equal(h.objects.removed, []string{"net-gone", "vol-gone"}) {
@@ -72,7 +72,7 @@ func TestSweepOrphansFailsOnAnUnreadableInventory(t *testing.T) {
 	h := newHarness(t, 1)
 	h.objects.listErr = errors.New("daemon unreachable")
 
-	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err == nil {
+	if err := h.srv.reconciler.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) { return nil, nil }); err == nil {
 		t.Error("an unreadable inventory was reported as nothing to sweep")
 	}
 }
@@ -110,7 +110,7 @@ func TestALeaseCommittedDuringTheSweepKeepsItsObjects(t *testing.T) {
 	listed := 0
 	h.objects.onList = func() { listed++ }
 
-	if err := h.srv.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
+	if err := h.srv.reconciler.sweepOrphans(t.Context(), func() (map[assignment.LeaseID]bool, error) {
 		if listed < 3 {
 			return nil, nil
 		}

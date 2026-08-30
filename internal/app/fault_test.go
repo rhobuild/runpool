@@ -439,7 +439,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	}
 
 	// The backoff has not elapsed: a periodic pass must not retry yet.
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
 		t.Fatalf("a pass inside the backoff window touched the lease: %s", got.State)
 	}
@@ -456,7 +456,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
 		t.Errorf("lease = %s after the periodic pass; want released", got.State)
@@ -522,7 +522,7 @@ func TestPeriodicReconcileConvergesAStrandedCleaningLease(t *testing.T) {
 		t.Fatal("the stranded lease should be holding the tier's only credit")
 	}
 
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 
 	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReleased {
 		t.Errorf("stranded cleaning lease = %s after a periodic pass; want released", got)
@@ -551,7 +551,7 @@ func TestPeriodicReconcileSkipsOwnedLeases(t *testing.T) {
 	defer h.srv.ownership.release(lease.ID)
 
 	before := reloadLease(t, h, lease.ID).State
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 	if got := reloadLease(t, h, lease.ID).State; got != before {
 		t.Errorf("a claimed lease moved %s -> %s; the pass must leave owned leases alone", before, got)
 	}
@@ -583,7 +583,7 @@ func TestPeriodicReconcileSpareAJobBeingLaunched(t *testing.T) {
 		t.Fatalf("lease = %s; the harness launch leaves it reserved", got)
 	}
 
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 
 	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseReserved {
 		t.Errorf("the periodic pass drove a lease being launched: %s -> %s",
@@ -691,7 +691,7 @@ func TestAFreshLeaseIsNotStranded(t *testing.T) {
 	// The production grace, against a lease this test just created: the
 	// harness shortens it, and shortening it is what would make this
 	// assert nothing.
-	h.srv.strandedGrace = defaultStrandedGrace
+	h.srv.reconciler.strandedGrace = defaultStrandedGrace
 	if err := h.deliver(demand("job-fresh", "app", 90)); err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +699,7 @@ func TestAFreshLeaseIsNotStranded(t *testing.T) {
 	h.srv.alloc.Adopt(h.bind.key)
 
 	before := reloadLease(t, h, lease.ID).State
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 
 	if got := reloadLease(t, h, lease.ID).State; got != before {
 		t.Errorf("a lease committed moments ago moved %s -> %s; its owner had not registered yet", before, got)
@@ -803,7 +803,7 @@ func TestTheReconcilerStopsRecoveringWhenTheShutdownBegins(t *testing.T) {
 	}()
 
 	start := time.Now()
-	h.srv.retryStranded(ctx)
+	h.srv.reconciler.retryStranded(ctx)
 	elapsed := time.Since(start)
 
 	if elapsed > LoopStopBudget {
@@ -998,7 +998,7 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h.srv.adopt(h.bind, lease, "adopted-runner")
+	h.srv.reconciler.adopt(h.bind, lease, "adopted-runner")
 	<-h.srv.ownership.wait()
 
 	if !rec.seen {
@@ -1114,7 +1114,7 @@ func TestAProofSurvivesThePeriodicPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h.srv.retryStranded(t.Context())
+	h.srv.reconciler.retryStranded(t.Context())
 
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
 		t.Errorf("lease = %s after the periodic pass; want released", got.State)
