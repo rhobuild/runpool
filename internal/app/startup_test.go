@@ -33,8 +33,8 @@ func TestReconcileAdoptsWhatIsStillRunning(t *testing.T) {
 	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-alive", Role: engine.RoleCapsule, LeaseID: alive.ID, Running: true},
 	}
-	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
-	h.srv.wait = &fakeWaiter{}
+	h.srv.executor.capsule = &fakeCapsule{obs: assignment.ObservedAbsent}
+	h.srv.executor.waiter = &fakeWaiter{}
 
 	if err := h.srv.reconcile(t.Context()); err != nil {
 		t.Fatal(err)

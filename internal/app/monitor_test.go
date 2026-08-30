@@ -40,7 +40,7 @@ func TestANewMonitorClosesAdmissionUntilItMeasures(t *testing.T) {
 	h.srv.alloc.SetAssignedDemand(h.bind.key, 1)
 
 	fresh := newDiskMonitor(defaultedConfig(t), h.srv.log, h.store, h.probe,
-		h.srv.cache, h.srv.alloc, "probe-image")
+		h.srv.executor.cache, h.srv.alloc, "probe-image")
 	if got := fresh.current(); got != disk.Unknown {
 		t.Fatalf("new monitor level = %s; want unknown", got)
 	}
@@ -245,7 +245,7 @@ func TestPassClosesAdmissionAndPersistsIt(t *testing.T) {
 
 	// And the level survives a fresh monitor over the same store.
 	resumed := newDiskMonitor(defaultedConfig(t), h.srv.log, h.store, h.probe,
-		h.srv.cache, h.srv.alloc, "probe-image")
+		h.srv.executor.cache, h.srv.alloc, "probe-image")
 	if err := resumed.resume(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestCollectGarbageRunsWhatTheLevelObliges(t *testing.T) {
 		thresholds: disk.Thresholds{MaxManagedBytes: 1 << 40, LowPct: 60},
 	}
 	// One fresh, free lane: within TTL, within the managed budget.
-	loc, ok, err := h.srv.cache.Acquire(t.Context(), "https://github.com/acme/app", "gen", "lease-gc", 4)
+	loc, ok, err := h.srv.executor.cache.Acquire(t.Context(), "https://github.com/acme/app", "gen", "lease-gc", 4)
 	if err != nil || !ok {
 		t.Fatalf("acquire: ok=%v, %v", ok, err)
 	}

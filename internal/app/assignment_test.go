@@ -90,8 +90,6 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		log:       log,
 		store:     st,
 		objects:   h.objects,
-		leases:    lease.NewManager(st, nopRemover{}, log),
-		cache:     cacheMgr,
 		alloc:     allocator.New(),
 		ownership: newLeaseOwnership(),
 		bindings:  []*binding{b},
@@ -101,6 +99,14 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		// exists for a real gap between a lease committing and its owner
 		// registering, and a test whose subject is that gap sets its own.
 		strandedGrace: time.Nanosecond,
+	}
+	h.srv.executor = &leaseExecutor{
+		log:       log,
+		store:     st,
+		leases:    lease.NewManager(st, nopRemover{}, log),
+		cache:     cacheMgr,
+		allocator: h.srv.alloc,
+		ownership: h.srv.ownership,
 	}
 	if err := h.srv.alloc.Register(assignment.TierID(b.tier.ID), b.key, parallelism); err != nil {
 		t.Fatal(err)
@@ -124,7 +130,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 		allocator:   h.srv.alloc,
 		ownership:   h.srv.ownership,
 		pressure:    h.srv.currentPressure,
-		createLease: h.srv.createLease,
+		createLease: h.srv.executor.createLease,
 		launch: func(_ *binding, lease store.Lease) {
 			h.mu.Lock()
 			h.launched = append(h.launched, lease.AttemptID)
@@ -164,7 +170,7 @@ func (h *harness) launchedAttempts() []assignment.AttemptID {
 // useRemover rebuilds the lease manager over a faulted daemon, so a test
 // can drive the cleanup saga through removal failures.
 func (h *harness) useRemover(r lease.Remover) {
-	h.srv.leases = lease.NewManager(h.store, r, h.srv.log)
+	h.srv.executor.leases = lease.NewManager(h.store, r, h.srv.log)
 }
 
 func (h *harness) recordEvidence(leaseID assignment.LeaseID, e store.Evidence) {
@@ -542,7 +548,7 @@ func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target s
 // start took effect. The observation the capsule answers with is the
 // caller's to choose, because it is the fact under test.
 func (h *harness) resolveWithRuntime(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
-	h.srv.caps = &fakeCapsule{obs: obs}
+	h.srv.executor.capsule = &fakeCapsule{obs: obs}
 	h.srv.resolveInterrupted(ctx, h.bind, lease,
 		engine.OwnedContainer{ID: "runner-x", Role: engine.RoleCapsule, Running: false}, true)
 }

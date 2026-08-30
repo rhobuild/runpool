@@ -6,20 +6,40 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/allocator"
 	"github.com/rhobuild/runpool/internal/assignment"
+	"github.com/rhobuild/runpool/internal/cache"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/githubactions"
+	"github.com/rhobuild/runpool/internal/lease"
+	"github.com/rhobuild/runpool/internal/netsandbox"
 	"github.com/rhobuild/runpool/internal/store"
 )
+
+// leaseExecutor owns one committed lease from capsule preparation through
+// evidence-based disposition and resource cleanup. It does not discover work,
+// assign capacity, or decide which interrupted leases require recovery.
+type leaseExecutor struct {
+	log          *slog.Logger
+	store        *store.Store
+	capsule      capsuleRuntime
+	waiter       runtimeWaiter
+	leases       *lease.Manager
+	cache        *cache.LaneManager
+	allocator    *allocator.Allocator
+	ownership    *leaseOwnership
+	network      *netsandbox.Manager
+	cgroupDriver string
+}
 
 // createLease takes an admission credit for one ready attempt. The lease and the
 // attempt's claim commit together, so the two can never disagree about
 // whether a workload is being served.
-func (s *Controller) createLease(ctx context.Context, b *binding, attempt store.Attempt) (store.Lease, error) {
+func (e *leaseExecutor) createLease(ctx context.Context, b *binding, attempt store.Attempt) (store.Lease, error) {
 	var lease store.Lease
-	err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		lease, err = tx.LeaseAttempt(attempt.ID, b.bindingID, b.tier.ID)
 		return err
@@ -27,7 +47,7 @@ func (s *Controller) createLease(ctx context.Context, b *binding, attempt store.
 	if err != nil {
 		return store.Lease{}, err
 	}
-	s.log.Info("lease reserved", "binding", b.key, "lease", lease.ID,
+	e.log.Info("lease reserved", "binding", b.key, "lease", lease.ID,
 		"project", attempt.TenantKey+"/"+attempt.ProjectKey, "attempt", attempt.ID)
 	return lease, nil
 }
@@ -36,13 +56,13 @@ func (s *Controller) createLease(ctx context.Context, b *binding, attempt store.
 // walk is what an operator watches, while disposition rests on evidence
 // and the terminal transitions, so a conflict is logged rather than
 // fatal.
-func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.AttemptID, from, to store.AttemptState) {
+func (e *leaseExecutor) advanceAttempt(ctx context.Context, attemptID assignment.AttemptID, from, to store.AttemptState) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.Advance(attemptID, from, to)
 	}); err != nil {
-		s.log.Warn("attempt did not advance", "attempt", attemptID,
+		e.log.Warn("attempt did not advance", "attempt", attemptID,
 			"from", from, "to", to, "error", err)
 	}
 }
@@ -50,7 +70,7 @@ func (s *Controller) advanceAttempt(ctx context.Context, attemptID assignment.At
 // runCapsule drives one lease through the machine on its own context:
 // cancelling serve stops admission, not a running job — drain waits, and
 // whatever outlives the drain window is adopted on the next start.
-func (s *Controller) runCapsule(b *binding, lease store.Lease) {
+func (e *leaseExecutor) runCapsule(b *binding, lease store.Lease) {
 	attemptID := lease.AttemptID
 	// startObs carries the classification of an ambiguous start into the
 	// finalizing transaction. Recovery does not re-take it: the pass that
@@ -62,17 +82,17 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// The scheduler claims the lease before this goroutine is started, so the
 	// claim is unbroken from the moment the lease row exists. Releasing is
 	// registered before the credit defer, so it runs after it.
-	defer s.ownership.release(lease.ID)
+	defer e.ownership.release(lease.ID)
 	// The credit is released by whoever reaches `released` — not here.
 	// A lease that ends quarantined still owns privileged containers,
 	// networks and volumes, so releasing its capacity would admit work
 	// the host cannot actually run.
-	defer s.releaseCreditIfDone(b, lease.ID)
+	defer e.releaseCreditIfDone(b, lease.ID)
 	// The lease's own context outlives every step: cleanup and the
 	// failure paths need one that is not the step's.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	log := s.log.With("binding", b.key, "lease", lease.ID)
+	log := e.log.With("binding", b.key, "lease", lease.ID)
 
 	// Preparation and execution are bounded separately because they are
 	// bounded for different reasons. Getting a capsule to the point of
@@ -87,14 +107,14 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	prepCtx, cancelPrep := context.WithTimeout(ctx, capsulePrepTimeout)
 	defer cancelPrep()
 
-	if err := s.leases.Transition(ctx, lease.ID, store.LeaseReserved, store.LeaseProvisioning); err != nil {
+	if err := e.leases.Transition(ctx, lease.ID, store.LeaseReserved, store.LeaseProvisioning); err != nil {
 		// Unwound like every other failure in this function. Returning
 		// bare left the lease reserved and its credit held until the
 		// stranded grace elapsed, which is minutes of one tier's
 		// capacity for a transient store error -- and the only step here
 		// where that was the cost.
 		log.Error("transition failed", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 
@@ -102,13 +122,13 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	jit, err := b.gh.GenerateJITConfig(prepCtx, b.scaleSetID, runnerName, workFolder)
 	if err != nil {
 		log.Error("jit generation failed", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 	// The runtime's name is the lease's correlation handle; the runner id
 	// GitHub assigned is the adapter's, and lands in the attempt's
 	// metadata table where deregistration reads it back.
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		if err := tx.SetLeaseRuntimeName(lease.ID, assignment.RuntimeName(jit.RunnerName)); err != nil {
 			return err
 		}
@@ -118,7 +138,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		return tx.TransitionLease(lease.ID, store.LeaseProvisioning, store.LeaseRuntimeRegistered)
 	}); err != nil {
 		log.Error("registering runner in state failed", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 
@@ -127,7 +147,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// reclaimed on the next reconciliation.
 	var cacheMount capsule.CacheMount
 	if b.cacheEnabled {
-		loc, ok, err := s.cache.Acquire(prepCtx, b.ref.CanonicalURL, b.generation, lease.ID, b.maxLanes)
+		loc, ok, err := e.cache.Acquire(prepCtx, b.ref.CanonicalURL, b.generation, lease.ID, b.maxLanes)
 		switch {
 		case err != nil:
 			log.Warn("cache lane unavailable; running without cache", "error", err)
@@ -139,17 +159,17 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		}
 	}
 
-	recorder := s.leases.Recorder(ctx, lease.ID)
-	s.advanceAttempt(ctx, attemptID, store.AttemptLeased, store.AttemptPreparing)
-	sandbox, err := s.netSandbox.ForLaunch(prepCtx)
+	recorder := e.leases.Recorder(ctx, lease.ID)
+	e.advanceAttempt(ctx, attemptID, store.AttemptLeased, store.AttemptPreparing)
+	sandbox, err := e.network.ForLaunch(prepCtx)
 	if err != nil {
 		log.Error("network sandbox refresh failed", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
-	prepared, err := s.caps.Prepare(prepCtx, capsule.Spec{
+	prepared, err := e.capsule.Prepare(prepCtx, capsule.Spec{
 		LeaseID:      lease.ID,
-		InstanceID:   s.store.InstanceID(),
+		InstanceID:   e.store.InstanceID(),
 		AttemptID:    attemptID,
 		TargetID:     assignment.TargetID(b.target.ID),
 		TierID:       assignment.TierID(b.tier.ID),
@@ -158,7 +178,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		Resources:    b.tier.Resources,
 		Cache:        cacheMount,
 		Sandbox:      sandbox,
-		CgroupDriver: s.cgroupDriver,
+		CgroupDriver: e.cgroupDriver,
 	}, recorder)
 	if err != nil {
 		// Nothing was asked to run, so the assignment stays servable —
@@ -169,28 +189,28 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		// named, and the tier's image is the thing to change.
 		log.Error("capsule preparation failed", "error", err)
 		if errors.Is(err, capsule.ErrIncompatibleImage) {
-			s.leases.HoldAttempt(ctx, lease.ID, store.ReviewReasonIncompatibleCapsule)
+			e.leases.HoldAttempt(ctx, lease.ID, store.ReviewReasonIncompatibleCapsule)
 		}
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 	// The gateway exists and is ready now, so this is the first moment
 	// the policy it carries can be checked against the one in force --
 	// and the last moment before the capsule is authorized to start, so
 	// it is the only one at which a stale gateway is still free.
-	if err := s.netSandbox.ConfirmLaunch(prepCtx, lease.ID, sandbox); err != nil {
+	if err := e.network.ConfirmLaunch(prepCtx, lease.ID, sandbox); err != nil {
 		log.Error("the capsule's gateway does not carry the egress policy in force", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 	// Recorded after the preparation exists — evidence names what
 	// happened, never what was about to be attempted.
-	if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRuntimePrepared); err != nil {
+	if err := e.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRuntimePrepared); err != nil {
 		log.Error("cannot record that the runtime is prepared", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
-	s.advanceAttempt(ctx, attemptID, store.AttemptPreparing, store.AttemptPrepared)
+	e.advanceAttempt(ctx, attemptID, store.AttemptPreparing, store.AttemptPrepared)
 	// This one edge is authoritative, unlike every other in the walk. It
 	// is the last point before an effect that can begin execution, and
 	// by here the attempt has been out of this goroutine's sight for the
@@ -211,7 +231,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// carries on, which is right for observability and wrong to depend
 	// on. Requiring `prepared` made a transient store error tear down a
 	// capsule that was ready to run.
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		return tx.AuthorizeStart(lease.ID, attemptID)
 	}); err != nil {
 		log.Warn("the attempt moved before the start was authorized; nothing is started",
@@ -222,23 +242,23 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		// what the capsule said where the capsule was never asked, and
 		// hand the provider's answer something to overrule that is not
 		// the account it is allowed to overrule.
-		s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedNeverStarted)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, assignment.ObservedNeverStarted)
 		return
 	}
 	// The authorization is durable immediately before the one effect
 	// that can begin execution, so the ambiguous window is exactly one
 	// Docker request wide and a crash inside it is classified by
 	// inspecting the runtime, never by guessing.
-	if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceStartAuthorized); err != nil {
+	if err := e.leases.RecordEvidence(ctx, lease.ID, store.EvidenceStartAuthorized); err != nil {
 		log.Error("cannot record the start authorization", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
-	if startErr := s.caps.Start(prepCtx, prepared); startErr != nil {
+	if startErr := e.capsule.Start(prepCtx, prepared); startErr != nil {
 		// A failed Start call does not prove no start: the request may
 		// have taken effect before the error. Classify from the daemon
 		// now, before any cleanup can destroy the answer.
-		obs, ierr := s.inspectExecution(ctx, prepared)
+		obs, ierr := e.inspectExecution(ctx, prepared)
 		if ierr != nil {
 			log.Error("start outcome cannot be observed", "start_error", startErr, "inspect_error", ierr)
 		}
@@ -248,10 +268,10 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 			log.Warn("start reported an error but the runtime is running; continuing", "error", startErr)
 		case assignment.ObservedExited:
 			log.Warn("start reported an error but the runtime ran and exited", "error", startErr)
-			if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
+			if err := e.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
 				log.Error("cannot record the observed exit", "error", err)
 			}
-			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+			e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
 		default:
 			report, unproven := startFailureReport(obs)
@@ -260,17 +280,17 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 			} else {
 				log.Info(report, "observation", string(obs), "error", startErr)
 			}
-			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+			e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
 		}
 	}
-	if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRunningObserved); err != nil {
+	if err := e.leases.RecordEvidence(ctx, lease.ID, store.EvidenceRunningObserved); err != nil {
 		log.Error("cannot record that the runner is running", "error", err)
 	}
-	s.advanceAttempt(ctx, attemptID, store.AttemptStarting, store.AttemptRunning)
-	if err := s.leases.Transition(ctx, lease.ID, store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning); err != nil {
+	e.advanceAttempt(ctx, attemptID, store.AttemptStarting, store.AttemptRunning)
+	if err := e.leases.Transition(ctx, lease.ID, store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning); err != nil {
 		log.Error("transition to running failed", "error", err)
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 	runnerContainer := prepared.RuntimeID
@@ -283,7 +303,7 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 	// budget, so a restart neither extends nor restarts it.
 	waitCtx, cancelWait := context.WithTimeout(ctx, remainingCeiling(b.tier, lease.CreatedAt))
 	defer cancelWait()
-	exit, err := s.wait.WaitExit(waitCtx, string(runnerContainer))
+	exit, err := e.waiter.WaitExit(waitCtx, string(runnerContainer))
 	if err == nil {
 		// What the status proves, not that the wait returned. The
 		// supervisor reserves one code for "the runner never owned the
@@ -294,10 +314,10 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 			log.Warn("the capsule reports the runner never started; the attempt returns to the "+
 				"queue unless the provider says otherwise",
 				"exit", exit)
-			s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+			e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 			return
 		}
-		if err := s.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
+		if err := e.leases.RecordEvidence(ctx, lease.ID, store.EvidenceExitObserved); err != nil {
 			log.Error("cannot record that the runner completed", "error", err)
 		}
 	}
@@ -312,17 +332,17 @@ func (s *Controller) runCapsule(b *binding, lease store.Lease) {
 		} else {
 			log.Error("waiting on runner failed", "error", err)
 		}
-		s.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
+		e.recoverCapsuleFailure(ctx, b, lease.ID, startObs)
 		return
 	}
 	if exit != 0 {
-		tail, _ := s.wait.TailLogs(ctx, string(runnerContainer), 40)
+		tail, _ := e.waiter.TailLogs(ctx, string(runnerContainer), 40)
 		log.Warn("runner exited non-zero", "exit", exit, "log_tail", tail)
 	} else {
 		log.Info("runner exited cleanly")
 	}
 
-	if err := s.leases.Release(ctx, lease.ID, store.LeaseWorkloadRunning); err != nil {
+	if err := e.leases.Release(ctx, lease.ID, store.LeaseWorkloadRunning); err != nil {
 		log.Error("cleanup failed; lease quarantined", "error", err)
 		return
 	}
@@ -342,7 +362,7 @@ const (
 	creditReadBackoff  = 200 * time.Millisecond
 )
 
-func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID) {
+func (e *leaseExecutor) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	// Retried rather than given up on. This is the only producer of a
@@ -362,7 +382,7 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID)
 			case <-ctx.Done():
 			}
 		}
-		err = s.store.Tx(ctx, func(tx *store.Tx) error {
+		err = e.store.Tx(ctx, func(tx *store.Tx) error {
 			var rerr error
 			lease, rerr = tx.LeaseByID(leaseID)
 			return rerr
@@ -372,16 +392,16 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID)
 		}
 	}
 	if err != nil {
-		s.log.Error("cannot confirm lease disposition after retrying; holding its credit",
+		e.log.Error("cannot confirm lease disposition after retrying; holding its credit",
 			"lease", leaseID, "attempts", creditReadAttempts, "error", err)
 		return
 	}
 	if !lease.State.Terminal() {
-		s.log.Warn("lease did not reach released; its credit stays held",
+		e.log.Warn("lease did not reach released; its credit stays held",
 			"lease", leaseID, "state", string(lease.State))
 		return
 	}
-	s.alloc.Release(b.key)
+	e.allocator.Release(b.key)
 }
 
 // recoverCapsuleFailure walks a lease to released through the failure path: external
@@ -410,7 +430,7 @@ func (s *Controller) releaseCreditIfDone(b *binding, leaseID assignment.LeaseID)
 // answer outranks one account and one only: the capsule's own word that
 // it never started, which is the account the job inside that capsule
 // can write.
-func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID assignment.LeaseID,
+func (e *leaseExecutor) recoverCapsuleFailure(ctx context.Context, b *binding, leaseID assignment.LeaseID,
 	startObs assignment.ExecutionObservation) error {
 
 	ctx, cancel := context.WithTimeout(ctx, recoveryBudget)
@@ -419,7 +439,7 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 	if b != nil {
 		bindingKey = string(b.key)
 	}
-	log := s.log.With("binding", bindingKey, "lease", leaseID)
+	log := e.log.With("binding", bindingKey, "lease", leaseID)
 
 	// After the drain window, recovery belongs to the successor. The
 	// failures that arrive here now are the shutdown itself — the client
@@ -428,41 +448,41 @@ func (s *Controller) recoverCapsuleFailure(ctx context.Context, b *binding, leas
 	// failure to dismantle instead of a capsule to adopt. A recovery
 	// already past this point runs to completion: its transitions are
 	// durable, and the successor resumes whatever it left.
-	if s.ownership.isAbandoning() {
+	if e.ownership.isAbandoning() {
 		// The lease is left as it is, but what this pass measured is not:
 		// nothing re-takes it, and the successor arrives with an evidence
 		// state past the one that would make it inspect. Recording is a
 		// column rather than a state, so it leaves the successor a lease
 		// to recover exactly as this branch intends.
-		if err := s.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
+		if err := e.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
 			log.Error("cannot record what this serving measured before abandoning it", "error", err)
 		}
 		log.Warn("drain window elapsed; the lease is left as it is for the next start to recover")
 		return nil
 	}
 
-	was, err := s.leases.ToCleaning(ctx, leaseID)
+	was, err := e.leases.ToCleaning(ctx, leaseID)
 	if err != nil {
 		log.Error("failure transition failed", "error", err)
 		return err
 	}
-	startObs = s.deregisterAndOverrule(ctx, b, was, startObs, log)
+	startObs = e.deregisterAndOverrule(ctx, b, was, startObs, log)
 
 	// Before the first destructive step, and after every refinement above
 	// that can overrule it. A recovery that cannot record what it saw must
 	// not destroy the thing it saw: the lease stays cleaning, holding its
 	// credit and its objects, and the periodic pass runs the whole
 	// recovery again with the capsule still there.
-	if err := s.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
+	if err := e.leases.RecordStartObservation(ctx, leaseID, startObs); err != nil {
 		log.Error("cannot record what this serving measured; nothing is removed", "error", err)
 		return err
 	}
-	if err := s.leases.RemoveResources(ctx, leaseID); err != nil {
+	if err := e.leases.RemoveResources(ctx, leaseID); err != nil {
 		log.Error("failure cleanup failed; lease quarantined", "error", err)
-		s.leases.Quarantine(leaseID)
+		e.leases.Quarantine(leaseID)
 		return err
 	}
-	if err := s.leases.Finalize(ctx, leaseID, startObs); err != nil {
+	if err := e.leases.Finalize(ctx, leaseID, startObs); err != nil {
 		log.Error("failure finalization failed; the lease stays cleaning for reconciliation", "error", err)
 		return err
 	}
@@ -539,12 +559,12 @@ func remainingCeiling(tier config.Tier, createdAt time.Time) time.Duration {
 // has begun. Handed a context with no deadline, a daemon that accepted
 // the call and stopped answering makes a wedged shutdown out of a slow
 // one.
-func (s *Controller) inspectExecution(ctx context.Context,
+func (e *leaseExecutor) inspectExecution(ctx context.Context,
 	prepared capsule.PreparedRuntime) (assignment.ExecutionObservation, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
-	return s.caps.InspectExecution(ctx, prepared)
+	return e.capsule.InspectExecution(ctx, prepared)
 }
 
 // deregisterAndOverrule removes the provider's registration for an
@@ -560,7 +580,7 @@ func (s *Controller) inspectExecution(ctx context.Context,
 // the one protection stated against the one surface the design admits a
 // job can forge, and it is worth making true everywhere rather than
 // narrowing.
-func (s *Controller) deregisterAndOverrule(ctx context.Context, b *binding,
+func (e *leaseExecutor) deregisterAndOverrule(ctx context.Context, b *binding,
 	lease store.Lease, obs assignment.ExecutionObservation,
 	log *slog.Logger) assignment.ExecutionObservation {
 
@@ -582,7 +602,7 @@ func (s *Controller) deregisterAndOverrule(ctx context.Context, b *binding,
 	// layer's job precisely because the lease machine must not know a
 	// provider exists.
 	var runnerGitHubID int64
-	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
+	if err := e.store.Tx(ctx, func(tx *store.Tx) error {
 		var err error
 		runnerGitHubID, err = tx.GitHubRunnerID(lease.AttemptID)
 		return err

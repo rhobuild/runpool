@@ -137,14 +137,14 @@ func (f *fakeWaiter) TailLogs(context.Context, string, int) (string, error) {
 // against the given fakes.
 func runFaulted(t *testing.T, h *harness, caps *fakeCapsule, reg *fakeRegistry, wait *fakeWaiter, workload assignment.SourceWorkloadKey) (store.Lease, string) {
 	t.Helper()
-	h.srv.caps = caps
-	h.srv.wait = wait
+	h.srv.executor.capsule = caps
+	h.srv.executor.waiter = wait
 	h.bind.gh = reg
 	if err := h.deliver(demand(string(workload), "app", 60)); err != nil {
 		t.Fatal(err)
 	}
 	lease, attemptID := leaseFor(t, h, workload)
-	h.srv.runCapsule(h.bind, lease)
+	h.srv.executor.runCapsule(h.bind, lease)
 	return lease, string(attemptID)
 }
 
@@ -431,7 +431,7 @@ func TestPeriodicReconcileConvergesQuarantine(t *testing.T) {
 	// The removal fails: the lease parks in quarantine with backoff
 	// booked on the intent, and the attempt stays leased — unresolved,
 	// visible, waiting.
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err == nil {
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err == nil {
 		t.Fatal("recoverCapsuleFailure with a wedged daemon succeeded")
 	}
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseQuarantined {
@@ -511,7 +511,7 @@ func TestPeriodicReconcileConvergesAStrandedCleaningLease(t *testing.T) {
 
 	// Park the lease in cleaning with nobody driving it, which is where a
 	// failed Finalize leaves it, and take the credit its owner held.
-	if _, err := h.srv.leases.ToCleaning(t.Context(), lease.ID); err != nil {
+	if _, err := h.srv.executor.leases.ToCleaning(t.Context(), lease.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := reloadLease(t, h, lease.ID).State; got != store.LeaseCleaning {
@@ -606,8 +606,8 @@ func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
 	h.bind.tier.JobTimeout = ptrDuration(2 * time.Hour)
 	caps := &fakeCapsule{}
 	wait := &fakeWaiter{}
-	h.srv.caps = caps
-	h.srv.wait = wait
+	h.srv.executor.capsule = caps
+	h.srv.executor.waiter = wait
 	h.bind.gh = &fakeRegistry{}
 	if err := h.deliver(demand("job-adopted", "app", 61)); err != nil {
 		t.Fatal(err)
@@ -619,7 +619,7 @@ func TestTheWaitInheritsWhatTheLeaseHasLeft(t *testing.T) {
 	aged := lease
 	aged.CreatedAt = time.Now().Add(-90 * time.Minute)
 	before := time.Now()
-	h.srv.runCapsule(h.bind, aged)
+	h.srv.executor.runCapsule(h.bind, aged)
 
 	if wait.deadline.IsZero() {
 		t.Fatal("the wait carried no deadline; the ceiling never reached it")
@@ -722,8 +722,8 @@ func TestAFreshLeaseIsNotStranded(t *testing.T) {
 func TestASupersededAttemptIsNeverStarted(t *testing.T) {
 	h := newHarness(t, 1)
 	caps := &fakeCapsule{}
-	h.srv.caps = caps
-	h.srv.wait = &fakeWaiter{}
+	h.srv.executor.capsule = caps
+	h.srv.executor.waiter = &fakeWaiter{}
 	h.bind.gh = &fakeRegistry{}
 	if err := h.deliver(demand("job-raced", "app", 42)); err != nil {
 		t.Fatal(err)
@@ -738,7 +738,7 @@ func TestASupersededAttemptIsNeverStarted(t *testing.T) {
 		})
 	}
 
-	h.srv.runCapsule(h.bind, lease)
+	h.srv.executor.runCapsule(h.bind, lease)
 
 	if caps.starts != 0 {
 		t.Errorf("the capsule was started %d time(s) for an attempt its successor owns", caps.starts)
@@ -831,8 +831,8 @@ func TestTheReconcilerStopsRecoveringWhenTheShutdownBegins(t *testing.T) {
 func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 	h := newHarness(t, 1)
 	caps := &fakeCapsule{}
-	h.srv.caps = caps
-	h.srv.wait = &fakeWaiter{}
+	h.srv.executor.capsule = caps
+	h.srv.executor.waiter = &fakeWaiter{}
 	h.bind.gh = &fakeRegistry{}
 	if err := h.deliver(demand("job-lost-edge", "app", 42)); err != nil {
 		t.Fatal(err)
@@ -850,7 +850,7 @@ func TestALostWalkEdgeDoesNotAbortTheLaunch(t *testing.T) {
 		})
 	}
 
-	h.srv.runCapsule(h.bind, lease)
+	h.srv.executor.runCapsule(h.bind, lease)
 
 	if caps.starts != 1 {
 		t.Errorf("the capsule was started %d time(s); want 1 — the attempt was still this serving's, "+
@@ -889,15 +889,15 @@ func TestAnObservationIsAlwaysBounded(t *testing.T) {
 			deadline, hasDeadline = ctx.Deadline()
 		},
 	}
-	h.srv.caps = caps
-	h.srv.wait = &fakeWaiter{}
+	h.srv.executor.capsule = caps
+	h.srv.executor.waiter = &fakeWaiter{}
 	h.bind.gh = &fakeRegistry{}
 	if err := h.deliver(demand("job-observed", "app", 42)); err != nil {
 		t.Fatal(err)
 	}
 	lease, _ := leaseFor(t, h, "job-observed")
 
-	h.srv.runCapsule(h.bind, lease)
+	h.srv.executor.runCapsule(h.bind, lease)
 
 	if !observed {
 		t.Fatal("the start failed and nothing observed the runtime; this test asserted nothing")
@@ -976,8 +976,8 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 	h := newHarness(t, 1)
 	rec := &ctxRemover{}
 	h.useRemover(rec)
-	h.srv.caps = &fakeCapsule{}
-	h.srv.wait = &fakeWaiter{waitErr: errors.New("the capsule stopped reporting")}
+	h.srv.executor.capsule = &fakeCapsule{}
+	h.srv.executor.waiter = &fakeWaiter{waitErr: errors.New("the capsule stopped reporting")}
 	h.bind.gh = &fakeRegistry{}
 	if err := h.deliver(demand("job-adopted", "app", 42)); err != nil {
 		t.Fatal(err)
@@ -986,7 +986,7 @@ func TestAnAdoptedLeaseUnwindsOnItsOwnBudget(t *testing.T) {
 
 	// A capsule left behind by a previous process owns objects, which is
 	// what makes the unwind have anything to do.
-	recorder := h.srv.leases.Recorder(t.Context(), lease.ID)
+	recorder := h.srv.executor.leases.Recorder(t.Context(), lease.ID)
 	intent, err := recorder.Plan("container", "runner", "adopted-runner")
 	if err != nil {
 		t.Fatal(err)
@@ -1093,7 +1093,7 @@ func TestAProofSurvivesThePeriodicPass(t *testing.T) {
 	}
 
 	// The pass that measured the proof cannot finish.
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.ObservedCreated); err == nil {
 		t.Fatal("recovery with a wedged daemon succeeded")
 	}
@@ -1143,7 +1143,7 @@ func TestAbandonmentKeepsWhatThisServingMeasured(t *testing.T) {
 	before := reloadLease(t, h, lease.ID).State
 
 	h.srv.ownership.abandonUnfinished()
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.ObservedCreated); err != nil {
 		t.Fatalf("abandoned recovery reported an error: %v", err)
 	}
@@ -1201,7 +1201,7 @@ func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
 
 	// The capsule says the runner never owned the job. The provider
 	// cannot be reached this pass, and removal fails, so the lease parks.
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.ObservedCreated); err == nil {
 		t.Fatal("recovery with a wedged daemon succeeded")
 	}
@@ -1215,7 +1215,7 @@ func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
 	// is gone: the overrule reaches the disposition as a parameter only on
 	// a pass that completes.
 	reg.removeErr = githubactions.ErrJobStillRunning
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.NoObservation); err == nil {
 		t.Fatal("the second pass succeeded against a wedged daemon")
 	}
@@ -1228,7 +1228,7 @@ func TestTheProviderOverrulesTheCapsuleAcrossARetry(t *testing.T) {
 	// again: the disposition comes from the record alone.
 	remover.healed = true
 	reg.removeErr = errors.New("provider unreachable")
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID,
 		assignment.NoObservation); err != nil {
 		t.Fatalf("the third pass failed: %v", err)
 	}
@@ -1256,12 +1256,12 @@ func TestTheFirstTransitionUnwindsLikeEveryOther(t *testing.T) {
 
 	// The lease is already past reserved, so the transition this launch
 	// opens with conflicts -- the natural shape of that step failing.
-	if err := h.srv.leases.Transition(t.Context(), lease.ID,
+	if err := h.srv.executor.leases.Transition(t.Context(), lease.ID,
 		store.LeaseReserved, store.LeaseProvisioning); err != nil {
 		t.Fatal(err)
 	}
 
-	h.srv.runCapsule(h.bind, lease)
+	h.srv.executor.runCapsule(h.bind, lease)
 
 	if got := reloadLease(t, h, lease.ID); got.State != store.LeaseReleased {
 		t.Errorf("lease = %s after a launch that could not start; want released — "+

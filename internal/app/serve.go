@@ -321,16 +321,23 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		shippedCapsuleImage: capsuleImg,
 		store:               st,
 		objects:             dock,
-		caps:                capsule.NewLauncher(dock, capsuleImg),
-		wait:                dock,
-		leases:              lease.NewManager(st, dock, log),
-		cache:               cacheMgr,
 		alloc:               newAllocator(cfg),
 		leaseHistory:        cfg.Retention.Window(),
 		netSandbox:          netSandbox,
-		cgroupDriver:        hostInfo.CgroupDriver,
 		byBinding:           map[assignment.BindingID]*binding{},
 		ownership:           newLeaseOwnership(),
+	}
+	s.executor = &leaseExecutor{
+		log:          log,
+		store:        st,
+		capsule:      capsule.NewLauncher(dock, capsuleImg),
+		waiter:       dock,
+		leases:       lease.NewManager(st, dock, log),
+		cache:        cacheMgr,
+		allocator:    s.alloc,
+		ownership:    s.ownership,
+		network:      netSandbox,
+		cgroupDriver: hostInfo.CgroupDriver,
 	}
 	s.disk = newDiskMonitor(cfg, log, st, dock, cacheMgr, s.alloc, capsuleImg)
 	// Before any binding serves: capacity stays closed until a current
@@ -345,8 +352,8 @@ func Serve(ctx context.Context, cfg *config.Config, opts Options) error {
 		allocator:   s.alloc,
 		ownership:   s.ownership,
 		pressure:    s.currentPressure,
-		createLease: s.createLease,
-		launch:      s.runCapsule,
+		createLease: s.executor.createLease,
+		launch:      s.executor.runCapsule,
 	}
 	if err := s.buildBindings(ctx, cfg, opts.Environ); err != nil {
 		return err
@@ -520,18 +527,12 @@ type Controller struct {
 	// the whole of this behaviour.
 	conflictGrace time.Duration
 	store         *store.Store
-	// objects is the daemon as reconciliation sees it: an inventory and
-	// a way to remove from it. Creating capsules goes through caps, and
-	// awaiting them through wait.
+	// objects is the daemon as reconciliation sees it: an inventory and a way
+	// to remove from it. Capsule execution owns creation and waiting.
 	objects ownedObjects
-	caps    capsuleRuntime
-	wait    runtimeWaiter
-	// leases owns the lease machine and the cleanup saga. Everything
-	// about ending a capsule's life lives there; the controller decides
-	// when, and who has to be told.
-	leases *lease.Manager
-	cache  *cache.LaneManager
-	alloc  *allocator.Allocator
+	alloc   *allocator.Allocator
+	// executor owns one lease from its durable claim through disposition.
+	executor *leaseExecutor
 	// scheduler owns admission from the durable ready queue through the
 	// committed handoff to capsule execution.
 	scheduler *attemptScheduler
@@ -557,11 +558,6 @@ type Controller struct {
 	// running gateways. Nil is the explicit unsafe-open-egress profile,
 	// which its own methods answer for.
 	netSandbox *netsandbox.Manager
-
-	// cgroupDriver is the daemon's driver, read once at startup. It
-	// decides the form of a lease's parent cgroup, and the daemon
-	// rejects the wrong form outright.
-	cgroupDriver string
 
 	bindings  []*binding
 	byBinding map[assignment.BindingID]*binding

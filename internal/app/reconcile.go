@@ -98,7 +98,7 @@ func (s *Controller) reconcile(ctx context.Context) error {
 		// capacity until cleanup succeeds.
 		if b != nil {
 			s.reportAdoption(b, s.alloc.Adopt(b.key))
-			defer s.releaseCreditIfDone(b, lease.ID)
+			defer s.executor.releaseCreditIfDone(b, lease.ID)
 		}
 		runner, hasRunner := runnerByLease[lease.ID]
 		s.resolveInterrupted(ctx, b, lease, runner, hasRunner)
@@ -159,7 +159,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptedLeaseBudget)
 	defer cancel()
 
-	evidence, err := s.leases.EvidenceOf(ctx, lease)
+	evidence, err := s.executor.leases.EvidenceOf(ctx, lease)
 	if err != nil {
 		s.log.Error("cannot read the attempt's evidence; leaving the lease for the next pass",
 			"lease", lease.ID, "error", err)
@@ -186,7 +186,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 	if hasRunner && (evidence == store.EvidenceStartAuthorized ||
 		evidence == store.EvidenceRunningObserved) {
 		var err error
-		obs, err = s.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
+		obs, err = s.executor.inspectExecution(ctx, capsule.PreparedRuntime{RuntimeID: assignment.RuntimeID(runner.ID)})
 		if err != nil {
 			log.Error("cannot observe the runtime of an ambiguous start", "error", err)
 		}
@@ -215,13 +215,13 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// cannot return an assignment to the queue while the provider
 		// still holds the runner busy, and that promise was only kept on
 		// the failure path: this one believed the capsule.
-		obs = s.deregisterAndOverrule(ctx, b, lease, obs, log)
+		obs = s.executor.deregisterAndOverrule(ctx, b, lease, obs, log)
 		// Resume the interrupted release: external cleanup, then the
 		// finalizing transaction disposes of the attempt atomically.
 		log.Info("resuming an interrupted release")
-		if err := s.leases.FinishCleaning(ctx, lease, obs); err != nil {
+		if err := s.executor.leases.FinishCleaning(ctx, lease, obs); err != nil {
 			log.Error("resuming the release failed; the lease stays quarantined", "error", err)
-			s.leases.Quarantine(lease.ID)
+			s.executor.leases.Quarantine(lease.ID)
 		}
 
 	case store.LeaseReleased:
@@ -235,7 +235,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// invariant already broken is the one place a forged account is
 		// still believed.
 		log.Warn("disposing of an attempt left open by a released lease")
-		s.leases.DisposeStranded(ctx, lease, s.deregisterAndOverrule(ctx, b, lease, obs, log))
+		s.executor.leases.DisposeStranded(ctx, lease, s.executor.deregisterAndOverrule(ctx, b, lease, obs, log))
 
 	case store.LeaseReserved, store.LeaseProvisioning,
 		store.LeaseRuntimeRegistered, store.LeaseWorkloadRunning,
@@ -243,7 +243,7 @@ func (s *Controller) resolveInterrupted(ctx context.Context, b *binding, lease s
 		// recoverCapsuleFailure finishes with the same finalizing
 		// transaction, so release and disposition cannot come apart.
 		log.Info("releasing an interrupted lease")
-		if err := s.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
+		if err := s.executor.recoverCapsuleFailure(ctx, b, lease.ID, obs); err != nil {
 			log.Error("recovery could not resolve the lease; reconciliation will retry", "error", err)
 		}
 
@@ -276,7 +276,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 	go func() {
 		defer s.ownership.activeDone()
 		defer s.ownership.release(lease.ID)
-		defer s.releaseCreditIfDone(b, lease.ID)
+		defer s.executor.releaseCreditIfDone(b, lease.ID)
 		// What is left of this lease's ceiling, not a fresh one: a capsule
 		// that stopped reporting is exactly what the ceiling bounds, and
 		// restarting the clock on every controller restart would let it
@@ -287,12 +287,12 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// Through the same seam the ordinary launch awaits its runner:
 		// an adopted capsule is a capsule, and one of the two paths
 		// reaching around it is how they come to behave differently.
-		exit, err := s.wait.WaitExit(ctx, runnerContainer)
+		exit, err := s.executor.waiter.WaitExit(ctx, runnerContainer)
 		done, endRecovery := recoveryContext(ctx)
 		defer endRecovery()
 		if err != nil {
 			s.log.Error("adopted capsule wait failed", "lease", lease.ID, "error", err)
-			if err := s.recoverCapsuleFailure(done, b, lease.ID, assignment.NoObservation); err != nil {
+			if err := s.executor.recoverCapsuleFailure(done, b, lease.ID, assignment.NoObservation); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -306,7 +306,7 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 			s.log.Warn("the adopted capsule reports the runner never started; the attempt "+
 				"returns to the queue unless the provider says otherwise",
 				"lease", lease.ID, "exit", exit)
-			if err := s.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
+			if err := s.executor.recoverCapsuleFailure(done, b, lease.ID, obs); err != nil {
 				s.log.Error("adopted capsule could not be resolved; reconciliation will retry",
 					"lease", lease.ID, "error", err)
 			}
@@ -315,13 +315,13 @@ func (s *Controller) adopt(b *binding, lease store.Lease, runnerContainer string
 		// The adopted capsule was awaited to its exit. Recording the
 		// observation is what lets the finalizing transaction settle the
 		// attempt from evidence, like any other completed run.
-		if err := s.leases.RecordEvidence(done, lease.ID, store.EvidenceExitObserved); err != nil {
+		if err := s.executor.leases.RecordEvidence(done, lease.ID, store.EvidenceExitObserved); err != nil {
 			s.log.Error("cannot record the adopted capsule's exit", "lease", lease.ID, "error", err)
 		}
-		if err := s.leases.WalkToRunning(done, lease); err != nil {
+		if err := s.executor.leases.WalkToRunning(done, lease); err != nil {
 			s.log.Error("adopted capsule state repair failed", "lease", lease.ID, "error", err)
 		}
-		if err := s.leases.Release(done, lease.ID, store.LeaseWorkloadRunning); err != nil {
+		if err := s.executor.leases.Release(done, lease.ID, store.LeaseWorkloadRunning); err != nil {
 			s.log.Error("adopted capsule cleanup failed", "lease", lease.ID, "error", err)
 			return
 		}
@@ -415,7 +415,7 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 		// one without the other leaves the daemon and the books
 		// disagreeing, and the foreign key then blocks the lease from
 		// ever being purged.
-		if err := s.leases.ForgetResource(ctx, c.LeaseID, c.ID); err != nil {
+		if err := s.executor.leases.ForgetResource(ctx, c.LeaseID, c.ID); err != nil {
 			return err
 		}
 	}
@@ -430,7 +430,7 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 			fail("network", n.ID, err)
 			continue
 		}
-		if err := s.leases.ForgetResource(ctx, n.LeaseID, n.ID); err != nil {
+		if err := s.executor.leases.ForgetResource(ctx, n.LeaseID, n.ID); err != nil {
 			return err
 		}
 	}
@@ -445,7 +445,7 @@ func (s *Controller) sweepOrphans(ctx context.Context, liveLeases func() (map[as
 			fail("volume", v.ID, err)
 			continue
 		}
-		if err := s.leases.ForgetResource(ctx, v.LeaseID, v.ID); err != nil {
+		if err := s.executor.leases.ForgetResource(ctx, v.LeaseID, v.ID); err != nil {
 			return err
 		}
 	}
@@ -603,7 +603,7 @@ func (s *Controller) retryStranded(ctx context.Context) {
 // resolveStranded is one claimed lease's recovery, split out so the claim
 // is released on every path out.
 func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, retried, converged *int) {
-	due, err := s.leases.IntentsDue(ctx, lease.ID)
+	due, err := s.executor.leases.IntentsDue(ctx, lease.ID)
 	if err != nil {
 		s.log.Error("periodic reconcile cannot read intents", "lease", lease.ID, "error", err)
 		return
@@ -613,14 +613,14 @@ func (s *Controller) resolveStranded(ctx context.Context, lease store.Lease, ret
 	}
 	*retried++
 	b := s.byBinding[lease.BindingID] // may be nil if the target was removed
-	if err := s.recoverCapsuleFailure(ctx, b, lease.ID, assignment.NoObservation); err != nil {
+	if err := s.executor.recoverCapsuleFailure(ctx, b, lease.ID, assignment.NoObservation); err != nil {
 		s.log.Warn("stranded lease still unresolved",
 			"lease", lease.ID, "state", string(lease.State), "error", err)
 		return
 	}
 	*converged++
 	if b != nil {
-		s.releaseCreditIfDone(b, lease.ID)
+		s.executor.releaseCreditIfDone(b, lease.ID)
 	}
 }
 

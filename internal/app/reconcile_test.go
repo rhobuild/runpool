@@ -115,7 +115,7 @@ func TestCapsuleFailureRecoverySurvivesAMissingBinding(t *testing.T) {
 			t.Fatalf("recoverCapsuleFailure panicked with a missing binding: %v", r)
 		}
 	}()
-	if err := h.srv.recoverCapsuleFailure(t.Context(), nil, lease.ID, assignment.NoObservation); err != nil {
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), nil, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("recoverCapsuleFailure with a missing binding: %v", err)
 	}
 }
@@ -369,7 +369,7 @@ func TestARecordedForgeryLosesToTheProviderToo(t *testing.T) {
 	h.bind.gh = &fakeRegistry{removeErr: githubactions.ErrJobStillRunning}
 
 	// This pass measures nothing: the container is gone.
-	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
+	h.srv.executor.capsule = &fakeCapsule{obs: assignment.ObservedAbsent}
 	h.srv.resolveInterrupted(t.Context(), h.bind, reloadLease(t, h, lease.ID),
 		engine.OwnedContainer{}, false)
 

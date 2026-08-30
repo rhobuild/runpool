@@ -106,7 +106,7 @@ func TestReassignmentOfASettledJobIsServable(t *testing.T) {
 	lease, attemptID := leaseFor(t, h, "job-reassigned")
 	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
 	h.recordEvidence(lease.ID, store.EvidenceExitObserved)
-	if err := h.srv.leases.Finalize(t.Context(), lease.ID, assignment.NoObservation); err != nil {
+	if err := h.srv.executor.leases.Finalize(t.Context(), lease.ID, assignment.NoObservation); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(h.ready()); got != 0 {
