@@ -68,6 +68,20 @@ func routingCtx(t *testing.T) context.Context {
 // a single dispatch would measure a tie-break rather than the rule. Here
 // the only set that could possibly answer carries a superset, so an
 // assignment means superset matching and silence means exact matching.
+//
+// Measured on 2026-08-29: the job arrived. So a scale set is matched on
+// holding all of the labels a job asks for, and two tiers carrying
+// overlapping labels both answer one `runs-on`.
+//
+// What that does and does not settle: an uncoordinated label cannot
+// select a tier safely, because which of two matching tiers serves a
+// job -- with its resource ceiling and its egress policy -- is a tie
+// nothing documents breaking. It does not show a label could never
+// select one. Labels proven disjoint across a target's tiers would make
+// two matches impossible, since a request that matched both would have
+// to be a subset of an empty intersection and `runs-on` is never empty.
+// Nothing validates that today, which is why this is deferred rather
+// than refused.
 func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 	url, token := target(t, envOrgURL, envOrgToken)
 	repo := requireEnv(t, envRepoA)
@@ -118,30 +132,34 @@ func TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor(t *testing.T) {
 		}
 	})
 
-	if offered := waitForAnyJob(t, session, routingWindow); offered {
-		t.Errorf("a job asking for %v was offered to a scale set carrying %v. "+
-			"A scale set is matched on holding all of the requested labels, not on "+
-			"carrying exactly them -- so two tiers whose labels overlap both answer "+
-			"one `runs-on`, and which of them serves a job, with its resource "+
-			"ceiling and its egress policy, is a tie GitHub does not document "+
-			"breaking. Labels cannot select a tier.", asked, carried)
-		return
+	if !waitForAnyJob(t, session, routingWindow) {
+		t.Errorf("no job asking for %v reached a scale set carrying %v within %s. "+
+			"Matching has become exact rather than all-of, which would mean two tiers "+
+			"can no longer answer one `runs-on` by carrying overlapping labels -- read "+
+			"the decision record before acting on it, because it is the premise that "+
+			"deferred serving a second label per tier", asked, carried, routingWindow)
 	}
-	t.Logf("no job reached a scale set carrying %v for a request of %v within %s: "+
-		"a scale set answers the exact label set it carries, and overlap cannot be "+
-		"written by accident", carried, asked, routingWindow)
 }
 
-// TestAScaleSetGivenLabelsStillAnswersToItsName settles whether
-// configuring labels on a tier would break the workflows already
-// pointing at it.
+// TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels asks the one
+// thing left open about serving more than one label per tier.
 //
-// The SDK gives a scale set a name-equal label only when the caller
-// supplies none, and ARC prepends the name itself before sending custom
-// labels -- which suggests the service does not keep it, and that every
-// existing `runs-on: <scale-set-name>` would stop resolving the moment a
-// tier was given labels. Suggests is not knows.
-func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
+// The SDK adds the name-equal label only when the caller supplies none,
+// so a caller that supplies labels builds the whole set itself --
+// including the name, if it wants `runs-on: <name>` to keep working.
+// That is what ARC's controller does: it puts the scale set's name in
+// first, unconditionally, before appending anything an operator asked
+// for. Whether the service then still routes a bare name against a set
+// carrying the name and more is the question, and nothing published
+// answers it.
+//
+// This replaces a test that claimed to answer it and did not. That one
+// created a set carrying one label that was not its name, dispatched by
+// the name, and concluded from the silence that labels break name
+// routing. The label it dispatched by was never among the labels the set
+// carried, so nothing could have arrived under any matching rule -- the
+// experiment never varied the thing it named.
+func TestAScaleSetKeepsAnsweringToItsNameBesideOtherLabels(t *testing.T) {
 	url, token := target(t, envOrgURL, envOrgToken)
 	repo := requireEnv(t, envRepoA)
 	c := newClient(t, url, token)
@@ -155,10 +173,12 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 		t.Fatalf("resolve Default runner group: %v", err)
 	}
 	name := uniqueName(t)
+	// The name first and something else after it, which is the shape a
+	// caller that wants both has to build.
 	set := createScaleSetWith(t, c, &scaleset.RunnerScaleSet{
 		Name:          name,
 		RunnerGroupID: group.ID,
-		Labels:        labelsOf([]string{name + "-only"}),
+		Labels:        labelsOf([]string{name, name + "-extra"}),
 	})
 
 	session, err := c.MessageSessionClient(ctx, set.ID, "runpool-label-routing-contract")
@@ -173,7 +193,8 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 		}
 	})
 
-	// The set's own name, which is not among its labels.
+	// By the name alone, which is what every workflow already written
+	// against this scale set says.
 	run := dispatchLabelRouting(t, ctx, rest, repo, []string{name})
 	t.Cleanup(func() {
 		closing, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -183,15 +204,12 @@ func TestAScaleSetGivenLabelsStillAnswersToItsName(t *testing.T) {
 		}
 	})
 
-	if waitForAnyJob(t, session, routingWindow) {
-		t.Logf("a scale set given labels still answers to its own name: existing "+
-			"`runs-on: %s` workflows would survive a tier being given labels", name)
-		return
+	if !waitForAnyJob(t, session, routingWindow) {
+		t.Errorf("no job reached scale set %q dispatched by its own name within %s, "+
+			"though the name is among its labels. Keeping the name is then not enough "+
+			"to preserve `runs-on: %s`, and serving a second label would break every "+
+			"workflow already pointing at a tier", name, routingWindow, name)
 	}
-	t.Errorf("no job reached scale set %q dispatched by its own name within %s. "+
-		"Giving a tier labels silently stops every workflow already pointing at it "+
-		"by name, so runpool would have to carry the name as a label itself",
-		name, routingWindow)
 }
 
 // waitForAnyJob reports whether the session was offered any job before
