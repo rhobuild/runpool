@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 
@@ -138,6 +137,9 @@ func BenchmarkReadyAttemptBatchWithLargeBacklog(b *testing.B) {
 
 func seedReadyBacklog(tb testing.TB, store *Store, count int) assignment.BindingID {
 	tb.Helper()
+	if count < 1 || count > readyBacklogAcceptance {
+		tb.Fatalf("scale fixture count = %d; want 1-%d", count, readyBacklogAcceptance)
+	}
 	var bindingID assignment.BindingID
 	if err := store.Tx(context.Background(), func(tx *Tx) error {
 		var err error
@@ -156,21 +158,29 @@ func seedReadyBacklog(tb testing.TB, store *Store, count int) assignment.Binding
 		if err != nil {
 			return err
 		}
-		statement, err := tx.tx.Prepare(`
+		_, err = tx.tx.Exec(`
+			WITH digits(value) AS (
+				VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+			), sequence(value) AS (
+				SELECT ones.value
+				     + 10 * tens.value
+				     + 100 * hundreds.value
+				     + 1000 * thousands.value
+				     + 10000 * ten_thousands.value
+				FROM digits AS ones
+				CROSS JOIN digits AS tens
+				CROSS JOIN digits AS hundreds
+				CROSS JOIN digits AS thousands
+				CROSS JOIN digits AS ten_thousands
+			)
 			INSERT INTO assignment_attempts
 				(id, delivery_id, binding_id, source_workload_key, tenant_key, project_key, received_at)
-			VALUES (?, ?, ?, ?, 'acme', 'scale', 1)`)
-		if err != nil {
-			return err
-		}
-		for index := range count {
-			id := fmt.Sprintf("attempt-%06d", index)
-			if _, err := statement.Exec(id, deliveryID, bindingID, "workload-"+id); err != nil {
-				_ = statement.Close()
-				return err
-			}
-		}
-		return statement.Close()
+			SELECT printf('attempt-%06d', value), ?, ?,
+			       printf('workload-attempt-%06d', value), 'acme', 'scale', 1
+			FROM sequence
+			WHERE value < ?
+			ORDER BY value`, deliveryID, bindingID, count)
+		return err
 	}); err != nil {
 		tb.Fatal(err)
 	}
