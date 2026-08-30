@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/rhobuild/runpool/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -124,19 +125,28 @@ func newAttemptsCommand() *cobra.Command {
 	}
 
 	var (
-		listJSON  bool
-		listState string
+		listJSON   bool
+		listState  string
+		listLimit  int
+		listCursor string
 	)
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List attempts waiting for a decision",
-		Args:  cobra.NoArgs,
+		Long: "Lists attempts in deterministic FIFO order. Results are bounded by --limit; " +
+			"pass the returned opaque cursor to continue without offset scans.\n\n" +
+			"JSON output is an object with state, attempts, total and, when more rows exist, next_cursor.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			operational(cmd)
-			return runAttemptsList(streamsOf(cmd), listState, listJSON)
+			return runAttemptsList(streamsOf(cmd), listState, listJSON, listLimit, listCursor)
 		},
 	}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit the list as JSON")
+	list.Flags().IntVar(&listLimit, "limit", defaultAttemptPageSize,
+		fmt.Sprintf("maximum attempts to return (1-%d)", store.MaxAttemptPageSize))
+	list.Flags().StringVar(&listCursor, "cursor", "",
+		"opaque cursor returned by the previous page")
 	// The body has always served this flag; the tree never declared it,
 	// so `--state` was an unknown flag while the reference generated
 	// from the tree said nothing about it either way. Declaring it is

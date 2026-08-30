@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -267,6 +268,12 @@ func TestEveryDeclaredFlagReachesItsCommand(t *testing.T) {
 			t.Errorf("attempts list --state %s = %d; want 0 (%q)", state, code, stderr)
 		}
 	}
+	if code, _, stderr := run(t, "attempts", "list", "--limit", "0"); code != exitUsage {
+		t.Errorf("attempts list --limit 0 = %d; want %d (%q)", code, exitUsage, stderr)
+	}
+	if code, _, stderr := run(t, "attempts", "list", "--cursor", "not-base64"); code != exitUsage {
+		t.Errorf("attempts list with malformed cursor = %d; want %d (%q)", code, exitUsage, stderr)
+	}
 }
 
 // TestOperatorResolveRefusesAnUndecidedDecision: both flags or neither
@@ -332,8 +339,8 @@ tiers:
 
 // TestReportingShapesBeforeTheFirstServe pins what each surface answers
 // on an instance that has never run. The listing answers in the
-// listing's own shape — an empty array, because no state holds no
-// attempts — and inspect fails naming the absent state, because it was
+// listing's own shape — a paginated document with an empty attempts array,
+// because no state holds no attempts — and inspect fails naming the absent state, because it was
 // asked about one attempt that therefore does not exist. Only status
 // answers the question "has this instance served", and its document
 // carries `served` as the v1 discriminator in both forms, so a consumer
@@ -345,12 +352,12 @@ func TestReportingShapesBeforeTheFirstServe(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("attempts list --json = %d; want 0", code)
 	}
-	var attempts []map[string]any
+	var attempts attemptListDocument
 	if err := json.Unmarshal([]byte(stdout), &attempts); err != nil {
-		t.Fatalf("attempts list --json did not emit a JSON array: %v (%q)", err, stdout)
+		t.Fatalf("attempts list --json did not emit its page document: %v (%q)", err, stdout)
 	}
-	if len(attempts) != 0 {
-		t.Errorf("attempts list on a never-run instance = %d entries; want none", len(attempts))
+	if attempts.Attempts == nil || len(attempts.Attempts) != 0 || attempts.Total != 0 {
+		t.Errorf("attempts list on a never-run instance = %+v; want an explicit empty page", attempts)
 	}
 
 	code, _, stderr := run(t, "attempts", "inspect", "att-1", "--json")
@@ -374,6 +381,83 @@ func TestReportingShapesBeforeTheFirstServe(t *testing.T) {
 	}
 	if served, ok := doc["served"].(bool); !ok || served {
 		t.Errorf("served = %v; the pre-serve form carries served=false", doc["served"])
+	}
+}
+
+func TestAttemptsListPaginatesItsJSONDocumentWithAnOpaqueCursor(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		bindingID, err := tx.EnsureBinding("app", "github_actions",
+			"v1|repository|https://github.com/acme/app||runpool-standard")
+		if err != nil {
+			return err
+		}
+		workloads := []assignment.WorkloadAssignment{
+			{SourceWorkloadKey: "job-a"},
+			{SourceWorkloadKey: "job-b"},
+			{SourceWorkloadKey: "job-c"},
+		}
+		rows := []store.WorkloadRow{
+			{SourceWorkloadKey: "job-a", TenantKey: "acme", ProjectKey: "app"},
+			{SourceWorkloadKey: "job-b", TenantKey: "acme", ProjectKey: "app"},
+			{SourceWorkloadKey: "job-c", TenantKey: "acme", ProjectKey: "app"},
+		}
+		if _, err := tx.RecordDelivery(bindingID, "pagination", workloads, rows); err != nil {
+			return err
+		}
+		page, err := tx.ReadyAttemptPage(nil, len(rows))
+		if err != nil {
+			return err
+		}
+		for _, attempt := range page.Attempts {
+			if err := tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, "attempts", "list", "--json", "--limit", "2")
+	if code != exitOK {
+		t.Fatalf("first page = %d; want 0 (%q)", code, stderr)
+	}
+	var first attemptListDocument
+	if err := json.Unmarshal([]byte(stdout), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Attempts) != 2 || first.Total != 3 || first.NextCursor == "" {
+		t.Fatalf("first page = %+v; want two of three and a cursor", first)
+	}
+
+	code, stdout, stderr = run(t, "attempts", "list", "--json", "--limit", "2", "--cursor", first.NextCursor)
+	if code != exitOK {
+		t.Fatalf("second page = %d; want 0 (%q)", code, stderr)
+	}
+	var second attemptListDocument
+	if err := json.Unmarshal([]byte(stdout), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Attempts) != 1 || second.Total != 3 || second.NextCursor != "" {
+		t.Fatalf("second page = %+v; want the final one of three", second)
+	}
+	for _, previous := range first.Attempts {
+		if previous.ID == second.Attempts[0].ID {
+			t.Fatalf("attempt %s appeared in both pages", previous.ID)
+		}
+	}
+
+	if code, _, _ := run(t, "attempts", "list", "--state", "ready", "--cursor", first.NextCursor); code != exitUsage {
+		t.Fatalf("manual-review cursor used for ready state = %d; want %d", code, exitUsage)
 	}
 }
 

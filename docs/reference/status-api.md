@@ -63,7 +63,9 @@ absent state, because the attempt it was asked about cannot exist.
 | `leases[].resources` | array | What the lease owns on the daemon: `kind`, `role`, `name`, `lease_id`, and `state` — one of `planned`, `creating`, `present`, `cleanup_pending`, `deleting`, which is the books' account of the object rather than the daemon's |
 | `released_total` | number | How many finished leases the store holds, which is more than the `leases` array carries |
 | `cache_lanes` | array | `id`, `source_project_key`, `generation`, `leased_by`, `last_used` |
-| `manual_review` | array | Attempts held for a person: `id`, `workload`, `project`, `state`, `review_reason`, `age_seconds`, and once resolved `resolution` and `reviewed_by` |
+| `manual_review` | array | The oldest attempts held for a person, capped at 50: `id`, `workload`, `project`, `state`, `review_reason`, `age_seconds`, and once resolved `resolution` and `reviewed_by` |
+| `manual_review_total` | number | Complete count of attempts held for review when the report was read |
+| `manual_review_next_cursor` | string, optional | Opaque cursor for `runpool attempts list --state manual-review --cursor <value>` when more than 50 attempts are held |
 | `containers` | array | Owned containers: `name`, `role`, `lease_id`, `running` |
 | `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id`. No `state` — it is recorded per lease, and these are reported from the daemon |
 | `discrepancies` | array or null | Where the books and the daemon disagree; `null` if the daemon could not be asked |
@@ -121,6 +123,11 @@ ranking it by its start would put it outside the window the array carries.
 `released_total` is how many finished leases the store holds. A consumer that
 needs that figure must read it there rather than measure the `leases` array,
 whose length is what the document reports and not what exists.
+
+`manual_review` follows the same bounded-report rule. It contains at most the
+50 oldest held attempts, while `manual_review_total` reports the whole queue.
+When more exist, `manual_review_next_cursor` continues from the last included
+attempt through `attempts list`; consumers must treat the cursor as opaque.
 
 ## Vocabulary
 

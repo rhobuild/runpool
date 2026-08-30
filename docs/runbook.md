@@ -367,7 +367,14 @@ binding recovers on its next attempt.
 
 ## Manual review
 
-`runpool status` lists attempts held for a person. Inspect one with
+`runpool status` lists the 50 oldest attempts held for a person and reports the
+complete count. If the queue is larger, continue with the cursor it prints:
+
+```bash
+runpool attempts list --state manual-review --cursor <cursor>
+```
+
+Inspect one with
 `runpool attempts inspect <id>`, which reports the evidence the decision
 turns on and the provider identifiers for checking the run externally:
 

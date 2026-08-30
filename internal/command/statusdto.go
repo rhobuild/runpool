@@ -58,12 +58,16 @@ type statusDoc struct {
 	// finished, so its length is what was reported and not what exists. A
 	// consumer measuring the array would understate the history by every
 	// job beyond the bound.
-	ReleasedTotal int            `json:"released_total"`
-	CacheLanes    []laneDTO      `json:"cache_lanes"`
-	ManualReview  []attemptView  `json:"manual_review"`
-	Containers    []containerDTO `json:"containers"`
-	Networks      []resourceDTO  `json:"networks"`
-	Volumes       []resourceDTO  `json:"volumes"`
+	ReleasedTotal int           `json:"released_total"`
+	CacheLanes    []laneDTO     `json:"cache_lanes"`
+	ManualReview  []attemptView `json:"manual_review"`
+	// ManualReviewTotal distinguishes the bounded status summary from the
+	// complete queue. NextCursor continues it through `attempts list`.
+	ManualReviewTotal      int64          `json:"manual_review_total"`
+	ManualReviewNextCursor string         `json:"manual_review_next_cursor,omitempty"`
+	Containers             []containerDTO `json:"containers"`
+	Networks               []resourceDTO  `json:"networks"`
+	Volumes                []resourceDTO  `json:"volumes"`
 	// Discrepancies is the books-versus-daemon comparison across every
 	// observed object kind. It is null only when the daemon could not
 	// be asked, which engine_error then explains: an unreadable daemon
@@ -78,6 +82,12 @@ type statusDoc struct {
 	// run — the alternative, refusing to answer at all, took every other
 	// fact in this document down with one unset environment variable.
 	CapsuleImageError string `json:"capsule_image_error,omitempty"`
+}
+
+type manualReviewSummary struct {
+	Attempts   []attemptView
+	Total      int64
+	NextCursor string
 }
 
 type schedulingDTO struct {
@@ -182,7 +192,7 @@ type resourceDTO struct {
 	State   string `json:"state,omitempty"`
 }
 
-func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptView, obs daemonObservation, shippedCapsule string) statusDoc {
+func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReviewSummary, obs daemonObservation, shippedCapsule string) statusDoc {
 	topology := "unknown"
 	if cfg != nil {
 		topology = string(cfg.Host.Topology)
@@ -255,7 +265,9 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
 		})
 	}
-	doc.ManualReview = append(doc.ManualReview, review...)
+	doc.ManualReview = append(doc.ManualReview, review.Attempts...)
+	doc.ManualReviewTotal = review.Total
+	doc.ManualReviewNextCursor = review.NextCursor
 	for _, c := range obs.containers {
 		doc.Containers = append(doc.Containers, containerDTO{
 			Name: c.Name, Role: string(c.Role), LeaseID: string(c.LeaseID), Running: c.Running,

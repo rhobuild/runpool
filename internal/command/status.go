@@ -18,6 +18,8 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
+const statusManualReviewPageSize = 50
+
 // runStatus answers the operability questions the design requires an
 // operator to answer without reading SQLite: what this instance owns,
 // which leases are live, which cache lanes are held, and whether the
@@ -52,17 +54,21 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 
 	// The held-work queue rides along: an operator reading status must
 	// see what is waiting for a person without knowing to ask.
-	var review []attemptView
+	review := manualReviewSummary{}
 	if err := st.Tx(ctx, func(tx *store.Tx) error {
-		attempts, err := tx.ManualReviewAttempts()
+		page, err := tx.ManualReviewAttemptPage(nil, statusManualReviewPageSize)
 		if err != nil {
 			return err
 		}
+		review.Total = page.Total
 		now := time.Now()
-		for _, a := range attempts {
-			review = append(review, viewOf(a, now))
+		for _, a := range page.Attempts {
+			review.Attempts = append(review.Attempts, viewOf(a, now))
 		}
-		return nil
+		if page.Next != nil {
+			review.NextCursor, err = encodeAttemptCursor(attemptListManualReview, *page.Next)
+		}
+		return err
 	}); err != nil {
 		return err
 	}
@@ -184,12 +190,17 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	fmt.Fprintln(streams.Out)
 	renderLeases(streams.Out, live, snap)
 
-	if len(review) > 0 {
-		fmt.Fprintf(streams.Out, "\nmanual review (%d) — resolve with `runpool attempts resolve`\n", len(review))
-		for _, v := range review {
+	if review.Total > 0 {
+		fmt.Fprintf(streams.Out, "\nmanual review (%d total; showing %d) — resolve with `runpool attempts resolve`\n",
+			review.Total, len(review.Attempts))
+		for _, v := range review.Attempts {
 			fmt.Fprintf(streams.Out, "  %-22s %-28s %-24s held %s for %s\n",
 				v.ID, v.Workload, v.Project, v.ReviewReason,
 				(time.Duration(v.AgeSeconds) * time.Second).String())
+		}
+		if review.NextCursor != "" {
+			fmt.Fprintf(streams.Out, "  continue: runpool attempts list --state manual-review --cursor %s\n",
+				review.NextCursor)
 		}
 	}
 

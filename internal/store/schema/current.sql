@@ -1,4 +1,4 @@
--- Code generated from internal/store/migrations (schema version 2). DO NOT EDIT.
+-- Code generated from internal/store/migrations (schema version 3). DO NOT EDIT.
 -- Regenerate with: go run ./internal/store/schema/gen
 
 CREATE TABLE assignment_attempts (
@@ -209,6 +209,10 @@ WHERE state = 'manual_review';
 
 CREATE INDEX attempts_ready
 ON assignment_attempts (binding_id, received_at, id)
+WHERE state = 'ready';
+
+CREATE INDEX attempts_ready_global
+ON assignment_attempts (received_at, id)
 WHERE state = 'ready';
 
 CREATE INDEX cache_lanes_pool ON cache_lanes (project_id, generation, leased_by);

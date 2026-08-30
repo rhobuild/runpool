@@ -51,13 +51,33 @@ WHERE binding_id = @binding_id AND state = 'ready'
 ORDER BY received_at, id
 LIMIT @batch_size;
 
--- name: ListManualReviewAttempts :many
+-- name: ListManualReviewAttemptPage :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at
 FROM assignment_attempts
 WHERE state = 'manual_review'
-ORDER BY received_at, id;
+  AND (received_at > @after_received_at
+       OR (received_at = @after_received_at AND id > @after_id))
+ORDER BY received_at, id
+LIMIT @page_size;
+
+-- name: CountManualReviewAttempts :one
+SELECT COUNT(*) FROM assignment_attempts WHERE state = 'manual_review';
+
+-- name: ListReadyAttemptPage :many
+SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
+       state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at
+FROM assignment_attempts
+WHERE state = 'ready'
+  AND (received_at > @after_received_at
+       OR (received_at = @after_received_at AND id > @after_id))
+ORDER BY received_at, id
+LIMIT @page_size;
+
+-- name: CountAllReadyAttempts :one
+SELECT COUNT(*) FROM assignment_attempts WHERE state = 'ready';
 
 -- name: GetAttemptByLease :one
 SELECT a.id, a.delivery_id, a.binding_id, a.source_workload_key, a.tenant_key,

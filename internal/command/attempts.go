@@ -1,10 +1,13 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
@@ -13,6 +16,18 @@ import (
 	"github.com/rhobuild/runpool/internal/app"
 	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/store"
+)
+
+const (
+	defaultAttemptPageSize = 50
+	maxAttemptCursorLength = 512
+)
+
+type attemptListState string
+
+const (
+	attemptListManualReview attemptListState = "manual-review"
+	attemptListReady        attemptListState = "ready"
 )
 
 // attemptView is the reporting DTO: reporting rows are not persistence
@@ -41,6 +56,22 @@ type attemptView struct {
 	// external check resolving a held attempt requires. Empty when the
 	// provider recorded none.
 	Provider map[string]string `json:"provider,omitempty"`
+}
+
+type attemptListDocument struct {
+	State      attemptListState `json:"state"`
+	Attempts   []attemptView    `json:"attempts"`
+	Total      int64            `json:"total"`
+	NextCursor string           `json:"next_cursor,omitempty"`
+}
+
+// attemptCursorToken is the transport shape of the opaque CLI cursor. The
+// state is carried with the position so a manual-review cursor cannot silently
+// skip unrelated rows when reused against the ready queue.
+type attemptCursorToken struct {
+	State      attemptListState `json:"state"`
+	ReceivedAt int64            `json:"received_at"`
+	AttemptID  string           `json:"attempt_id"`
 }
 
 func viewOf(a store.Attempt, now time.Time) attemptView {
@@ -74,28 +105,41 @@ func inReadOnlyStore(fn func(*store.Tx) error) error {
 	return st.Tx(ctx, fn)
 }
 
-func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
-	if stateFilter != "manual-review" && stateFilter != "ready" {
-		// Capability-accurate: no silent empty answers for filters this
-		// command does not actually serve.
-		return usagef("attempts list serves --state manual-review and ready; %q is not wired", stateFilter)
+func runAttemptsList(streams IO, stateFilter string, asJSON bool, pageSize int, encodedCursor string) error {
+	state, err := parseAttemptListState(stateFilter)
+	if err != nil {
+		return err
+	}
+	if pageSize < 1 || pageSize > store.MaxAttemptPageSize {
+		return usagef("--limit must be between 1 and %d", store.MaxAttemptPageSize)
+	}
+	cursor, err := decodeAttemptCursor(encodedCursor, state)
+	if err != nil {
+		return usagef("invalid --cursor: %v", err)
 	}
 
-	err := inReadOnlyStore(func(s *store.Tx) error {
-		attempts, err := listAttempts(s, stateFilter)
+	err = inReadOnlyStore(func(s *store.Tx) error {
+		page, err := listAttempts(s, state, cursor, pageSize)
 		if err != nil {
 			return err
 		}
 		now := time.Now()
-		views := make([]attemptView, len(attempts))
-		for i, a := range attempts {
+		views := make([]attemptView, len(page.Attempts))
+		for i, a := range page.Attempts {
 			views[i] = viewOf(a, now)
 		}
+		document := attemptListDocument{State: state, Attempts: views, Total: page.Total}
+		if page.Next != nil {
+			document.NextCursor, err = encodeAttemptCursor(state, *page.Next)
+			if err != nil {
+				return err
+			}
+		}
 		if asJSON {
-			return json.NewEncoder(streams.Out).Encode(views)
+			return json.NewEncoder(streams.Out).Encode(document)
 		}
 		if len(views) == 0 {
-			fmt.Fprintf(streams.Out, "no attempts in %s\n", stateFilter)
+			fmt.Fprintf(streams.Out, "no attempts in %s (total: %d)\n", state, page.Total)
 			return nil
 		}
 		fmt.Fprintf(streams.Out, "%-22s %-28s %-24s %-24s %s\n", "ATTEMPT", "WORKLOAD", "PROJECT", "REASON", "AGE")
@@ -103,6 +147,11 @@ func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
 			fmt.Fprintf(streams.Out, "%-22s %-28s %-24s %-24s %s\n",
 				v.ID, v.Workload, v.Project, v.ReviewReason,
 				age(time.Duration(v.AgeSeconds)*time.Second))
+		}
+		fmt.Fprintf(streams.Out, "\nshowing %d of %d attempts\n", len(views), page.Total)
+		if document.NextCursor != "" {
+			fmt.Fprintf(streams.Out, "next page: runpool attempts list --state %s --limit %d --cursor %s\n",
+				state, pageSize, document.NextCursor)
 		}
 		return nil
 	})
@@ -112,37 +161,79 @@ func runAttemptsList(streams IO, stateFilter string, asJSON bool) error {
 		// in the listing's own shape — whether it has run at all is
 		// status's question, answered in status's document.
 		if asJSON {
-			fmt.Fprintln(streams.Out, "[]")
-			return nil
+			return json.NewEncoder(streams.Out).Encode(attemptListDocument{
+				State: state, Attempts: []attemptView{}, Total: 0,
+			})
 		}
-		fmt.Fprintf(streams.Out, "no attempts in %s\n", stateFilter)
+		fmt.Fprintf(streams.Out, "no attempts in %s (total: 0)\n", state)
 		return nil
 	}
 	return err
 }
 
-// listAttempts serves the two states an operator can act on: work held
-// for review, and work waiting for admission. Ready attempts are gathered
-// per binding because that is how the queue is keyed, and because an
-// operator asking why nothing runs wants to know which binding is holding
-// the backlog.
-func listAttempts(s *store.Tx, stateFilter string) ([]store.Attempt, error) {
-	if stateFilter == "manual-review" {
-		return s.ManualReviewAttempts()
+func parseAttemptListState(value string) (attemptListState, error) {
+	state := attemptListState(value)
+	switch state {
+	case attemptListManualReview, attemptListReady:
+		return state, nil
+	default:
+		return "", usagef("attempts list serves --state manual-review and ready; %q is not wired", value)
 	}
-	bindings, err := s.Bindings()
+}
+
+// listAttempts serves the two states an operator can act on: work held for
+// review, and work waiting for admission. Both are globally ordered reporting
+// views; scheduling remains binding-scoped.
+func listAttempts(s *store.Tx, state attemptListState, cursor *store.AttemptCursor, pageSize int) (store.AttemptPage, error) {
+	if state == attemptListManualReview {
+		return s.ManualReviewAttemptPage(cursor, pageSize)
+	}
+	return s.ReadyAttemptPage(cursor, pageSize)
+}
+
+func encodeAttemptCursor(state attemptListState, cursor store.AttemptCursor) (string, error) {
+	payload, err := json.Marshal(attemptCursorToken{
+		State: state, ReceivedAt: cursor.ReceivedAt.Unix(), AttemptID: string(cursor.ID),
+	})
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("encode attempt cursor: %w", err)
 	}
-	var out []store.Attempt
-	for _, b := range bindings {
-		ready, err := s.AllReadyAttempts(b.ID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ready...)
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeAttemptCursor(encoded string, state attemptListState) (*store.AttemptCursor, error) {
+	if encoded == "" {
+		return nil, nil
 	}
-	return out, nil
+	if len(encoded) > maxAttemptCursorLength {
+		return nil, errors.New("cursor is too long")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, errors.New("cursor is not valid base64url")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var token attemptCursorToken
+	if err := decoder.Decode(&token); err != nil {
+		return nil, fmt.Errorf("cursor payload: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("cursor payload contains trailing data")
+	}
+	if token.State != state {
+		return nil, fmt.Errorf("cursor is for state %q, not %q", token.State, state)
+	}
+	if token.AttemptID == "" {
+		return nil, errors.New("cursor attempt id is empty")
+	}
+	if token.ReceivedAt < 0 {
+		return nil, errors.New("cursor time is before the Unix epoch")
+	}
+	return &store.AttemptCursor{
+		ReceivedAt: time.Unix(token.ReceivedAt, 0).UTC(),
+		ID:         assignment.AttemptID(token.AttemptID),
+	}, nil
 }
 
 func runAttemptsInspect(streams IO, id string, asJSON bool) error {

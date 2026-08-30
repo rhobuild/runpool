@@ -71,6 +71,27 @@ type Attempt struct {
 	SettledAt         int64
 }
 
+// MaxAttemptPageSize is the largest operator-facing page the store will
+// materialize. Callers may choose a smaller page, but cannot turn a reporting
+// endpoint back into an unbounded query.
+const MaxAttemptPageSize = 1_000
+
+// AttemptCursor identifies the last attempt returned by a page. ReceivedAt and
+// ID form the store's deterministic FIFO order; callers encode this value as an
+// opaque transport cursor rather than exposing persistence fields directly.
+type AttemptCursor struct {
+	ReceivedAt time.Time
+	ID         assignment.AttemptID
+}
+
+// AttemptPage is one bounded view of an operator-facing attempt queue. Total is
+// the queue depth when the page transaction ran; Next is nil at the end.
+type AttemptPage struct {
+	Attempts []Attempt
+	Total    int64
+	Next     *AttemptCursor
+}
+
 func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 	// The one place a generated row becomes a domain value. Every
 	// conversion below is here so no caller has to make one, which is
@@ -149,13 +170,80 @@ func (t *Tx) ReadyAttemptBatch(bindingID assignment.BindingID, batchSize int) ([
 	return fromRows(rows), nil
 }
 
-// ManualReviewAttempts lists everything held for a person, oldest first.
-func (t *Tx) ManualReviewAttempts() ([]Attempt, error) {
-	rows, err := t.q.ListManualReviewAttempts(t.ctx)
-	if err != nil {
-		return nil, err
+func attemptPagePosition(cursor *AttemptCursor, pageSize int) (int64, string, error) {
+	if pageSize < 1 || pageSize > MaxAttemptPageSize {
+		return 0, "", fmt.Errorf("attempt page size must be between 1 and %d, got %d",
+			MaxAttemptPageSize, pageSize)
 	}
-	return fromRows(rows), nil
+	if cursor == nil {
+		return 0, "", nil
+	}
+	if cursor.ID == "" {
+		return 0, "", errors.New("attempt cursor id must not be empty")
+	}
+	if cursor.ReceivedAt.Before(time.Unix(0, 0)) {
+		return 0, "", errors.New("attempt cursor time must not be before the Unix epoch")
+	}
+	return cursor.ReceivedAt.Unix(), string(cursor.ID), nil
+}
+
+func newAttemptPage(rows []sqlitedb.AssignmentAttempt, total int64, pageSize int) AttemptPage {
+	hasMore := len(rows) > pageSize
+	if hasMore {
+		rows = rows[:pageSize]
+	}
+	page := AttemptPage{Attempts: fromRows(rows), Total: total}
+	if hasMore {
+		last := page.Attempts[len(page.Attempts)-1]
+		page.Next = &AttemptCursor{
+			ReceivedAt: time.Unix(last.ReceivedAt, 0).UTC(),
+			ID:         last.ID,
+		}
+	}
+	return page
+}
+
+// ManualReviewAttemptPage lists work held for a person in stable FIFO order.
+func (t *Tx) ManualReviewAttemptPage(cursor *AttemptCursor, pageSize int) (AttemptPage, error) {
+	afterReceivedAt, afterID, err := attemptPagePosition(cursor, pageSize)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	rows, err := t.q.ListManualReviewAttemptPage(t.ctx, sqlitedb.ListManualReviewAttemptPageParams{
+		AfterReceivedAt: afterReceivedAt,
+		AfterID:         afterID,
+		PageSize:        int64(pageSize + 1),
+	})
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	total, err := t.q.CountManualReviewAttempts(t.ctx)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	return newAttemptPage(rows, total, pageSize), nil
+}
+
+// ReadyAttemptPage lists work waiting for admission across every binding in
+// stable FIFO order. Scheduling itself remains binding-scoped.
+func (t *Tx) ReadyAttemptPage(cursor *AttemptCursor, pageSize int) (AttemptPage, error) {
+	afterReceivedAt, afterID, err := attemptPagePosition(cursor, pageSize)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	rows, err := t.q.ListReadyAttemptPage(t.ctx, sqlitedb.ListReadyAttemptPageParams{
+		AfterReceivedAt: afterReceivedAt,
+		AfterID:         afterID,
+		PageSize:        int64(pageSize + 1),
+	})
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	total, err := t.q.CountAllReadyAttempts(t.ctx)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	return newAttemptPage(rows, total, pageSize), nil
 }
 
 // Get reloads one attempt by id, whatever state it moved to.
