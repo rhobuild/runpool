@@ -5,7 +5,7 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## v1.2.0 — 2026-08-30
+## v1.2.0 — 2026-08-31
 
 Changes since v1.1 strengthen durable delivery, admission, qualification and
 large-backlog operation. The status document advances to `v2`, the state
