@@ -15,7 +15,7 @@
     "targeting one of these resolves that platform's child of the same",
     "pinned digest."
   ],
-  "resolved": "2026-08-15",
+  "resolved": "2026-08-31",
   "platforms": [
     "linux/amd64",
     "linux/arm64"
@@ -29,7 +29,7 @@
     },
     "dind": {
       "ref": "docker:29.7.2-dind",
-      "digest": "sha256:12e683a161823b2a839aeea999b9d960e6e1f9a97b1679ad6b441982e2d9cf07",
+      "digest": "sha256:360545c5305996eb06cc850c0e48f352809fc0930c66031fe46c370b70075c2b",
       "upstream": "https://hub.docker.com/_/docker",
       "note": "Runs privileged inside the capsule; its data root is a fresh volume per job. Release qualification exercises this exact digest through the capsule candidate."
     }
