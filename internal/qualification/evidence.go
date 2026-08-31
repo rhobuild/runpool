@@ -1,16 +1,12 @@
 package qualification
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"reflect"
-	"regexp"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/platform"
@@ -351,83 +347,6 @@ func sameSet(name string, got, want []string) error {
 		return fmt.Errorf("%s differ: missing=%v unexpected=%v", name, missing, unexpected)
 	}
 	return nil
-}
-
-var goTestResult = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): ([^ ]+) \(([0-9.]+)s\)$`)
-
-// ParseGoTestLog extracts top-level results from Go's stable verbose test
-// protocol. A skipped or failed subtest is rejected even when its parent later
-// reports PASS, so a producer cannot flatten away an incomplete contract.
-func ParseGoTestLog(input io.Reader) ([]CaseEvidence, error) {
-	results := make(map[string]CaseEvidence)
-	order := make([]string, 0)
-	scanner := bufio.NewScanner(input)
-	for scanner.Scan() {
-		match := goTestResult.FindStringSubmatch(strings.TrimSpace(scanner.Text()))
-		if match == nil {
-			continue
-		}
-		var outcome CaseOutcome
-		switch match[1] {
-		case "PASS":
-			outcome = CasePassed
-		case "FAIL":
-			outcome = CaseFailed
-		case "SKIP":
-			outcome = CaseSkipped
-		}
-		id := match[2]
-		if strings.Contains(id, "/") {
-			if outcome != CasePassed {
-				return nil, fmt.Errorf("subtest %s %s", id, outcome)
-			}
-			continue
-		}
-		if _, exists := results[id]; exists {
-			return nil, fmt.Errorf("test %s reported more than one terminal result", id)
-		}
-		seconds, err := strconv.ParseFloat(match[3], 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse duration for %s: %w", id, err)
-		}
-		results[id] = CaseEvidence{ID: id, Outcome: outcome, DurationMilliseconds: int64(seconds * 1000)}
-		order = append(order, id)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	cases := make([]CaseEvidence, 0, len(order))
-	for _, id := range order {
-		cases = append(cases, results[id])
-	}
-	return cases, nil
-}
-
-const drillMarkerPrefix = "RUNPOOL_CASE "
-
-// ParseDrillLog extracts explicit property markers from a shell harness.
-func ParseDrillLog(input io.Reader) ([]CaseEvidence, error) {
-	var cases []CaseEvidence
-	scanner := bufio.NewScanner(input)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, drillMarkerPrefix) {
-			continue
-		}
-		fields := strings.Fields(strings.TrimPrefix(line, drillMarkerPrefix))
-		if len(fields) != 2 {
-			return nil, fmt.Errorf("invalid drill marker %q", line)
-		}
-		outcome := CaseOutcome(fields[1])
-		if outcome != CasePassed && outcome != CaseFailed && outcome != CaseSkipped {
-			return nil, fmt.Errorf("invalid drill outcome %q", outcome)
-		}
-		cases = append(cases, CaseEvidence{ID: fields[0], Outcome: outcome})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return cases, nil
 }
 
 // EncodeSuiteEvidence writes the stable, indented artifact representation.

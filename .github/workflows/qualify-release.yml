@@ -197,7 +197,7 @@ jobs:
             -suite sqlite-durability -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
             -started-at "$started" -completed-at "$completed" \
             -environment release-platform -runner self-hosted \
-            -platform-facts platform-facts.json -log-format mixed \
+            -platform-facts platform-facts.json -log-format go-then-cases \
             -log sqlite-contract.log > sqlite-durability.json
 
       - name: Run the lifecycle drills

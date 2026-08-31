@@ -35,7 +35,7 @@ func main() {
 		controller    = flag.String("controller-image", "", "digest-qualified controller image")
 		capsule       = flag.String("capsule-image", "", "digest-qualified capsule image")
 		logPath       = flag.String("log", "", "test or drill log")
-		logFormat     = flag.String("log-format", "go", "go, drill, mixed, or cases")
+		logFormat     = flag.String("log-format", "go", "go, drill, go-then-cases, or cases")
 		explicitCases caseFlags
 	)
 	flag.Var(&explicitCases, "case", "case result as id=passed (repeatable; log-format=cases)")
@@ -112,19 +112,8 @@ func readCases(format, path string, explicit caseFlags) ([]qualification.CaseEvi
 		return qualification.ParseGoTestLog(file)
 	case "drill":
 		return qualification.ParseDrillLog(file)
-	case "mixed":
-		goCases, err := qualification.ParseGoTestLog(file)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := file.Seek(0, 0); err != nil {
-			return nil, err
-		}
-		drillCases, err := qualification.ParseDrillLog(file)
-		if err != nil {
-			return nil, err
-		}
-		return append(goCases, drillCases...), nil
+	case "go-then-cases":
+		return qualification.ParseGoSuiteThenCases(file)
 	default:
 		return nil, fmt.Errorf("unknown -log-format %q", format)
 	}
