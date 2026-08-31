@@ -181,8 +181,10 @@ generation-tagged allocation plan; batch water-filling bounds a rebuild by the
 number of bindings and the logarithm of configured parallelism. Capacity that
 may still be in force at the provider
 is accounted separately: increases reserve before polling, decreases release
-only after a successful poll, and only the current holder's empty poll rotates
-discovery.
+only after a successful poll. The current holder's empty poll rotates
+discovery, and a holder that gains demand or work passes the credit on at
+that moment rather than keeping it parked — including through a hold's
+thaw, since bindings keep gaining work while held.
 
 When `scheduling.parallelism` is configured, the same accounting also has an
 instance-wide ceiling across every tier and target. Provider announcements and

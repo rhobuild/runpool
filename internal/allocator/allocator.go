@@ -11,8 +11,10 @@
 // the tier limit and the optional instance-wide limit.
 //
 // One discovery credit rotates per independent tier, or across the instance
-// when a global limit is set. Only the holder's successful empty poll advances
-// it, and the preceding holder must confirm zero before the next can publish
+// when a global limit is set. The holder's successful empty poll advances it,
+// and so does any mutation that gives the holder demand or work -- a credit
+// parked on a binding that can already see is every other silent binding
+// announcing zero. The preceding holder must confirm zero before the next can publish
 // the same credit. A silent binding therefore observes its queue without two
 // sessions spending one unit concurrently. See
 // docs/adrs/2026-08-13-admission-credits.md.
@@ -203,6 +205,23 @@ func (a *Allocator) Hold(held bool) {
 		}
 	}
 	a.invalidatePlan()
+	if !held {
+		// The thaw re-checks every ring's pointer. During a hold the
+		// advance is rightly a no-op -- every candidate is held, so
+		// there is nobody to pass the credit to -- but bindings keep
+		// gaining demand and work while held, and a pointer parked on
+		// one of them through the thaw is the same unbounded starvation
+		// the advance exists to end, arriving through disk pressure
+		// instead of a poll.
+		if len(a.order) > 0 {
+			a.advanceDiscoveryFrom(a.order[a.discovery])
+		}
+		for _, p := range a.pools {
+			if len(p.order) > 0 {
+				a.advanceDiscoveryFrom(p.order[p.discovery])
+			}
+		}
+	}
 }
 
 // TryReserve claims one admission credit for key if its tier and the instance

@@ -131,3 +131,47 @@ func TestTheCreditMovesUnderAGlobalBudget(t *testing.T) {
 			"announces zero; the instance-wide pointer did not move")
 	}
 }
+
+// TestTheThawDoesNotLeaveTheCreditOnABusyHolder: during a hold the
+// advance is rightly a no-op -- everyone is held, there is nobody to
+// pass the credit to -- but bindings keep gaining demand while held,
+// and disk pressure is what drives holds on a long-running process. A
+// pointer parked on a binding that got busy during the hold is the same
+// unbounded starvation, arriving through the thaw.
+func TestTheThawDoesNotLeaveTheCreditOnABusyHolder(t *testing.T) {
+	a := New()
+	a.Register("std", "busy", 3)
+	a.Register("std", "quiet", 3)
+	a.SessionOpened("busy")
+	a.SessionOpened("quiet")
+
+	a.Hold(true)
+	a.SetAssignedDemand("busy", 1) // work lands while everything is held
+	if h := a.DiscoveryHolder("std"); h != "busy" {
+		t.Fatalf("during the hold the pointer moved to %q with every candidate held", h)
+	}
+	a.Hold(false)
+	if h := a.DiscoveryHolder("std"); h != "quiet" {
+		t.Fatalf("after the thaw the credit sits on %q, whose demand arrived during "+
+			"the hold; the quiet binding announces zero until the holder happens to "+
+			"drain and poll empty, which nothing bounds", h)
+	}
+}
+
+// TestTheThawChecksTheGlobalRingToo: the same seam on the instance-wide
+// pointer under a global budget.
+func TestTheThawChecksTheGlobalRingToo(t *testing.T) {
+	a := NewWithGlobalParallelism(4)
+	a.Register("std", "busy", 2)
+	a.Register("heavy", "quiet", 2)
+	a.SessionOpened("busy")
+	a.SessionOpened("quiet")
+
+	a.Hold(true)
+	a.SetAssignedDemand("busy", 1)
+	a.Hold(false)
+	if got := a.Advertised("quiet"); got == 0 {
+		t.Fatal("after the thaw the quiet binding still announces zero; the " +
+			"instance-wide pointer stayed on the binding that got busy during the hold")
+	}
+}

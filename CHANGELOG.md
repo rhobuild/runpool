@@ -24,6 +24,13 @@ need an operator.
   plans carry a generation and pool holder; an empty result can rotate only
   its own current holder, and capacity transfers revoke the previous holder
   before granting the next one.
+- **The discovery credit no longer waits on a busy holder.** A binding
+  holding the credit that found work kept it until it happened to drain and
+  poll empty, which nothing bounds — and every other silent binding in the
+  tier announced zero to the broker for the duration. The credit now moves
+  to the next silent binding the moment its holder gains demand or work,
+  and the thaw after a disk-pressure hold re-checks the pointer, since
+  bindings keep gaining work while held.
 - **Delivery fingerprints use an unambiguous canonical encoding.** New rows use
   length-prefixed SHA-256 input. Historical rows retain the delimiter encoder
   named on their row, so exact redelivery remains idempotent after upgrade.
