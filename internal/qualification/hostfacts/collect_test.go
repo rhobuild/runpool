@@ -107,3 +107,27 @@ func TestParseOSReleaseHandlesTheSpecifiedQuotingForms(t *testing.T) {
 		}
 	}
 }
+
+// TestAProbeThatWarnsOnStderrStillReportsACleanFact runs a real
+// command, because the seam the other tests mock is exactly what this
+// one exists to check. A tool that greets or deprecates on stderr while
+// answering on stdout must not have that text folded into the recorded
+// value: the value is compared byte-for-byte against the frozen lock,
+// on the reference host, mid-qualification, where a polluted fact costs
+// the cycle.
+func TestAProbeThatWarnsOnStderrStillReportsACleanFact(t *testing.T) {
+	out, err := runCommand(t.Context(), "sh", "-c", "echo warning: deprecated >&2; echo 29.7.2")
+	if err != nil {
+		t.Fatalf("a probe that succeeded with a warning was reported as failed: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "29.7.2" {
+		t.Errorf("the fact is %q; stderr leaked into the value the lock is compared against", got)
+	}
+
+	// And when the probe fails, stderr is exactly where the answer is.
+	_, err = runCommand(t.Context(), "sh", "-c", "echo no such subcommand >&2; exit 1")
+	if err == nil || !strings.Contains(err.Error(), "no such subcommand") {
+		t.Errorf("a failed probe's error = %v; the reason was on stderr and is what an "+
+			"operator acts on", err)
+	}
+}

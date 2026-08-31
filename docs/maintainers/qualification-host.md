@@ -139,6 +139,18 @@ whatever it found.
 go run ./internal/qualification/cmd/platform-facts
 ```
 
+`go run` needs a Go toolchain and one `go mod download`, and the
+provisioning above installs neither — deliberately, since the CI jobs
+bring their own. Capturing facts from a fresh host therefore means either
+installing Go there first, or building the collector elsewhere and
+copying it over, which needs no toolchain and no network on the host:
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o platform-facts \
+  ./internal/qualification/cmd/platform-facts
+scp platform-facts <host>:/tmp/ && ssh <host> /tmp/platform-facts
+```
+
 Read the eighteen facts. This is the reviewed step the gate asks for, not a
 formality: engine patches, cgroup drivers, storage drivers and backing
 filesystems all change container behaviour, which is why each is recorded

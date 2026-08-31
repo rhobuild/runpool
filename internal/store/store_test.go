@@ -2558,6 +2558,14 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		table, column string
 		declared      []string
 	}{
+		"fingerprint formats": {"broker_deliveries", "payload_fingerprint_format",
+			func() []string {
+				var o []string
+				for _, f := range assignment.DeliveryFingerprintFormats() {
+					o = append(o, string(f))
+				}
+				return o
+			}()},
 		"lease states": {"capsule_leases", "state         TEXT",
 			func() []string {
 				var o []string
@@ -2908,15 +2916,47 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 		if len(bindings) != 1 || bindings[0].TargetID != "app" {
 			t.Errorf("the restored books hold %d bindings; the fixture wrote one", len(bindings))
 		}
+		// The rewrites are the point, and the fixture carries what the
+		// shipped v1.0.0 actually wrote -- `v2|`-prefixed keys -- so the
+		// migration's own WHERE clauses fire on it. The first version of
+		// this fixture held an older pre-release key shape and an
+		// unprefixed delivery key, and this test passed while both
+		// UPDATE statements matched nothing.
+		if len(bindings) == 1 &&
+			string(bindings[0].ConfiguredBindingKey) != "target-runner-group-scale-set|app|default|runpool-standard" {
+			t.Errorf("migrated binding key = %q; the v1.0.0 key was not rewritten to its "+
+				"semantic domain, so an upgraded deployment would mint a fresh binding "+
+				"and orphan its history", bindings[0].ConfiguredBindingKey)
+		}
 		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
-			BindingID: 1, SourceDeliveryKey: "msg-fixture",
+			BindingID: 1, SourceDeliveryKey: "queue-delivery|71|41",
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("the delivery is not reachable under its rewritten key: %w", err)
 		}
 		if delivery.PayloadFingerprintFormat != string(assignment.FingerprintFormatDelimiterSeparatedSHA256) {
 			t.Errorf("migrated delivery fingerprint format = %q; want published delimiter format preserved",
 				delivery.PayloadFingerprintFormat)
+		}
+		var stale int
+		if err := tx.tx.QueryRow(`SELECT count(*) FROM provider_bindings WHERE source_binding_key LIKE 'v2|%'
+			UNION ALL SELECT 0 WHERE EXISTS (SELECT 1)`).Scan(&stale); err != nil {
+			return err
+		}
+		if stale != 0 {
+			t.Errorf("%d binding keys still carry the ordinal prefix after migration", stale)
+		}
+		// Migration 000004 rebuilds resource_intents behind a closed role
+		// vocabulary; the fixture carries one row a failed v1.0.0 serving
+		// left behind, so the rebuild is exercised on data rather than on
+		// an empty table.
+		var role, state string
+		if err := tx.tx.QueryRow(`SELECT role, state FROM resource_intents WHERE lease_id = 'lease-fixture-0001'`).
+			Scan(&role, &state); err != nil {
+			return fmt.Errorf("the resource intent did not survive the role rebuild: %w", err)
+		}
+		if role != "capsule" || state != "cleanup_pending" {
+			t.Errorf("intent came out of the rebuild as (%s,%s); want (capsule,cleanup_pending)", role, state)
 		}
 		return nil
 	}); err != nil {
@@ -3040,5 +3080,55 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 	if agreed < 5 {
 		t.Errorf("%d generated queries ask the open-attempt question; five did, and a "+
 			"reader that stopped matching the index by length is one this no longer compares", agreed)
+	}
+}
+
+// TestARedeliveryAgainstAnUnknownFormatIsAnErrorNotDrift: a stored
+// format the registry does not know is row corruption, and it has to
+// come back as its own error rather than as ErrContractDrift -- drift
+// stops the binding until a person looks at the provider, and the
+// provider is not where this problem is.
+func TestARedeliveryAgainstAnUnknownFormatIsAnErrorNotDrift(t *testing.T) {
+	s := newStore(t)
+	var bindingID assignment.BindingID
+	inTx(t, s, func(tx *Tx) error {
+		var err error
+		bindingID, err = tx.EnsureBinding("app", "github_actions", "queue-delivery-test|k")
+		return err
+	})
+	assigned := payload("job-1")
+	work := []WorkloadRow{{SourceWorkloadKey: assigned[0].SourceWorkloadKey,
+		TenantKey: assigned[0].TenantKey, ProjectKey: assigned[0].ProjectKey}}
+	inTx(t, s, func(tx *Tx) error {
+		_, err := tx.RecordDelivery(bindingID, "queue-delivery|1|1", assigned, work)
+		return err
+	})
+	// Corrupt the stored format out from under the row; the CHECK is
+	// suspended for the write because corruption does not ask permission.
+	inTx(t, s, func(tx *Tx) error {
+		if _, err := tx.tx.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.tx.Exec(
+			`UPDATE broker_deliveries SET payload_fingerprint_format = 'made-up-format'`); err != nil {
+			t.Fatal(err)
+		}
+		_, err := tx.tx.Exec(`PRAGMA ignore_check_constraints = OFF`)
+		return err
+	})
+
+	err := s.Tx(t.Context(), func(tx *Tx) error {
+		_, err := tx.RecordDelivery(bindingID, "queue-delivery|1|1", assigned, work)
+		return err
+	})
+	if err == nil {
+		t.Fatal("a redelivery against a corrupt stored format was accepted")
+	}
+	if errors.Is(err, ErrContractDrift) {
+		t.Errorf("a corrupt stored format reported as contract drift: %v -- drift blames "+
+			"the provider, and the provider is not where this problem is", err)
+	}
+	if !strings.Contains(err.Error(), "made-up-format") {
+		t.Errorf("the error does not name the format it could not use: %v", err)
 	}
 }

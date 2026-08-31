@@ -108,13 +108,24 @@ func (c collector) collect(ctx context.Context) (Document, error) {
 }
 
 func runCommand(ctx context.Context, name string, arguments ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
+	// Stdout alone is the fact. The shell collector this replaced
+	// discarded stderr for every probe, and that was load-bearing: a
+	// tool that greets, warns, or deprecates on stderr while printing
+	// its version on stdout would otherwise have that text folded into
+	// the recorded value -- which then fails the exact-match comparison
+	// against the frozen lock, on the reference host, mid-qualification,
+	// where a burned run costs the release cycle. Stderr still reaches
+	// the error when the command fails, which is where it belongs.
+	command := exec.CommandContext(ctx, name, arguments...)
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	output, err := command.Output()
 	if err != nil {
-		command := strings.Join(append([]string{name}, arguments...), " ")
-		if detail := strings.TrimSpace(string(output)); detail != "" {
-			return "", fmt.Errorf("%s: %w: %s", command, err, detail)
+		line := strings.Join(append([]string{name}, arguments...), " ")
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return "", fmt.Errorf("%s: %w: %s", line, err, detail)
 		}
-		return "", fmt.Errorf("%s: %w", command, err)
+		return "", fmt.Errorf("%s: %w", line, err)
 	}
 	return string(output), nil
 }
