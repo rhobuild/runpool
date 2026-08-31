@@ -26,3 +26,12 @@ func TestParseSwapTotalRejectsMissingOrMalformedValues(t *testing.T) {
 		}
 	}
 }
+
+func TestRootlessModeComesFromDaemonSecurityOptions(t *testing.T) {
+	if rootlessFromSecurityOptions([]string{"name=seccomp", "name=rootless"}) != true {
+		t.Error("rootless security option was not recognized")
+	}
+	if rootlessFromSecurityOptions([]string{"name=seccomp", "name=apparmor"}) != false {
+		t.Error("rootless mode was reported without the daemon security option")
+	}
+}

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/moby/moby/client"
+	enginedocker "github.com/rhobuild/runpool/internal/engine/docker"
 	"github.com/rhobuild/runpool/internal/platform"
 )
 
@@ -146,36 +146,25 @@ func secondField(value string) string {
 }
 
 func collectDockerFacts(ctx context.Context) (dockerFacts, error) {
-	cli, err := client.New(client.FromEnv)
+	cli, err := enginedocker.New(ctx)
 	if err != nil {
-		return dockerFacts{}, fmt.Errorf("create Docker client: %w", err)
+		return dockerFacts{}, err
 	}
 	defer cli.Close()
-	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
-		return dockerFacts{}, fmt.Errorf("negotiate Docker API: %w", err)
-	}
-	result, err := cli.Info(ctx, client.InfoOptions{})
+	facts, err := cli.DaemonFacts(ctx)
 	if err != nil {
-		return dockerFacts{}, fmt.Errorf("read Docker host facts: %w", err)
-	}
-	info := result.Info
-	rootless := false
-	for _, option := range info.SecurityOptions {
-		if strings.Contains(option, "rootless") {
-			rootless = true
-			break
-		}
+		return dockerFacts{}, err
 	}
 	return dockerFacts{
-		engine:        info.ServerVersion,
-		api:           cli.ClientVersion(),
-		cgroupVersion: info.CgroupVersion,
-		cgroupDriver:  info.CgroupDriver,
-		storageDriver: info.Driver,
-		dockerRoot:    info.DockerRootDir,
-		rootless:      rootless,
-		containerd:    info.ContainerdCommit.ID,
-		runc:          info.RuncCommit.ID,
+		engine:        facts.ServerVersion,
+		api:           facts.APIVersion,
+		cgroupVersion: facts.CgroupVersion,
+		cgroupDriver:  facts.CgroupDriver,
+		storageDriver: facts.StorageDriver,
+		dockerRoot:    facts.DataRoot,
+		rootless:      facts.Rootless,
+		containerd:    facts.Containerd,
+		runc:          facts.Runc,
 	}, nil
 }
 
