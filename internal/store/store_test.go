@@ -2939,17 +2939,25 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 				delivery.PayloadFingerprintFormat)
 		}
 		var stale int
-		if err := tx.tx.QueryRow(`SELECT count(*) FROM provider_bindings WHERE source_binding_key LIKE 'v2|%'
-			UNION ALL SELECT 0 WHERE EXISTS (SELECT 1)`).Scan(&stale); err != nil {
+		if err := tx.tx.QueryRow(`SELECT
+			(SELECT count(*) FROM provider_bindings WHERE source_binding_key LIKE 'v2|%') +
+			(SELECT count(*) FROM broker_deliveries WHERE source_delivery_key LIKE 'v2|%')`).
+			Scan(&stale); err != nil {
 			return err
 		}
 		if stale != 0 {
-			t.Errorf("%d binding keys still carry the ordinal prefix after migration", stale)
+			t.Errorf("%d durable keys still carry the ordinal prefix after migration", stale)
 		}
 		// Migration 000004 rebuilds resource_intents behind a closed role
 		// vocabulary; the fixture carries one row a failed v1.0.0 serving
 		// left behind, so the rebuild is exercised on data rather than on
-		// an empty table.
+		// an empty table. The lease it hangs from is `cleaning`, because
+		// that is the only rest a surviving intent permits: Finalize
+		// refuses to release a lease while any intent row survives, in
+		// the same transaction, so released-with-an-intent is a
+		// combination no shipped binary can write -- the first version of
+		// these rows encoded exactly that, which is the defect class this
+		// fixture exists to keep out.
 		var role, state string
 		if err := tx.tx.QueryRow(`SELECT role, state FROM resource_intents WHERE lease_id = 'lease-fixture-0001'`).
 			Scan(&role, &state); err != nil {
