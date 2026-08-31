@@ -22,7 +22,7 @@ that is what decides whether it can run on a pull request at all.
 | `integration-docker` | `outer capsule, JIT and the egress sandbox` | A real capsule, its credential channel and the egress sandbox, leaving no managed object behind | Hosted daemon |
 | `integration-docker` | `lifecycle drills` | Install, backup, restore, upgrade and uninstall, end to end | Hosted daemon |
 | `integration-docker` | `sqlite durability` | Durability on a named volume, including the disk-full case, across kills | Hosted daemon |
-| `contracts-github-actions` | `runner scale set API` | The provider adapter against the real scale-set API | Protected `upstream-contracts`; weekly, and during qualification |
+| `contracts-github-actions` | `runner scale set API` | The provider adapter against the real scale-set API | Hosted; weekly and non-qualifying runs from `main` use `upstream-observation`, while qualification and branch validation use the reviewed `upstream-contracts` |
 | `controller-e2e` | `real assignment, SIGKILL, cache and cleanup (portable)` | The exact controller and capsule candidates running real assignments, including crash adoption, on infrastructure that does not depend on the reference host | Hosted, protected `release-qualification` |
 | `controller-e2e` | `real assignment, SIGKILL, cache and cleanup (reference)` | The same workload on the exact release platform | Self-hosted, protected `release-qualification` |
 | `qualify-release` | `validate release inputs` | The ref is a protected tag, the images are digest-qualified, and the standalone candidate is the tag it claims | Hosted |
@@ -34,10 +34,14 @@ that is what decides whether it can run on a pull request at all.
 | `release` | `attest and publish qualified artifacts` | The record covers this build, the artifacts match their checksums, and the promoted digests are the qualified ones | Hosted, protected `release` |
 
 The GitHub Actions workflow also runs `github_observation` probes on its
-weekly and non-qualifying manual executions. They record upstream behavior for
-capabilities the product does not expose. They are deliberately excluded from
-release qualification; a change in an unused provider behavior must prompt
-investigation without blocking the release contract.
+weekly executions and on non-qualifying manual executions from `main`. They
+record upstream behavior for capabilities the product does not expose. They
+are deliberately excluded from release qualification; a change in an unused
+provider behavior must prompt investigation without blocking the release
+contract. A branch that needs the live contracts before merge uses
+`qualify=true` and waits for the `upstream-contracts` reviewer; a
+non-qualifying dispatch from any other branch fails closed at the observation
+environment's branch policy.
 
 `qualify-release` also calls `ci`, `contracts-github-actions` and
 `controller-e2e` rather than restating them: two definitions of one gate drift,
@@ -71,7 +75,7 @@ suite, which is why neither has a step of its own.
 
 ## Required checks
 
-Six job names are required status checks on `main`:
+Seven job names are required status checks on `main`:
 
 ```text
 the Go tree, its tests and its generated files
@@ -80,6 +84,7 @@ known vulnerabilities
 security analysis
 dependency changes
 controller image
+hermetic evidence
 ```
 
 GitHub matches a required check by its name, and the branch requires strict

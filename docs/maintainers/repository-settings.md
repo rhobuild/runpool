@@ -106,6 +106,26 @@ it.
   The workflow mints separate, short-lived repository and organization tokens;
   do not store a personal access token.
 
+  Create `upstream-observation` for the unattended weekly probe. Copy the
+  seven non-secret variables from `upstream-contracts`, require no reviewer,
+  and allow deployments from the `main` branch only. Disable administrative
+  bypass on both environments; while the repository has one maintainer, leave
+  self-review enabled on `upstream-contracts` so its approval remains usable.
+  Scheduled runs and non-qualifying manual runs from `main` use the observation
+  environment. A non-qualifying dispatch from another branch is deliberately
+  rejected; pre-merge validation uses `qualify=true` and the reviewed
+  environment instead.
+
+  Give each environment a distinct private key for the same fixture App under
+  the `RUNPOOL_CONTRACT_APP_PRIVATE_KEY` secret name. The keys grant the same
+  installation scope but rotate and revoke independently; replacing one does
+  not interrupt the other. Only the credential owner generates or stores
+  their values. The observation key is reachable only from `main`, after the
+  branch's required checks, signature and conversation-resolution controls
+  have passed. It is not accurate to call that a required human review while
+  the repository intentionally requires zero approving reviews from its sole
+  maintainer.
+
   These contracts never run on a pull request, because they reach protected
   fixtures. So a change to `github.com/actions/scaleset` merges on hermetic
   tests alone unless somebody dispatches them: Dependabot keeps that update out

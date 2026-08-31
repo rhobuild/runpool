@@ -46,7 +46,10 @@ jobs:
     runs-on: ubuntu-24.04
     # Above the suite's own 40m, plus minting two installation tokens.
     timeout-minutes: 60
-    environment: upstream-contracts
+    # Observation runs use an environment restricted to main. Qualification
+    # keeps the reviewed environment, including when dispatched from a branch.
+    environment:
+      name: ${{ inputs.qualify == true && 'upstream-contracts' || 'upstream-observation' }}
     steps:
       - name: Check out the tree
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,7 +83,7 @@ jobs:
             [ -n "$RUNNER_CMD" ] || missing="$missing RUNPOOL_CONTRACT_RUNNER_CMD"
           fi
           if [ -n "$missing" ]; then
-            echo "the upstream-contracts environment is missing:$missing"; exit 1
+            echo "the selected upstream environment is missing fixture variables:$missing"; exit 1
           fi
 
       - name: Mint the repository installation token
