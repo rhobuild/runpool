@@ -78,7 +78,7 @@ jobs:
 
       - name: Record the execution platform
         if: ${{ matrix.profile == 'reference' }}
-        run: scripts/qualification/platform-facts.sh > platform-facts.json
+        run: go run ./internal/qualification/cmd/platform-facts > platform-facts.json
 
       - name: Verify the fixture configuration is complete
         env:

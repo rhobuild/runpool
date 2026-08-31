@@ -583,7 +583,7 @@ func TestOwnedRemovalRefusesForeignNetworkAndVolume(t *testing.T) {
 
 // lockArch translates the daemon's spelling of an architecture into the
 // one the platform lock records. They differ on both platforms a release builds
-// for, and scripts/qualification/platform-facts.sh maps the same pair
+// for, and internal/qualification/cmd/platform-facts maps the same pair
 // for the facts the release gate reads.
 func lockArch(daemon string) string {
 	switch daemon {

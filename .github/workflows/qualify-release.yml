@@ -132,7 +132,7 @@ jobs:
 
       - name: Verify the release-qualification reference
         run: |
-          scripts/qualification/platform-facts.sh | tee platform-facts.json
+          go run ./internal/qualification/cmd/platform-facts | tee platform-facts.json
           go run ./internal/qualification/cmd/verify-platform -observed platform-facts.json
 
       - name: Authenticate to GHCR

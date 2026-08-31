@@ -130,13 +130,13 @@ a privileged daemon.
 
 ## Capturing and freezing the reference
 
-[`scripts/qualification/platform-facts.sh`](../../scripts/qualification/platform-facts.sh)
+[The typed platform-facts collector](../../internal/qualification/hostfacts/collect.go)
 reports what the host is and decides nothing. The comparison lives elsewhere on
 purpose — a collector that also judged would be free to judge in favour of
 whatever it found.
 
 ```bash
-scripts/qualification/platform-facts.sh
+go run ./internal/qualification/cmd/platform-facts
 ```
 
 Read the eighteen facts. This is the reviewed step the gate asks for, not a
