@@ -40,8 +40,14 @@ not change. Water-filling is performed in batches in O(B log P), where B is the
 number of bindings and P is the configured parallelism, rather than scanning
 every binding once per credit.
 
-The discovery credit rotates. A successful empty long-poll advances it only
-when that poll was made by the holder under the current discovery generation.
+The discovery credit rotates. A successful empty long-poll advances it
+when that poll was made by the holder under the current discovery generation,
+and a mutation that gives the holder demand or active work advances it at
+that moment — a holder that found work has looked and seen, and a credit
+parked on it is every other silent binding announcing zero for as long as
+it keeps finding work, which nothing bounds. The thaw after a hold
+re-checks the pointer for the same reason: bindings keep gaining work
+while held, and the advance is rightly inert during the hold itself.
 An empty poll from a binding at zero, or from another tier, carries no evidence
 about the holder and cannot move it. Bindings with demand or a running capsule
 are skipped because they can already see and be seen.
