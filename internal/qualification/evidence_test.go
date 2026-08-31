@@ -59,6 +59,105 @@ func TestGoTestEvidenceRecordsOnlyObservedTerminalResults(t *testing.T) {
 	}
 }
 
+func TestDrillEvidenceRejectsDuplicateCaseResults(t *testing.T) {
+	transcript := strings.NewReader(
+		caseMarkerPrefix + "round-1 passed\n" +
+			caseMarkerPrefix + "round-1 failed\n",
+	)
+	if cases, err := ParseDrillLog(transcript); err == nil {
+		t.Fatalf("accepted contradictory case results: %+v", cases)
+	}
+}
+
+func TestGoSuiteThenCasesValidatesTheDurabilityInventory(t *testing.T) {
+	log, err := os.Open(filepath.Join("testdata", "sqlite-durability-transcript.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+
+	cases, err := ParseGoSuiteThenCases(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(cases))
+	for _, observed := range cases {
+		ids = append(ids, observed.ID)
+		if observed.Outcome != CasePassed {
+			t.Errorf("case %s = %s; want passed", observed.ID, observed.Outcome)
+		}
+	}
+	want, err := ExpectedCases(SuiteSQLiteDurability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("case ids = %v; want %v", ids, want)
+	}
+	if cases[1].DurationMilliseconds != 3040 {
+		t.Errorf("crash recovery duration = %dms; want 3040ms", cases[1].DurationMilliseconds)
+	}
+
+	observed := frozenReference().Platforms[1].Platform
+	environment := ExecutionEnvironment{
+		Kind: EnvironmentReleasePlatform, Runner: "self-hosted", Facts: &observed,
+	}
+	manifest, err := NewSuiteEvidence(
+		SuiteSQLiteDurability, testBuild(), environment,
+		time.Unix(1, 0), time.Unix(2, 0), cases,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSuiteEvidence(manifest, testBuild(), observed); err != nil {
+		t.Fatalf("complete durability evidence was refused: %v", err)
+	}
+	if manifest.Summary != (CaseSummary{Expected: 10, Executed: 10, Passed: 10}) {
+		t.Errorf("summary = %+v; want ten executed and passed cases", manifest.Summary)
+	}
+}
+
+func TestGoSuiteThenCasesRequiresAnOrderedProtocol(t *testing.T) {
+	for name, transcript := range map[string]string{
+		"missing boundary":    "--- PASS: TestOne (0.01s)\n",
+		"duplicate boundary":  goSuiteCompleteMarker + "\n" + goSuiteCompleteMarker + "\n",
+		"case before suite":   caseMarkerPrefix + "round-1 passed\n" + goSuiteCompleteMarker + "\n",
+		"unknown phase":       qualificationPhasePrefix + "another-phase\n",
+		"duplicate go result": "--- PASS: TestOne (0.01s)\n--- PASS: TestOne (0.02s)\n" + goSuiteCompleteMarker + "\n",
+		"duplicate case":      goSuiteCompleteMarker + "\n" + caseMarkerPrefix + "round-1 passed\n" + caseMarkerPrefix + "round-1 passed\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cases, err := ParseGoSuiteThenCases(strings.NewReader(transcript))
+			if err == nil {
+				t.Fatalf("parsed malformed protocol: %+v", cases)
+			}
+		})
+	}
+}
+
+func TestGoSuiteThenCasesUsesOnlyTheExplicitBoundary(t *testing.T) {
+	transcript := strings.NewReader(
+		"--- PASS: TestOne (0.01s)\n" +
+			"PASS\n" +
+			"--- PASS: TestTwo (0.02s)\n" +
+			goSuiteCompleteMarker + "\n" +
+			"--- PASS: TestVerifyExisting (0.03s)\n" +
+			caseMarkerPrefix + "round-1 passed\n",
+	)
+	cases, err := ParseGoSuiteThenCases(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []CaseEvidence{
+		{ID: "TestOne", Outcome: CasePassed, DurationMilliseconds: 10},
+		{ID: "TestTwo", Outcome: CasePassed, DurationMilliseconds: 20},
+		{ID: "round-1", Outcome: CasePassed},
+	}
+	if !slices.Equal(cases, want) {
+		t.Fatalf("cases = %+v; want %+v", cases, want)
+	}
+}
+
 func TestSuiteEvidenceIsBoundToCasesBuildAndEnvironment(t *testing.T) {
 	definition, ok := definitionFor(SuiteHermetic)
 	if !ok {
@@ -201,14 +300,16 @@ func TestShellDrillInventoriesHaveOneSuccessMarkerPerCase(t *testing.T) {
 				if id == SuiteSQLiteDurability && strings.HasPrefix(expected, "container-kill-round-") {
 					continue
 				}
-				marker := drillMarkerPrefix + expected + " " + string(CasePassed)
+				marker := caseMarkerPrefix + expected + " " + string(CasePassed)
 				if count := strings.Count(string(body), marker); count != 1 {
 					t.Errorf("%s contains marker %q %d times; require exactly one", script, marker, count)
 				}
 			}
 			if id == SuiteSQLiteDurability {
 				for _, fragment := range []string{
-					"for round in 1 2 3", `echo "RUNPOOL_CASE container-kill-round-$round passed"`,
+					`echo "RUNPOOL_PHASE go-suite-complete"`,
+					"for round in 1 2 3",
+					`echo "RUNPOOL_CASE container-kill-round-$round passed"`,
 				} {
 					if !strings.Contains(string(body), fragment) {
 						t.Errorf("%s does not contain %q", script, fragment)

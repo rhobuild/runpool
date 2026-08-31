@@ -43,6 +43,7 @@ docker run --rm --memory 256m --cpus 1 \
   -e RUNPOOL_SQLITE_CONTRACT_DIR=/state -e RUNPOOL_SQLITE_SMALL_DIR=/small \
   "$img" /suite/sqlite-contract.test -test.v -test.count=1 \
   -test.run '^(TestPragmas|TestCrashRecovery|TestContention|TestSingletonLock|TestBackupRestore|TestDiskFull|TestMigrationMechanics)$'
+echo "RUNPOOL_PHASE go-suite-complete"
 
 echo "== container-kill rounds =="
 for round in 1 2 3; do

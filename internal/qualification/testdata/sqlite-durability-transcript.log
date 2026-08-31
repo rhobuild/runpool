@@ -1,0 +1,43 @@
+Run started=2026-08-31T05:58:34Z
+== filesystem under the named volume ==
+/dev/vda2            ext4       472042484  26711648 425162412   6% /state
+== full durability suite on the named volume ==
+=== RUN   TestPragmas
+    durability_test.go:28: embedded sqlite 3.53.3
+--- PASS: TestPragmas (0.00s)
+=== RUN   TestCrashRecovery
+    durability_test.go:89: recovered cleanly 12 times; 24014 entries survived
+--- PASS: TestCrashRecovery (3.04s)
+=== RUN   TestContention
+--- PASS: TestContention (0.14s)
+=== RUN   TestSingletonLock
+--- PASS: TestSingletonLock (0.50s)
+=== RUN   TestBackupRestore
+    durability_test.go:246: restorable backup verified with 100 entries while a writer was live
+--- PASS: TestBackupRestore (0.05s)
+=== RUN   TestDiskFull
+--- PASS: TestDiskFull (0.01s)
+=== RUN   TestMigrationMechanics
+--- PASS: TestMigrationMechanics (0.00s)
+PASS
+RUNPOOL_PHASE go-suite-complete
+== container-kill rounds ==
+=== RUN   TestVerifyExisting
+    contract_test.go:214: verified kill.db: 1915 entries survived a container kill
+--- PASS: TestVerifyExisting (0.00s)
+PASS
+round 1: recovered
+RUNPOOL_CASE container-kill-round-1 passed
+=== RUN   TestVerifyExisting
+    contract_test.go:214: verified kill.db: 4247 entries survived a container kill
+--- PASS: TestVerifyExisting (0.01s)
+PASS
+round 2: recovered
+RUNPOOL_CASE container-kill-round-2 passed
+=== RUN   TestVerifyExisting
+    contract_test.go:214: verified kill.db: 6578 entries survived a container kill
+--- PASS: TestVerifyExisting (0.01s)
+PASS
+round 3: recovered
+RUNPOOL_CASE container-kill-round-3 passed
+SQLite durability suite passed
