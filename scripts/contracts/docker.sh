@@ -14,6 +14,10 @@ set -euo pipefail
 # The expectation comes from the reviewed manifest, never from the host under
 # test.
 cd "$(dirname "$0")/../.."
+if [ "$#" -gt 1 ]; then
+  echo "usage: scripts/contracts/docker.sh <ssh-host>   (a Linux Docker host)" >&2
+  exit 2
+fi
 host=${1:-${RUNPOOL_CONTRACT_HOST:-}}
 if [ -z "$host" ]; then
   echo "usage: scripts/contracts/docker.sh <ssh-host>   (a Linux Docker host)" >&2

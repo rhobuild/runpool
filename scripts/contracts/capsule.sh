@@ -10,6 +10,10 @@ set -euo pipefail
 # Usage: scripts/contracts/capsule.sh <ssh-host>
 #   RUNPOOL_CONTRACT_HOST  default for <ssh-host>
 cd "$(dirname "$0")/../.."
+if [ "$#" -gt 1 ]; then
+  echo "usage: scripts/contracts/capsule.sh <ssh-host>   (a Linux Docker host)" >&2
+  exit 2
+fi
 host=${1:-${RUNPOOL_CONTRACT_HOST:-}}
 if [ -z "$host" ]; then
   echo "usage: scripts/contracts/capsule.sh <ssh-host>   (a Linux Docker host)" >&2

@@ -8,6 +8,10 @@ set -euo pipefail
 # Usage: scripts/contracts/sqlite.sh <ssh-host>
 #   RUNPOOL_CONTRACT_HOST  default for <ssh-host>
 cd "$(dirname "$0")/../.."
+if [ "$#" -gt 1 ]; then
+  echo "usage: scripts/contracts/sqlite.sh <ssh-host>   (a Linux Docker host)" >&2
+  exit 2
+fi
 host=${1:-${RUNPOOL_CONTRACT_HOST:-}}
 if [ -z "$host" ]; then
   echo "usage: scripts/contracts/sqlite.sh <ssh-host>   (a Linux Docker host)" >&2
@@ -17,7 +21,8 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
 echo "== local race pass =="
-RUNPOOL_SQLITE_CONTRACT_DIR=$(mktemp -d) go test -race -count=1 -v ./test/contract/sqlite
+mkdir "$out/sqlite-local"
+RUNPOOL_SQLITE_CONTRACT_DIR="$out/sqlite-local" go test -race -count=1 -v ./test/contract/sqlite
 
 echo "== cross-compile linux/amd64 (CGO_ENABLED=0) =="
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$out/sqlite-contract.test" ./test/contract/sqlite

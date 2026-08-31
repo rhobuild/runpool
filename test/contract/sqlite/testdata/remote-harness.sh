@@ -8,8 +8,16 @@ set -euo pipefail
 # Usage: remote-harness.sh <dir>
 #   <dir>  run-scoped directory holding sqlite-contract.test; created and
 #          removed by the invoking script, never by this one.
+if [ "$#" -ne 1 ]; then
+  echo "usage: remote-harness.sh <dir with sqlite-contract.test>" >&2
+  exit 2
+fi
 dir=${1:?usage: remote-harness.sh <dir with sqlite-contract.test>}
 run_id=$(basename "$dir" | tr -dc 'a-zA-Z0-9' | tail -c 8)
+if [ -z "$run_id" ]; then
+  echo "remote-harness: the run directory does not provide a usable resource suffix" >&2
+  exit 2
+fi
 vol="runpool-sqlite-state-$run_id"
 writer="runpool-sqlite-writer-$run_id"
 # Scaffolding image, digest-pinned like every image the project touches.
@@ -47,11 +55,11 @@ for round in 1 2 3; do
   # verifies recovery of a database that provably had transactions in
   # flight; a fixed pause could kill a writer that never got started.
   # The log is cleared at the top of each round, so this waits on this
-  # round.s work rather than being satisfied by a predecessor.s leftovers
+  # round's work rather than being satisfied by a predecessor's leftovers
   # -- and running out of patience is a failed round, not a quiet kill of
   # a writer that never started.
   ready=0
-  for _ in $(seq 1 150); do
+  for ((attempt = 0; attempt < 150; attempt++)); do
     if docker run --rm -v "$vol":/state "$img" sh -c 'test -s /state/kill.log'; then
       ready=1
       break

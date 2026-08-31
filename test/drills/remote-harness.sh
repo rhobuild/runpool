@@ -7,14 +7,29 @@ set -euo pipefail
 # the end, success or failure.
 #
 # Usage: remote-harness.sh <dir>
+if [ "$#" -ne 1 ]; then
+  echo "usage: remote-harness.sh <dir with src.tgz and drill-seed>" >&2
+  exit 2
+fi
 dir=${1:?usage: remote-harness.sh <dir with src.tgz and drill-seed>}
 run_id=$(basename "$dir" | tr -dc 'a-zA-Z0-9' | tail -c 8)
+if [ -z "$run_id" ]; then
+  echo "remote-harness: the run directory does not provide a usable resource suffix" >&2
+  exit 2
+fi
 vol="runpool-drill-state-$run_id"
 img="runpool:drill-$run_id"
+old_vol="$vol-released"
+cache_vol="runpool-cache-drill$run_id"
 # Busybox for volume plumbing, digest-pinned like everything else.
 bb='busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662'
+# The controller that wrote the released schema fixture. A release tag is a
+# human label; the drill executes the immutable image recorded by that release.
+released_img='ghcr.io/rhobuild/runpool@sha256:6738ee84d0568ac363843f62e8d7786545c27f43bbb9cd8076ae35a743f467f2'
 
 cleanup() {
+  docker volume rm "$cache_vol" >/dev/null 2>&1 || true
+  docker volume rm "$old_vol" >/dev/null 2>&1 || true
   docker volume rm "$vol" >/dev/null 2>&1 || true
   docker rmi "$img" >/dev/null 2>&1 || true
 }
@@ -102,9 +117,7 @@ released_db=internal/store/testdata/v1.0.0.db
 if [ ! -f "$released_db" ]; then
   echo "upgrade drill: $released_db is missing; the old end of this comparison is gone"; exit 1
 fi
-old_vol="$vol-released"
 docker volume create "$old_vol" >/dev/null
-trap 'docker volume rm "$old_vol" >/dev/null 2>&1 || true; cleanup' EXIT
 docker run --rm -v "$old_vol":/state -v "$PWD/$released_db":/seed.db:ro "$bb" \
   cp /seed.db /state/runpool.db
 before=$(docker run --rm -v "$old_vol":/state:ro "$bb" ls /state | tr '\n' ' ')
@@ -132,7 +145,7 @@ if printf '%s' "$after" | grep -q 'pre-migration'; then
   # it reports an instance that has not run and exits zero, which reads
   # as a refusal and is not one.
   released_out=$(docker run --rm -v "$old_vol":/var/lib/runpool/state \
-    ghcr.io/rhobuild/runpool:v1.0.0 status 2>&1) && {
+    "$released_img" status 2>&1) && {
     echo "upgrade drill: the released build read a database this one migrated:"
     printf '%s\n' "$released_out" | head -3; exit 1
   }
@@ -152,7 +165,7 @@ echo "== drill: uninstall =="
 # labeled resource created out-of-band — and must refuse without the
 # instance id as confirmation.
 docker volume create --label io.runpool.managed=true --label "io.runpool.instance=$instance" \
-  --label io.runpool.role=cache-lane "runpool-cache-drill$run_id" >/dev/null
+  --label io.runpool.role=cache-lane "$cache_vol" >/dev/null
 if docker run --rm -v "$vol":/var/lib/runpool/state -v /var/run/docker.sock:/var/run/docker.sock:ro \
   "$img" uninstall --confirm=wrong-id >/dev/null 2>&1; then
   echo "uninstall drill: accepted a wrong confirmation id"; exit 1

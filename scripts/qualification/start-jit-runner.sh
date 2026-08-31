@@ -20,7 +20,21 @@ set -euo pipefail
 # Usage: start-jit-runner.sh <runner-name>   # JIT bundle on stdin
 cd "$(dirname "$0")/../.."
 
+if [ "$#" -ne 1 ]; then
+  echo "usage: start-jit-runner.sh <runner-name>" >&2
+  exit 2
+fi
 name=${1:?usage: start-jit-runner.sh <runner-name>}
+case $name in
+  [[:alnum:]]*) ;;
+  *) echo "start-jit-runner: runner name must begin with an alphanumeric character" >&2; exit 2 ;;
+esac
+case $name in
+  *[![:alnum:]_.-]*)
+    echo "start-jit-runner: runner name contains characters Docker cannot use in a container name" >&2
+    exit 2
+    ;;
+esac
 container="runpool-contract-${name}"
 
 image=$(go run ./internal/qualification/cmd/image-lock -ref runner)
@@ -35,9 +49,16 @@ docker run --detach --rm --name "$container" --entrypoint sh "$image" -c '
   exec ./run.sh --jitconfig "$config"
 ' >/dev/null
 
-# A container waiting for a bundle that never arrives waits forever, so a
-# failed delivery takes the container with it rather than leaving it spinning.
-trap 'docker rm --force "$container" >/dev/null 2>&1 || true' ERR
+# A container waiting for a bundle that never arrives waits forever. Keep
+# cleanup armed across errors and signals until the complete bundle is visible
+# inside the container.
+cleanup_required=1
+cleanup() {
+  if [ "$cleanup_required" -eq 1 ]; then
+    docker rm --force -- "$container" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
 
 # Delivered under a temporary name and renamed, so the waiting loop never
 # observes a partly written bundle and starts a runner with a truncated one.
@@ -46,5 +67,5 @@ trap 'docker rm --force "$container" >/dev/null 2>&1 || true' ERR
 docker exec -i "$container" sh -c \
   'umask 077; cat > /tmp/jitconfig.part && mv /tmp/jitconfig.part /tmp/jitconfig'
 
-trap - ERR
+cleanup_required=0
 printf 'started %s\n' "$container"

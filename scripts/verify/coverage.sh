@@ -4,8 +4,22 @@ set -euo pipefail
 # Enforce the repository-wide unit-test coverage floor. Live contract suites
 # cover daemon and provider adapters separately; this floor prevents the
 # hermetic surface from regressing unnoticed.
+#
+# Usage: scripts/verify/coverage.sh [coverage-profile]
+if [ "$#" -gt 1 ]; then
+  echo "usage: coverage.sh [coverage-profile]" >&2
+  exit 2
+fi
 profile=${1:-coverage.out}
-minimum=${RUNPOOL_COVERAGE_MIN:-55.0}
+minimum=${RUNPOOL_COVERAGE_MIN-55.0}
+
+if ! awk -v value="$minimum" 'BEGIN {
+  valid = value ~ /^[0-9]+([.][0-9]+)?$/ && value + 0 >= 0 && value + 0 <= 100
+  exit !valid
+}'; then
+  echo "RUNPOOL_COVERAGE_MIN must be a number between 0 and 100, not \"$minimum\"" >&2
+  exit 2
+fi
 
 if [ ! -f "$profile" ]; then
   echo "coverage profile not found: $profile" >&2
