@@ -11,8 +11,10 @@
 // the tier limit and the optional instance-wide limit.
 //
 // One discovery credit rotates per independent tier, or across the instance
-// when a global limit is set. Only the holder's successful empty poll advances
-// it, and the preceding holder must confirm zero before the next can publish
+// when a global limit is set. The holder's successful empty poll advances it,
+// and so does any mutation that gives the holder demand or work -- a credit
+// parked on a binding that can already see is every other silent binding
+// announcing zero. The preceding holder must confirm zero before the next can publish
 // the same credit. A silent binding therefore observes its queue without two
 // sessions spending one unit concurrently. See
 // docs/adrs/2026-08-13-admission-credits.md.
@@ -179,6 +181,9 @@ func (a *Allocator) SetAssignedDemand(key assignment.BindingKey, demand int) {
 		}
 		b.assignedDemand = demand
 		a.invalidatePlan()
+		if demand > 0 {
+			a.advanceDiscoveryFrom(key)
+		}
 	}
 }
 
@@ -200,6 +205,23 @@ func (a *Allocator) Hold(held bool) {
 		}
 	}
 	a.invalidatePlan()
+	if !held {
+		// The thaw re-checks every ring's pointer. During a hold the
+		// advance is rightly a no-op -- every candidate is held, so
+		// there is nobody to pass the credit to -- but bindings keep
+		// gaining demand and work while held, and a pointer parked on
+		// one of them through the thaw is the same unbounded starvation
+		// the advance exists to end, arriving through disk pressure
+		// instead of a poll.
+		if len(a.order) > 0 {
+			a.advanceDiscoveryFrom(a.order[a.discovery])
+		}
+		for _, p := range a.pools {
+			if len(p.order) > 0 {
+				a.advanceDiscoveryFrom(p.order[p.discovery])
+			}
+		}
+	}
 }
 
 // TryReserve claims one admission credit for key if its tier and the instance
@@ -233,6 +255,7 @@ func (a *Allocator) TryReserve(key assignment.BindingKey) bool {
 	p.active++
 	a.activeCount++
 	a.invalidatePlan()
+	a.advanceDiscoveryFrom(key)
 	return true
 }
 
@@ -261,6 +284,7 @@ func (a *Allocator) Adopt(key assignment.BindingKey) (overBudget bool) {
 	p.active++
 	a.activeCount++
 	a.invalidatePlan()
+	a.advanceDiscoveryFrom(key)
 	// Both of the limits TryReserve gates on. A tier still inside its own
 	// parallelism can put the instance past the one every tier shares, and
 	// reporting only the tier's is how that arrives as an unexplained
@@ -616,6 +640,52 @@ func (a *Allocator) discoveryAnnouncement(key assignment.BindingKey, capacity in
 		return false, 0
 	}
 	return true, p.discoveryGeneration
+}
+
+// advanceDiscoveryFrom moves the pointer off a binding that has stopped
+// qualifying for the credit. Rotation otherwise happens only when a
+// discovery-flagged poll completes -- and a holder that gained demand or
+// work will never flag another poll, so without this the pointer stays
+// on it until it happens to drain and poll empty, which nothing bounds.
+// That is not the one-rotation wait the design accepts: it is every
+// other silent binding in the tier announcing zero indefinitely, which
+// is the defect the credit exists to prevent.
+//
+// The credit is for a binding the broker cannot see to look at its own
+// queue. A holder with demand or active work has looked and found, so
+// passing the pointer on costs it nothing. When nobody else qualifies,
+// nextDiscovery leaves the pointer where it is, and the existing
+// recovery -- the holder draining and completing an empty flagged poll
+// -- still applies.
+//
+// Callers hold a.mu. The generation is bumped on a move so a
+// discovery-flagged poll already in flight from the former holder
+// cannot rotate a second time when it completes.
+func (a *Allocator) advanceDiscoveryFrom(key assignment.BindingKey) {
+	still := func() bool {
+		b := a.binding(key)
+		return b != nil && !b.held && b.assignedDemand == 0 && b.active == 0
+	}
+	if a.globalParallelism > 0 {
+		if len(a.order) == 0 || a.order[a.discovery] != key || still() {
+			return
+		}
+		if next := a.nextDiscovery(a.order, a.discovery); next != a.discovery {
+			a.discovery = next
+			a.discoveryGeneration++
+			a.invalidatePlan()
+		}
+		return
+	}
+	p := a.poolOf(key)
+	if p == nil || len(p.order) == 0 || p.order[p.discovery] != key || still() {
+		return
+	}
+	if next := a.nextDiscovery(p.order, p.discovery); next != p.discovery {
+		p.discovery = next
+		p.discoveryGeneration++
+		a.invalidatePlan()
+	}
 }
 
 func (a *Allocator) rotateDiscovery(poll Poll) {
