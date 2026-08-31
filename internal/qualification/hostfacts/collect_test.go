@@ -43,8 +43,8 @@ func TestCollectorBuildsTypedFactsFromItsSources(t *testing.T) {
 				runc: "1.4.2",
 			}, nil
 		},
-		now:        func() time.Time { return fixedTime },
-		goarch:     "amd64",
+		now:       func() time.Time { return fixedTime },
+		goarch:    "amd64",
 		osRelease: "/test/os-release",
 	}
 
@@ -81,8 +81,8 @@ func TestCollectorFailsWhenTheBackingFilesystemCannotBeObserved(t *testing.T) {
 		docker: func(context.Context) (dockerFacts, error) {
 			return dockerFacts{dockerRoot: "/var/lib/docker"}, nil
 		},
-		now:        time.Now,
-		goarch:     "amd64",
+		now:       time.Now,
+		goarch:    "amd64",
 		osRelease: "/test/os-release",
 	}
 

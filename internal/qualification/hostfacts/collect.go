@@ -37,22 +37,22 @@ type dockerFacts struct {
 }
 
 type collector struct {
-	readFile   func(string) ([]byte, error)
-	run        func(context.Context, string, ...string) (string, error)
-	docker     func(context.Context) (dockerFacts, error)
-	now        func() time.Time
-	goarch     string
+	readFile  func(string) ([]byte, error)
+	run       func(context.Context, string, ...string) (string, error)
+	docker    func(context.Context) (dockerFacts, error)
+	now       func() time.Time
+	goarch    string
 	osRelease string
 }
 
 // Collect observes the local Linux host and Docker daemon.
 func Collect(ctx context.Context) (Document, error) {
 	c := collector{
-		readFile:   os.ReadFile,
-		run:        runCommand,
-		docker:     collectDockerFacts,
-		now:        time.Now,
-		goarch:     runtime.GOARCH,
+		readFile:  os.ReadFile,
+		run:       runCommand,
+		docker:    collectDockerFacts,
+		now:       time.Now,
+		goarch:    runtime.GOARCH,
 		osRelease: "/etc/os-release",
 	}
 	return c.collect(ctx)
@@ -108,9 +108,13 @@ func (c collector) collect(ctx context.Context) (Document, error) {
 }
 
 func runCommand(ctx context.Context, name string, arguments ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, name, arguments...).Output()
+	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", name, err)
+		command := strings.Join(append([]string{name}, arguments...), " ")
+		if detail := strings.TrimSpace(string(output)); detail != "" {
+			return "", fmt.Errorf("%s: %w: %s", command, err, detail)
+		}
+		return "", fmt.Errorf("%s: %w", command, err)
 	}
 	return string(output), nil
 }
