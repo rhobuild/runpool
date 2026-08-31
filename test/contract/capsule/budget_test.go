@@ -2,39 +2,45 @@ package capsulecontract
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/capsule"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/egress"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/engine/docker"
-
-	"github.com/rhobuild/runpool/internal/assignment"
 )
 
-// TestLeaseResourceBudget proves on a real kernel what the threat model
-// claims: a lease cannot spend more than its tier, and that includes
-// its gateway.
-//
-// The gateway is workload-driven — every connection a job opens is work
-// it performs — so leaving it outside the envelope would let a job
-// consume host resources its tier never granted. This asserts the three
-// things that make the claim true: both containers sit under one parent
-// cgroup, the sum of their kernel-enforced limits is the tier, and the
-// gateway's own limits are the reserve the capsule gave up.
-func TestLeaseResourceBudget(t *testing.T) {
+const pressureImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+
+type resourceContractFixture struct {
+	ctx           context.Context
+	dock          *docker.Client
+	leaseID       string
+	shortLeaseID  string
+	capsuleID     string
+	gatewayID     string
+	cgroupDriver  string
+	architecture  string
+	tier          config.Resources
+	capsuleLimits cgroupLimits
+	gatewayLimits cgroupLimits
+}
+
+func newResourceContractFixture(t *testing.T) *resourceContractFixture {
+	t.Helper()
 	m, dock, leaseID := launcher(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
-
-	info, err := dock.Info(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(cancel)
 
 	rec := &memRecorder{}
 
@@ -56,6 +62,10 @@ func TestLeaseResourceBudget(t *testing.T) {
 		Swap:   256 << 20,
 		CPU:    2_000_000_000,
 		PIDs:   512,
+	}
+	info, err := dock.Info(ctx)
+	if err != nil {
+		t.Fatalf("read daemon facts: %v", err)
 	}
 	prepared, err := m.Prepare(ctx, capsule.Spec{
 		LeaseID:      assignment.LeaseID(leaseID),
@@ -83,11 +93,100 @@ func TestLeaseResourceBudget(t *testing.T) {
 		t.Fatalf("resolve gateway: %q, %v", gwID, err)
 	}
 
+	capsuleID := string(prepared.RuntimeID)
+	return &resourceContractFixture{
+		ctx:           ctx,
+		dock:          dock,
+		leaseID:       leaseID,
+		shortLeaseID:  short,
+		capsuleID:     capsuleID,
+		gatewayID:     gwID,
+		cgroupDriver:  info.CgroupDriver,
+		architecture:  info.Architecture,
+		tier:          tier,
+		capsuleLimits: readCgroupLimits(ctx, t, dock, capsuleID),
+		gatewayLimits: readCgroupLimits(ctx, t, dock, gwID),
+	}
+}
+
+func (f *resourceContractFixture) innerDocker(arguments ...string) (int, string, error) {
+	command := append([]string{"docker", "--host=" + innerDockerSocket}, arguments...)
+	return f.dock.Exec(f.ctx, f.capsuleID, command)
+}
+
+func installPIDPressureHelper(t *testing.T, f *resourceContractFixture) {
+	t.Helper()
+	binary := linuxContractBinary(t, f)
+	input, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatalf("open PID pressure helper: %v", err)
+	}
+	command := []string{"bash", "-c", "umask 077; cat > " + pidPressureBinaryPath +
+		" && chmod 700 " + pidPressureBinaryPath}
+	if code, out, err := f.dock.ExecWithInput(f.ctx, f.gatewayID, command, input); err != nil || code != 0 {
+		t.Fatalf("install PID pressure helper: exit %d, %v: %s", code, err, out)
+	}
+}
+
+func linuxContractBinary(t *testing.T, f *resourceContractFixture) string {
+	t.Helper()
+	architecture := f.architecture
+	switch architecture {
+	case "amd64", "x86_64":
+		architecture = "amd64"
+	case "arm64", "aarch64":
+		architecture = "arm64"
+	default:
+		t.Fatalf("Docker reports architecture %q; the contract cannot build a Linux helper for it", f.architecture)
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == architecture {
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatalf("resolve contract executable: %v", err)
+		}
+		return binary
+	}
+
+	repository, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	binary := filepath.Join(t.TempDir(), "capsule-contract.test")
+	command := exec.CommandContext(f.ctx, "go", "test", "-c", "-o", binary, "./test/contract/capsule")
+	command.Dir = repository
+	command.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+architecture, "CGO_ENABLED=0")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build Linux PID pressure helper: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func waitForGatewayMarker(t *testing.T, f *resourceContractFixture, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		code, _, err := f.dock.Exec(f.ctx, f.gatewayID, []string{"bash", "-c", "test -f " + marker})
+		if err == nil && code == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	code, output, err := f.dock.Exec(f.ctx, f.gatewayID, []string{"cat", pidPressureLogPath})
+	t.Fatalf("PID pressure helper did not publish %s: log exit %d, %v: %s", marker, code, err, output)
+}
+
+// TestLeaseResourceEnvelopeAndGatewayPIDRecovery proves that a lease cannot
+// spend more than its tier, including gateway work, and that enforcing the
+// gateway's PID reserve does not leave the relay unavailable after pressure
+// subsides.
+func TestLeaseResourceEnvelopeAndGatewayPIDRecovery(t *testing.T) {
+	f := newResourceContractFixture(t)
+
 	// Both containers report the same parent cgroup, so the kernel
 	// accounts them as one aggregate and one path reports the lease.
-	wantParent := capsule.LeaseCgroupParent(info.CgroupDriver, leaseID)
-	for name, id := range map[string]string{"capsule": string(prepared.RuntimeID), "gateway": gwID} {
-		got, err := dock.ContainerCgroupParent(ctx, id)
+	wantParent := capsule.LeaseCgroupParent(f.cgroupDriver, f.leaseID)
+	for name, id := range map[string]string{"capsule": f.capsuleID, "gateway": f.gatewayID} {
+		got, err := f.dock.ContainerCgroupParent(f.ctx, id)
 		if err != nil {
 			t.Fatalf("%s cgroup parent: %v", name, err)
 		}
@@ -96,91 +195,113 @@ func TestLeaseResourceBudget(t *testing.T) {
 		}
 	}
 
-	// The kernel's own numbers, read from inside each container's
-	// cgroup: what the daemon was asked for is not evidence, what the
-	// kernel enforces is.
-	capsuleLimits := readCgroupLimits(ctx, t, dock, string(prepared.RuntimeID))
-	gatewayLimits := readCgroupLimits(ctx, t, dock, gwID)
-
-	if got := capsuleLimits.memory + gatewayLimits.memory; got != int64(tier.Memory) {
+	if got := f.capsuleLimits.memory + f.gatewayLimits.memory; got != int64(f.tier.Memory) {
 		t.Errorf("memory: capsule %d + gateway %d = %d; the tier is %d — the lease can exceed its budget",
-			capsuleLimits.memory, gatewayLimits.memory, got, int64(tier.Memory))
+			f.capsuleLimits.memory, f.gatewayLimits.memory, got, int64(f.tier.Memory))
 	}
-	if got := capsuleLimits.swap + gatewayLimits.swap; got != int64(tier.Swap) {
+	if got := f.capsuleLimits.swap + f.gatewayLimits.swap; got != int64(f.tier.Swap) {
 		t.Errorf("swap: capsule %d + gateway %d = %d; the tier is %d",
-			capsuleLimits.swap, gatewayLimits.swap, got, int64(tier.Swap))
+			f.capsuleLimits.swap, f.gatewayLimits.swap, got, int64(f.tier.Swap))
 	}
-	if got := capsuleLimits.pids + gatewayLimits.pids; got != tier.PIDs {
+	if got := f.capsuleLimits.pids + f.gatewayLimits.pids; got != f.tier.PIDs {
 		t.Errorf("pids: capsule %d + gateway %d = %d; the tier is %d",
-			capsuleLimits.pids, gatewayLimits.pids, got, tier.PIDs)
+			f.capsuleLimits.pids, f.gatewayLimits.pids, got, f.tier.PIDs)
 	}
-	if gatewayLimits.memory != int64(config.GatewayReserveMemory) {
-		t.Errorf("gateway memory = %d; want the reserve %d", gatewayLimits.memory, config.GatewayReserveMemory)
+	if f.gatewayLimits.memory != int64(config.GatewayReserveMemory) {
+		t.Errorf("gateway memory = %d; want the reserve %d", f.gatewayLimits.memory, config.GatewayReserveMemory)
 	}
-	if gatewayLimits.pids != config.GatewayReservePIDs {
-		t.Errorf("gateway pids = %d; want the reserve %d", gatewayLimits.pids, config.GatewayReservePIDs)
+	if f.gatewayLimits.pids != config.GatewayReservePIDs {
+		t.Errorf("gateway pids = %d; want the reserve %d", f.gatewayLimits.pids, config.GatewayReservePIDs)
 	}
+	installPIDPressureHelper(t, f)
+	idleGatewayPIDs := readCgroupCounter(f.ctx, t, f.dock, f.gatewayID, "pids.current", "")
 
-	// The gateway's limits are enforced, not advisory. A fork storm
-	// inside it must stop at its own ceiling rather than reaching the
-	// tier, let alone the host's process table.
-	//
-	// The storm runs detached and the evidence is read by a separate
-	// exec: a shell that has exhausted its own PID budget cannot fork
-	// the process that would report the result, so asking it to would
-	// measure nothing. The first attempt at this test did exactly that
-	// and passed while proving nothing.
-	if _, _, err := dock.Exec(ctx, gwID, []string{"bash", "-c",
-		`(n=0; while [ $n -lt 4000 ]; do sleep 20 & n=$((n+1)); done) >/dev/null 2>&1 &`}); err != nil {
-		t.Fatalf("start the fork storm: %v", err)
+	// The helper starts children until the kernel returns EAGAIN, records the
+	// cgroup counter without introducing another process, holds the boundary for
+	// two seconds, and reaps every child before publishing its evidence. A shell
+	// loop is not suitable here: Bash retries failed forks and can turn a nominal
+	// process count into an unbounded pressure duration.
+	startPressure := "rm -f " + pidPressureDonePath + " " + pidPressureDonePath + ".tmp " +
+		pidPressureLogPath + "; " +
+		pidPressureHelperEnvironment + "=1 " + pidPressureBinaryPath +
+		" >" + pidPressureLogPath + " 2>&1 &"
+	if code, out, err := f.dock.Exec(f.ctx, f.gatewayID, []string{"bash", "-c", startPressure}); err != nil || code != 0 {
+		t.Fatalf("start PID pressure helper: exit %d, %v: %s", code, err, out)
 	}
-	time.Sleep(3 * time.Second)
+	waitForGatewayMarker(t, f, pidPressureDonePath)
 
-	code, out, err := dock.Exec(ctx, gwID, []string{"cat", "/sys/fs/cgroup/pids.current"})
+	code, out, err := f.dock.Exec(f.ctx, f.gatewayID, []string{"cat", pidPressureDonePath})
 	if err != nil || code != 0 {
-		t.Fatalf("read pids.current: exit %d, %v", code, err)
+		t.Fatalf("read PID pressure evidence: exit %d, %v: %s", code, err, out)
 	}
-	current, perr := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-	if perr != nil {
-		t.Fatalf("pids.current is %q: %v", strings.TrimSpace(out), perr)
+	var evidence pidPressureEvidence
+	if err := json.Unmarshal([]byte(out), &evidence); err != nil {
+		t.Fatalf("decode PID pressure evidence %q: %v", strings.TrimSpace(out), err)
 	}
-	t.Logf("gateway pids.current under a fork storm: %d (ceiling %d, tier %d)",
-		current, config.GatewayReservePIDs, tier.PIDs)
-
-	// The pids controller blocks fork, not migration: a `docker exec`
-	// attaches its process to the cgroup without passing the limit, so
-	// the reader itself appears above the ceiling. Measured here as
-	// exactly one over. The allowance covers the reader and its shell,
-	// and stays far below the tier — which is the claim that matters:
-	// the gateway cannot spend the lease's whole budget.
-	const execAllowance = 4
-	if current > config.GatewayReservePIDs+execAllowance {
-		t.Errorf("the gateway holds %d processes; its ceiling is %d — the limit is not enforced",
-			current, config.GatewayReservePIDs)
+	t.Logf("gateway started %d pressure processes and observed pids.current=%d (ceiling %d, tier %d)",
+		evidence.Spawned, evidence.Saturated, config.GatewayReservePIDs, f.tier.PIDs)
+	if !evidence.LimitReached {
+		t.Error("PID pressure helper published evidence without observing EAGAIN")
 	}
-	if current >= tier.PIDs {
-		t.Errorf("the gateway reached %d processes, the tier's whole budget of %d", current, tier.PIDs)
+	if evidence.Spawned <= 0 || evidence.Spawned >= config.GatewayReservePIDs {
+		t.Errorf("PID pressure helper started %d children under a reserve of %d", evidence.Spawned, config.GatewayReservePIDs)
 	}
-	if _, err := dock.ContainerStatus(ctx, gwID); err != nil {
+	if evidence.Saturated != config.GatewayReservePIDs {
+		t.Errorf("gateway observed pids.current=%d at EAGAIN; want its exact ceiling %d",
+			evidence.Saturated, config.GatewayReservePIDs)
+	}
+	if evidence.Saturated >= f.tier.PIDs {
+		t.Errorf("the gateway reached %d processes, the tier's whole budget of %d", evidence.Saturated, f.tier.PIDs)
+	}
+	// The helper still contributes its Go runtime threads when it records this
+	// counter. Requiring it to fall below one quarter of the reserve proves the
+	// pressure children were reaped; the external measurement below proves the
+	// final return to the gateway's own idle level after the helper exits.
+	if evidence.Recovered >= config.GatewayReservePIDs/4 {
+		t.Errorf("helper reaped its children but pids.current remained at %d under a reserve of %d",
+			evidence.Recovered, config.GatewayReservePIDs)
+	}
+	if _, err := f.dock.ContainerStatus(f.ctx, f.gatewayID); err != nil {
 		t.Errorf("the gateway did not survive its own PID ceiling: %v", err)
+	}
+
+	// docker exec adds its reader to the cgroup. Allow only that bounded
+	// measurement overhead when confirming recovery from outside the helper.
+	const execAllowance = 4
+	recoveryDeadline := time.Now().Add(30 * time.Second)
+	for {
+		recovered := readCgroupCounter(f.ctx, t, f.dock, f.gatewayID, "pids.current", "")
+		if recovered <= idleGatewayPIDs+execAllowance {
+			break
+		}
+		if time.Now().After(recoveryDeadline) {
+			t.Fatalf("gateway pids.current remained at %d after the fork storm; idle was %d",
+				recovered, idleGatewayPIDs)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	proxyProbe := `h=${http_proxy#http://}; h=${h%%:*}; timeout 5 bash -c "echo > /dev/tcp/$h/3128"`
+	if code, out, err := f.dock.Exec(f.ctx, f.capsuleID, []string{"bash", "-c", proxyProbe}); err != nil || code != 0 {
+		t.Fatalf("gateway proxy did not recover after PID pressure: exit %d, %v: %s", code, err, out)
+	}
+}
+
+// TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope uses a fresh lease so PID
+// pressure in another contract cannot determine whether the memory fixture has
+// egress or whether the kernel accounts swap and OOM to this capsule.
+func TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope(t *testing.T) {
+	f := newResourceContractFixture(t)
+	if code, out, err := f.innerDocker("pull", pressureImage); err != nil || code != 0 {
+		t.Fatalf("pull the locked memory-pressure image through the inner daemon: exit %d, %v: %s", code, err, out)
 	}
 
 	// Limits written into cgroup files are configuration evidence. Force
 	// anonymous-like tmpfs pages past memory.max and require the kernel to
 	// account non-zero swap before calling the swap envelope enforced.
-	const pressureImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-	outerID := string(prepared.RuntimeID)
-	innerDocker := func(arguments ...string) (int, string, error) {
-		command := append([]string{"docker", "--host=" + innerDockerSocket}, arguments...)
-		return dock.Exec(ctx, outerID, command)
-	}
-	if code, out, err := innerDocker("pull", pressureImage); err != nil || code != 0 {
-		t.Fatalf("pull the locked memory-pressure image through the inner daemon: exit %d, %v: %s", code, err, out)
-	}
-	pressureName := "runpool-contract-pressure-" + short
-	t.Cleanup(func() { _, _, _ = innerDocker("rm", "-f", pressureName) })
-	memoryMiB := capsuleLimits.memory >> 20
-	code, out, err = innerDocker("run", "-d", "--name", pressureName,
+	pressureName := "runpool-contract-pressure-" + f.shortLeaseID
+	t.Cleanup(func() { _, _, _ = f.innerDocker("rm", "-f", pressureName) })
+	memoryMiB := f.capsuleLimits.memory >> 20
+	code, out, err := f.innerDocker("run", "-d", "--name", pressureName,
 		"--tmpfs", "/pressure:rw,size="+strconv.FormatInt(memoryMiB+16, 10)+"m",
 		pressureImage, "sh", "-c",
 		"dd if=/dev/zero of=/pressure/blob bs=1M count="+strconv.FormatInt(memoryMiB, 10)+
@@ -188,11 +309,11 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("start memory pressure: exit %d, %v: %s", code, err, out)
 	}
-	waitForInnerFile(t, ctx, innerDocker, pressureName, "/pressure/ready")
+	waitForInnerFile(t, f.ctx, f.innerDocker, pressureName, "/pressure/ready")
 	var swapCurrent int64
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		swapCurrent = readCgroupCounter(ctx, t, dock, outerID, "memory.swap.current", "")
+		swapCurrent = readCgroupCounter(f.ctx, t, f.dock, f.capsuleID, "memory.swap.current", "")
 		if swapCurrent > 0 {
 			break
 		}
@@ -201,8 +322,8 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if swapCurrent == 0 {
 		t.Fatal("memory.swap.current remained zero after memory pressure exceeded memory.max; configured swap was not exercised")
 	}
-	t.Logf("capsule used %d bytes of swap under %d bytes of memory pressure", swapCurrent, capsuleLimits.memory)
-	if code, out, err := innerDocker("rm", "-f", pressureName); err != nil || code != 0 {
+	t.Logf("capsule used %d bytes of swap under %d bytes of memory pressure", swapCurrent, f.capsuleLimits.memory)
+	if code, out, err := f.innerDocker("rm", "-f", pressureName); err != nil || code != 0 {
 		t.Fatalf("release memory pressure: exit %d, %v: %s", code, err, out)
 	}
 
@@ -211,9 +332,9 @@ func TestLeaseResourceBudget(t *testing.T) {
 	// victim so the property under test is deterministic: the workload dies,
 	// while supervisor and daemon remain available to report the hierarchical
 	// memory.events counter.
-	oomBefore := readCgroupCounter(ctx, t, dock, outerID, "memory.events", "oom_kill")
-	totalMiB := (capsuleLimits.memory + capsuleLimits.swap) >> 20
-	code, out, err = innerDocker("run", "--rm",
+	oomBefore := readCgroupCounter(f.ctx, t, f.dock, f.capsuleID, "memory.events", "oom_kill")
+	totalMiB := (f.capsuleLimits.memory + f.capsuleLimits.swap) >> 20
+	code, out, err = f.innerDocker("run", "--rm",
 		"--tmpfs", "/pressure:rw,size="+strconv.FormatInt(totalMiB+256, 10)+"m",
 		pressureImage, "sh", "-c",
 		"echo 1000 > /proc/self/oom_score_adj && exec dd if=/dev/zero of=/pressure/blob bs=1M count="+
@@ -224,12 +345,12 @@ func TestLeaseResourceBudget(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("an inner workload wrote past memory+swap without being killed: %s", out)
 	}
-	state, err := dock.ContainerStatus(ctx, outerID)
+	state, err := f.dock.ContainerStatus(f.ctx, f.capsuleID)
 	if err != nil {
 		t.Fatalf("inspect the capsule after inner OOM: %v", err)
 	}
 	if state.Status == engine.StatusRunning {
-		oomAfter := readCgroupCounter(ctx, t, dock, outerID, "memory.events", "oom_kill")
+		oomAfter := readCgroupCounter(f.ctx, t, f.dock, f.capsuleID, "memory.events", "oom_kill")
 		if oomAfter <= oomBefore {
 			t.Fatalf("inner workload exited %d but capsule oom_kill stayed at %d; the failure was not attributed to this cgroup: %s",
 				code, oomBefore, out)

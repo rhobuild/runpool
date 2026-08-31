@@ -131,7 +131,9 @@ var suiteDefinitions = []suiteDefinition{
 		environment:   ExecutionEnvironment{Kind: EnvironmentReleasePlatform, Runner: "self-hosted"},
 		requiresFacts: true, capsuleImage: true,
 		expectedCases: []string{
-			"TestLeaseResourceBudget", "TestNetworkSandboxBypass", "TestCapsuleLifecycle",
+			"TestLeaseResourceEnvelopeAndGatewayPIDRecovery",
+			"TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope",
+			"TestNetworkSandboxBypass", "TestCapsuleLifecycle",
 			"TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks", "TestPrepareWaitsForAProvenDaemon",
 			"TestAbortBeforeStartExitsWithTheReservedCode",
 		},

@@ -313,7 +313,8 @@
       },
       "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "expected_cases": [
-        "TestLeaseResourceBudget",
+        "TestLeaseResourceEnvelopeAndGatewayPIDRecovery",
+        "TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope",
         "TestNetworkSandboxBypass",
         "TestCapsuleLifecycle",
         "TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks",
@@ -322,7 +323,12 @@
       ],
       "cases": [
         {
-          "id": "TestLeaseResourceBudget",
+          "id": "TestLeaseResourceEnvelopeAndGatewayPIDRecovery",
+          "outcome": "passed",
+          "duration_ms": 10
+        },
+        {
+          "id": "TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope",
           "outcome": "passed",
           "duration_ms": 10
         },
@@ -353,9 +359,9 @@
         }
       ],
       "summary": {
-        "expected": 6,
-        "executed": 6,
-        "passed": 6,
+        "expected": 7,
+        "executed": 7,
+        "passed": 7,
         "failed": 0,
         "skipped": 0
       },

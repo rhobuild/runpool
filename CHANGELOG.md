@@ -50,9 +50,14 @@ need an operator.
 - **Every qualification boundary emits structured evidence.** The assembler
   rejects missing or skipped cases, mismatched commits, platforms and image
   digests, and evidence from the wrong suite.
-- **Kernel resource claims are exercised under pressure.** Live capsule tests
-  observe swap use beyond `memory.max` and attribute an inner workload's OOM
-  to the aggregate capsule cgroup.
+- **Kernel resource claims are exercised independently under pressure.** One
+  live capsule contract reaches the gateway PID ceiling, reaps the pressure
+  processes and proves the relay recovers. A fresh capsule observes swap use
+  beyond `memory.max` and attributes an inner workload's OOM to the aggregate
+  capsule cgroup, so PID exhaustion cannot invalidate the memory evidence.
+- **Platform evidence is emitted by a typed collector.** Release qualification
+  reads Docker through its API and serializes host facts with Go's JSON encoder;
+  shell remains responsible only for workflow orchestration.
 - **Controller crash adoption is a real `SIGKILL`.** The end-to-end workload
   kills the active controller, starts a successor on the same state and proves
   adoption, completion, cache isolation and ownership-safe cleanup. A portable
