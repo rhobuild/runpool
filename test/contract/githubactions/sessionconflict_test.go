@@ -51,7 +51,9 @@ func TestASecondSessionIsRefusedRecognisably(t *testing.T) {
 	if err == nil {
 		cctx, ccancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer ccancel()
-		second.Close(cctx)
+		if closeErr := second.Close(cctx); closeErr != nil {
+			t.Errorf("close the unexpected second session: %v", closeErr)
+		}
 		t.Fatal("the broker opened a second session for one scale set; the restart path " +
 			"assumes it refuses, and a live duplicate would mean two controllers polling one queue")
 	}

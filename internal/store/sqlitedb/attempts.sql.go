@@ -94,6 +94,28 @@ func (q *Queries) ClaimReadyAttempt(ctx context.Context, attemptID string) (int6
 	return result.RowsAffected()
 }
 
+const countAllReadyAttempts = `-- name: CountAllReadyAttempts :one
+SELECT COUNT(*) FROM assignment_attempts WHERE state = 'ready'
+`
+
+func (q *Queries) CountAllReadyAttempts(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAllReadyAttempts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countManualReviewAttempts = `-- name: CountManualReviewAttempts :one
+SELECT COUNT(*) FROM assignment_attempts WHERE state = 'manual_review'
+`
+
+func (q *Queries) CountManualReviewAttempts(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countManualReviewAttempts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countReadyAttempts = `-- name: CountReadyAttempts :one
 SELECT COUNT(*) FROM assignment_attempts
 WHERE binding_id = ?1 AND state = 'ready'
@@ -252,6 +274,53 @@ func (q *Queries) InsertAttempt(ctx context.Context, arg InsertAttemptParams) (i
 	return result.RowsAffected()
 }
 
+const listAllReadyAttempts = `-- name: ListAllReadyAttempts :many
+SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
+       state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at
+FROM assignment_attempts
+WHERE binding_id = ?1 AND state = 'ready'
+ORDER BY received_at, id
+`
+
+func (q *Queries) ListAllReadyAttempts(ctx context.Context, bindingID int64) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listAllReadyAttempts, bindingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AssignmentAttempt{}
+	for rows.Next() {
+		var i AssignmentAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeliveryID,
+			&i.BindingID,
+			&i.SourceWorkloadKey,
+			&i.TenantKey,
+			&i.ProjectKey,
+			&i.State,
+			&i.ExecutionEvidence,
+			&i.Resolution,
+			&i.ReviewReason,
+			&i.ReviewedAt,
+			&i.ReviewedBy,
+			&i.ReceivedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAttemptsByDelivery = `-- name: ListAttemptsByDelivery :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
@@ -299,17 +368,26 @@ func (q *Queries) ListAttemptsByDelivery(ctx context.Context, deliveryID int64) 
 	return items, nil
 }
 
-const listManualReviewAttempts = `-- name: ListManualReviewAttempts :many
+const listManualReviewAttemptPage = `-- name: ListManualReviewAttemptPage :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at
 FROM assignment_attempts
 WHERE state = 'manual_review'
+  AND (received_at > ?1
+       OR (received_at = ?1 AND id > ?2))
 ORDER BY received_at, id
+LIMIT ?3
 `
 
-func (q *Queries) ListManualReviewAttempts(ctx context.Context) ([]AssignmentAttempt, error) {
-	rows, err := q.db.QueryContext(ctx, listManualReviewAttempts)
+type ListManualReviewAttemptPageParams struct {
+	AfterReceivedAt int64
+	AfterID         string
+	PageSize        int64
+}
+
+func (q *Queries) ListManualReviewAttemptPage(ctx context.Context, arg ListManualReviewAttemptPageParams) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listManualReviewAttemptPage, arg.AfterReceivedAt, arg.AfterID, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -346,17 +424,79 @@ func (q *Queries) ListManualReviewAttempts(ctx context.Context) ([]AssignmentAtt
 	return items, nil
 }
 
-const listReadyAttempts = `-- name: ListReadyAttempts :many
+const listReadyAttemptBatch = `-- name: ListReadyAttemptBatch :many
 SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
        state, execution_evidence, resolution, review_reason, reviewed_at,
        reviewed_by, received_at, settled_at
 FROM assignment_attempts
 WHERE binding_id = ?1 AND state = 'ready'
 ORDER BY received_at, id
+LIMIT ?2
 `
 
-func (q *Queries) ListReadyAttempts(ctx context.Context, bindingID int64) ([]AssignmentAttempt, error) {
-	rows, err := q.db.QueryContext(ctx, listReadyAttempts, bindingID)
+type ListReadyAttemptBatchParams struct {
+	BindingID int64
+	BatchSize int64
+}
+
+func (q *Queries) ListReadyAttemptBatch(ctx context.Context, arg ListReadyAttemptBatchParams) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listReadyAttemptBatch, arg.BindingID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AssignmentAttempt{}
+	for rows.Next() {
+		var i AssignmentAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeliveryID,
+			&i.BindingID,
+			&i.SourceWorkloadKey,
+			&i.TenantKey,
+			&i.ProjectKey,
+			&i.State,
+			&i.ExecutionEvidence,
+			&i.Resolution,
+			&i.ReviewReason,
+			&i.ReviewedAt,
+			&i.ReviewedBy,
+			&i.ReceivedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadyAttemptPage = `-- name: ListReadyAttemptPage :many
+SELECT id, delivery_id, binding_id, source_workload_key, tenant_key, project_key,
+       state, execution_evidence, resolution, review_reason, reviewed_at,
+       reviewed_by, received_at, settled_at
+FROM assignment_attempts
+WHERE state = 'ready'
+  AND (received_at > ?1
+       OR (received_at = ?1 AND id > ?2))
+ORDER BY received_at, id
+LIMIT ?3
+`
+
+type ListReadyAttemptPageParams struct {
+	AfterReceivedAt int64
+	AfterID         string
+	PageSize        int64
+}
+
+func (q *Queries) ListReadyAttemptPage(ctx context.Context, arg ListReadyAttemptPageParams) ([]AssignmentAttempt, error) {
+	rows, err := q.db.QueryContext(ctx, listReadyAttemptPage, arg.AfterReceivedAt, arg.AfterID, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}

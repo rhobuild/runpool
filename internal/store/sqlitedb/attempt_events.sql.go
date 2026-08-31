@@ -20,7 +20,7 @@ type InsertAttemptEventParams struct {
 	AttemptID      string
 	IdempotencyKey string
 	Kind           string
-	DetailJson     string
+	DetailJSON     string
 }
 
 // Attempt lifecycle events: append-only, idempotent per
@@ -36,7 +36,7 @@ func (q *Queries) InsertAttemptEvent(ctx context.Context, arg InsertAttemptEvent
 		arg.AttemptID,
 		arg.IdempotencyKey,
 		arg.Kind,
-		arg.DetailJson,
+		arg.DetailJSON,
 	)
 	if err != nil {
 		return 0, err
@@ -55,7 +55,7 @@ SELECT ?1,
 type InsertSequencedAttemptEventParams struct {
 	AttemptID  string
 	Kind       string
-	DetailJson string
+	DetailJSON string
 }
 
 // For a decision that can be made about one attempt more than once: held
@@ -88,7 +88,7 @@ type InsertSequencedAttemptEventParams struct {
 // would be dropped in silence, with no error, from an append-only audit
 // log. If one is ever constructed, saying so is the only useful answer.
 func (q *Queries) InsertSequencedAttemptEvent(ctx context.Context, arg InsertSequencedAttemptEventParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSequencedAttemptEvent, arg.AttemptID, arg.Kind, arg.DetailJson)
+	result, err := q.db.ExecContext(ctx, insertSequencedAttemptEvent, arg.AttemptID, arg.Kind, arg.DetailJSON)
 	if err != nil {
 		return 0, err
 	}
@@ -116,7 +116,7 @@ func (q *Queries) ListAttemptEvents(ctx context.Context, attemptID string) ([]At
 			&i.AttemptID,
 			&i.IdempotencyKey,
 			&i.Kind,
-			&i.DetailJson,
+			&i.DetailJSON,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

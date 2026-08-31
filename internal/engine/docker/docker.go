@@ -440,8 +440,9 @@ func (c *Client) ContainerStatus(ctx context.Context, id string) (engine.Contain
 		return engine.ContainerState{}, fmt.Errorf("container %s reports no state", id)
 	}
 	return engine.ContainerState{
-		Status:   engine.ContainerStatus(inspected.Container.State.Status),
-		ExitCode: inspected.Container.State.ExitCode,
+		Status:    engine.ContainerStatus(inspected.Container.State.Status),
+		ExitCode:  inspected.Container.State.ExitCode,
+		OOMKilled: inspected.Container.State.OOMKilled,
 	}, nil
 }
 

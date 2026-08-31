@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
 	"github.com/rhobuild/runpool/internal/assignment"
@@ -34,9 +37,9 @@ var (
 // WorkloadRow is the assignment content a delivery carries for one
 // workload, in the domain's neutral terms.
 type WorkloadRow struct {
-	SourceWorkloadKey string
-	TenantKey         string
-	ProjectKey        string
+	SourceWorkloadKey assignment.SourceWorkloadKey
+	TenantKey         assignment.TenantKey
+	ProjectKey        assignment.ProjectKey
 }
 
 // RecordDelivery persists one delivery and its attempts idempotently.
@@ -52,13 +55,20 @@ type WorkloadRow struct {
 //     delivery returns ErrOpenAttemptExists: the caller supersedes or
 //     resolves the predecessor first, in the same transaction, and
 //     retries.
-func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey string, fingerprint [32]byte, workloads []WorkloadRow) (assignment.DeliveryID, error) {
+func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey assignment.DeliveryKey,
+	assigned []assignment.WorkloadAssignment, workloads []WorkloadRow) (assignment.DeliveryID, error) {
 	delivery, err := t.q.GetDeliveryByKey(t.ctx, sqlitedb.GetDeliveryByKeyParams{
-		BindingID: int64(bindingID), SourceDeliveryKey: sourceDeliveryKey,
+		BindingID: int64(bindingID), SourceDeliveryKey: string(sourceDeliveryKey),
 	})
 	switch {
 	case err == nil:
-		if !bytes.Equal(delivery.PayloadSha256, fingerprint[:]) {
+		format := assignment.DeliveryFingerprintFormat(delivery.PayloadFingerprintFormat)
+		expected, ok := assignment.DeliveryFingerprintForFormat(assigned, format)
+		if !ok {
+			return 0, fmt.Errorf("delivery %s of binding %d uses unsupported fingerprint format %q",
+				sourceDeliveryKey, bindingID, format)
+		}
+		if !bytes.Equal(delivery.PayloadSha256, expected[:]) {
 			return 0, fmt.Errorf("%w: delivery %s of binding %d",
 				ErrContractDrift, sourceDeliveryKey, bindingID)
 		}
@@ -68,10 +78,12 @@ func (t *Tx) RecordDelivery(bindingID assignment.BindingID, sourceDeliveryKey st
 		// resolving inside this very transaction — would otherwise leave
 		// a delivery whose work no query can ever find.
 	case errors.Is(err, sql.ErrNoRows):
+		format, fingerprint := assignment.CurrentDeliveryFingerprint(assigned)
 		delivery, err = t.q.InsertDelivery(t.ctx, sqlitedb.InsertDeliveryParams{
-			BindingID:         int64(bindingID),
-			SourceDeliveryKey: sourceDeliveryKey,
-			PayloadSha256:     fingerprint[:],
+			BindingID:                int64(bindingID),
+			SourceDeliveryKey:        string(sourceDeliveryKey),
+			PayloadSha256:            fingerprint[:],
+			PayloadFingerprintFormat: string(format),
 		})
 		if err != nil {
 			return 0, err
@@ -106,9 +118,9 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 		ID:                id,
 		DeliveryID:        delivery.ID,
 		BindingID:         delivery.BindingID,
-		SourceWorkloadKey: w.SourceWorkloadKey,
-		TenantKey:         w.TenantKey,
-		ProjectKey:        w.ProjectKey,
+		SourceWorkloadKey: string(w.SourceWorkloadKey),
+		TenantKey:         string(w.TenantKey),
+		ProjectKey:        string(w.ProjectKey),
 	})
 	if err != nil {
 		// The partial unique index rejects a second open attempt for the
@@ -129,7 +141,7 @@ func (t *Tx) insertAttempt(delivery sqlitedb.BrokerDelivery, w WorkloadRow) erro
 		AttemptID:      id,
 		IdempotencyKey: "attempt_created",
 		Kind:           string(EventAttemptCreated),
-		DetailJson:     "{}",
+		DetailJSON:     "{}",
 	})
 	return err
 }
@@ -176,22 +188,18 @@ func (t *Tx) SupersedeOpenAttempt(bindingID assignment.BindingID, sourceWorkload
 		AttemptID:      open.ID,
 		IdempotencyKey: "attempt_superseded",
 		Kind:           string(EventAttemptSuperseded),
-		DetailJson:     "{}",
+		DetailJSON:     "{}",
 	})
 	return err
 }
 
-// isUniqueViolation reports whether err is SQLite's unique-constraint
-// failure. The driver exposes it in the error string with the standard
-// extended code; matching the stable prefix is the portable check the
-// driver offers without a typed error.
+// isUniqueViolation reports only SQLite's extended UNIQUE result. Other
+// constraints are programming or data errors and must not be translated into
+// an open-attempt conflict merely because their message happens to contain a
+// familiar phrase.
 func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return bytes.Contains([]byte(msg), []byte("UNIQUE constraint failed")) ||
-		bytes.Contains([]byte(msg), []byte("constraint failed: UNIQUE"))
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
 func newAttemptID() (string, error) {

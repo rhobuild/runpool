@@ -39,11 +39,27 @@ concurrency:
 env:
   # Held equal to go.mod by the consistency suite.
   GOTOOLCHAIN: go1.26.7
+  QUALIFICATION_COMMIT: ${{ github.sha }}
+  QUALIFICATION_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   workload:
-    name: real assignment, restart, cache and cleanup
-    runs-on: [self-hosted, linux, x64, runpool-release-qualification]
+    name: real assignment, SIGKILL, cache and cleanup (${{ matrix.profile }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: portable
+            runs_on: '["ubuntu-24.04"]'
+            suite: controller-e2e-portable
+            environment: github-hosted
+            runner: ubuntu-24.04
+          - profile: reference
+            runs_on: '["self-hosted", "linux", "x64", "runpool-release-qualification"]'
+            suite: controller-e2e
+            environment: release-platform
+            runner: self-hosted
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
     environment: release-qualification
     timeout-minutes: 70
     steps:
@@ -59,6 +75,10 @@ jobs:
 
       - name: Fetch modules
         run: scripts/ci/retry.sh go mod download
+
+      - name: Record the execution platform
+        if: ${{ matrix.profile == 'reference' }}
+        run: go run ./internal/qualification/cmd/platform-facts > platform-facts.json
 
       - name: Verify the fixture configuration is complete
         env:
@@ -127,8 +147,25 @@ jobs:
           RUNPOOL_E2E_REPOSITORY: ${{ vars.RUNPOOL_E2E_ORGANIZATION }}/${{ vars.RUNPOOL_E2E_REPOSITORY }}
           RUNPOOL_E2E_GIT_REVISION: ${{ vars.RUNPOOL_E2E_GIT_REVISION }}
           RUNPOOL_E2E_TOKEN: ${{ steps.fixture-token.outputs.token }}
-          RUNPOOL_E2E_ARTIFACT_DIR: ${{ github.workspace }}/controller-e2e-evidence
-        run: go test -count=1 -v -timeout 60m ./test/e2e/controller/...
+          RUNPOOL_E2E_ARTIFACT_DIR: ${{ github.workspace }}/controller-e2e-evidence-${{ matrix.profile }}
+        run: |
+          evidence_dir="controller-e2e-evidence-${{ matrix.profile }}"
+          mkdir -p "$evidence_dir"
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go test -count=1 -v -timeout 60m -run '^TestControllerEndToEnd$' \
+            ./test/e2e/controller/... 2>&1 | tee "$evidence_dir/controller-e2e.log"
+          completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          evidence_args=(
+            -suite "${{ matrix.suite }}" -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL"
+            -started-at "$started" -completed-at "$completed"
+            -environment "${{ matrix.environment }}" -runner "${{ matrix.runner }}"
+            -controller-image "$RUNPOOL_E2E_CONTROLLER_IMAGE" -capsule-image "$RUNPOOL_E2E_CAPSULE_IMAGE"
+            -log "$evidence_dir/controller-e2e.log"
+          )
+          if [ "${{ matrix.profile }}" = reference ]; then
+            evidence_args+=(-platform-facts platform-facts.json)
+          fi
+          go run ./internal/qualification/cmd/suite-evidence "${evidence_args[@]}" > "$evidence_dir/suite.json"
 
       - name: Refuse credential-bearing evidence
         id: evidence-check
@@ -136,12 +173,13 @@ jobs:
         env:
           FIXTURE_TOKEN: ${{ steps.fixture-token.outputs.token }}
         run: |
-          [ -d controller-e2e-evidence ] || exit 0
-          if [ -n "$FIXTURE_TOKEN" ] && grep -rlF "$FIXTURE_TOKEN" controller-e2e-evidence 2>/dev/null; then
+          evidence_dir="controller-e2e-evidence-${{ matrix.profile }}"
+          [ -d "$evidence_dir" ] || exit 0
+          if [ -n "$FIXTURE_TOKEN" ] && grep -rlF "$FIXTURE_TOKEN" "$evidence_dir" 2>/dev/null; then
             echo "the fixture credential appears in the evidence; refusing to archive it"
             exit 1
           fi
-          if grep -rlE '(gh[pousr]_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,})' controller-e2e-evidence 2>/dev/null; then
+          if grep -rlE '(gh[pousr]_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,})' "$evidence_dir" 2>/dev/null; then
             echo "a token-shaped string appears in the evidence; refusing to archive it"
             exit 1
           fi
@@ -151,8 +189,8 @@ jobs:
         if: ${{ always() && steps.evidence-check.outputs.safe == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: controller-e2e-evidence
-          path: controller-e2e-evidence
+          name: controller-e2e-evidence-${{ matrix.profile }}
+          path: controller-e2e-evidence-${{ matrix.profile }}
           retention-days: 90
           if-no-files-found: error
 

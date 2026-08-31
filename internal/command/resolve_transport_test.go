@@ -38,11 +38,13 @@ func heldIn(t *testing.T) (string, assignment.AttemptID) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.RecordDelivery(binding, "msg-1", [32]byte{},
+		if _, err := tx.RecordDelivery(binding, "msg-1", []assignment.WorkloadAssignment{{
+			SourceWorkloadKey: "job-1",
+		}},
 			[]store.WorkloadRow{{SourceWorkloadKey: "job-1", TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
-		ready, err := tx.ReadyAttempts(binding)
+		ready, err := tx.AllReadyAttempts(binding)
 		if err != nil {
 			return err
 		}

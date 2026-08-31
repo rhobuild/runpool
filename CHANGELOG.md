@@ -5,18 +5,64 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## v1.2.0 — 2026-08-28
+## Unreleased
 
-Two failures that a host could suffer in silence now report themselves: an
-egress sandbox that closed every gateway, and a binding that can no longer
-turn anything its provider hands it into work. Both looked healthy from
-every angle an operator had. A capsule that dies before it can explain
-itself now carries what it said, the runbook names the ten conditions that
-need a person and gives one command that reports them, and a release page
-says what changed. The schema is unchanged, so an installation moves by
-repointing the image and recreating the container; [the
-runbook](docs/runbook.md) names the commands and what to do if it has to go
-back.
+Changes since v1.1 strengthen durable delivery, admission, qualification and
+large-backlog operation. The status document advances to `v2`, the state
+schema advances through forward-only migrations, and release evidence now
+proves the exact cases, platform and candidate images it represents. The
+[runbook](docs/runbook.md) covers upgrade, rollback and the conditions that
+need an operator.
+
+### Reliability and scheduling
+
+- **Disk admission starts closed until a fresh measurement succeeds.** Missing,
+  stale or failed pressure measurements can no longer advertise provider
+  capacity. Worsening pressure closes admission before persistence; recovery
+  opens it only after the improved verdict commits.
+- **Discovery credit follows the poll that owns it.** Immutable allocation
+  plans carry a generation and pool holder; an empty result can rotate only
+  its own current holder, and capacity transfers revoke the previous holder
+  before granting the next one.
+- **Delivery fingerprints use an unambiguous canonical encoding.** New rows use
+  length-prefixed SHA-256 input. Historical rows retain the delimiter encoder
+  named on their row, so exact redelivery remains idempotent after upgrade.
+- **Durable internal formats have semantic names.** Delivery keys, configured
+  binding keys and fingerprint encodings identify their contents instead of a
+  chronological `vN`. The migration preserves row ids and existing digest
+  bytes.
+
+### Scale and operations
+
+- **Allocation publishes one immutable plan per mutation.** Batched
+  water-filling replaces credit-by-credit scans, and concurrent readers share
+  the same generation.
+- **Scheduling reads bounded ready batches.** A large durable backlog is not
+  materialized merely to admit the few attempts current capacity can serve.
+- **Operational attempt lists are paginated.** Stable cursors and totals bound
+  `status --json` and allow `attempts list` to continue through the full queue.
+- **`status --json` is now `v2`.** The binding identity field is
+  `configured_binding_key`, matching its source in operator configuration;
+  persistence column names remain private.
+
+### Qualification
+
+- **Every qualification boundary emits structured evidence.** The assembler
+  rejects missing or skipped cases, mismatched commits, platforms and image
+  digests, and evidence from the wrong suite.
+- **Kernel resource claims are exercised independently under pressure.** One
+  live capsule contract reaches the gateway PID ceiling, reaps the pressure
+  processes and proves the relay recovers. A fresh capsule observes swap use
+  beyond `memory.max` and attributes an inner workload's OOM to the aggregate
+  capsule cgroup, so PID exhaustion cannot invalidate the memory evidence.
+- **Platform evidence is emitted by a typed collector.** Release qualification
+  reads Docker through its API and serializes host facts with Go's JSON encoder;
+  shell remains responsible only for workflow orchestration.
+- **Controller crash adoption is a real `SIGKILL`.** The end-to-end workload
+  kills the active controller, starts a successor on the same state and proves
+  adoption, completion, cache isolation and ownership-safe cleanup. A portable
+  hosted leg keeps the regression executable; the exact reference-host leg is
+  the release authority.
 
 ### Isolation and egress
 

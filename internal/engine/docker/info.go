@@ -20,14 +20,6 @@ func (c *Client) Info(ctx context.Context) (engine.HostInfo, error) {
 		return engine.HostInfo{}, err
 	}
 	info := result.Info
-	// The daemon reports rootless mode as a security option, which is the
-	// only portable signal for it.
-	rootless := false
-	for _, opt := range info.SecurityOptions {
-		if strings.Contains(opt, "rootless") {
-			rootless = true
-		}
-	}
 	swapTotal, swapErr := localSwapTotal()
 	return engine.HostInfo{
 		ServerVersion:  info.ServerVersion,
@@ -39,7 +31,7 @@ func (c *Client) Info(ctx context.Context) (engine.HostInfo, error) {
 		MemoryLimit:    info.MemoryLimit,
 		SwapLimit:      info.SwapLimit,
 		PidsLimit:      info.PidsLimit,
-		Rootless:       rootless,
+		Rootless:       rootlessFromSecurityOptions(info.SecurityOptions),
 		NCPU:           info.NCPU,
 		MemTotalBytes:  info.MemTotal,
 		SwapTotalBytes: swapTotal,

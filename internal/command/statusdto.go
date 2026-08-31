@@ -14,7 +14,7 @@ import (
 // changes only with its version string. Field names are snake_case,
 // collections are always arrays — an empty one is `[]`, never null,
 // because consumers branch on length, not on presence.
-const statusAPIVersion = "v1"
+const statusAPIVersion = "v2"
 
 // statusHead is what both forms of the document carry, and the whole of
 // the pre-serve one.
@@ -29,7 +29,7 @@ const statusAPIVersion = "v1"
 // could not be asked".
 type statusHead struct {
 	APIVersion string `json:"api_version"`
-	// Served discriminates v1's two forms: true carries the document
+	// Served discriminates the document's two forms: true carries the document
 	// below, false is the pre-serve form with only state_dir and detail.
 	// A consumer branches on this, not on which fields happen to exist.
 	Served bool `json:"served"`
@@ -58,12 +58,16 @@ type statusDoc struct {
 	// finished, so its length is what was reported and not what exists. A
 	// consumer measuring the array would understate the history by every
 	// job beyond the bound.
-	ReleasedTotal int            `json:"released_total"`
-	CacheLanes    []laneDTO      `json:"cache_lanes"`
-	ManualReview  []attemptView  `json:"manual_review"`
-	Containers    []containerDTO `json:"containers"`
-	Networks      []resourceDTO  `json:"networks"`
-	Volumes       []resourceDTO  `json:"volumes"`
+	ReleasedTotal int           `json:"released_total"`
+	CacheLanes    []laneDTO     `json:"cache_lanes"`
+	ManualReview  []attemptView `json:"manual_review"`
+	// ManualReviewTotal distinguishes the bounded status summary from the
+	// complete queue. NextCursor continues it through `attempts list`.
+	ManualReviewTotal      int64          `json:"manual_review_total"`
+	ManualReviewNextCursor string         `json:"manual_review_next_cursor,omitempty"`
+	Containers             []containerDTO `json:"containers"`
+	Networks               []resourceDTO  `json:"networks"`
+	Volumes                []resourceDTO  `json:"volumes"`
 	// Discrepancies is the books-versus-daemon comparison across every
 	// observed object kind. It is null only when the daemon could not
 	// be asked, which engine_error then explains: an unreadable daemon
@@ -78,6 +82,12 @@ type statusDoc struct {
 	// run — the alternative, refusing to answer at all, took every other
 	// fact in this document down with one unset environment variable.
 	CapsuleImageError string `json:"capsule_image_error,omitempty"`
+}
+
+type manualReviewSummary struct {
+	Attempts   []attemptView
+	Total      int64
+	NextCursor string
 }
 
 type schedulingDTO struct {
@@ -123,14 +133,13 @@ type pressureDTO struct {
 	MeasuredAt   string `json:"measured_at"`
 }
 
-// bindingDTO reports one configured source of work. It is provider
-// neutral by design: source_binding_key is the provider's own identity,
-// versioned and opaque, and a consumer that needs to parse it is reading
-// the wrong document.
+// bindingDTO reports one configured source of work. It is provider neutral:
+// configured_binding_key is a named, opaque encoding of operator
+// configuration. Provider-issued metadata belongs to its adapter.
 type bindingDTO struct {
-	TargetID         string `json:"target_id"`
-	ProviderKind     string `json:"provider_kind"`
-	SourceBindingKey string `json:"source_binding_key"`
+	TargetID             string `json:"target_id"`
+	ProviderKind         string `json:"provider_kind"`
+	ConfiguredBindingKey string `json:"configured_binding_key"`
 	// LastContactAt is when a provider call for this binding last
 	// succeeded, and LastError what it cannot do now. Both are reported
 	// because neither answers alone: an instance holding no leases is
@@ -182,7 +191,7 @@ type resourceDTO struct {
 	State   string `json:"state,omitempty"`
 }
 
-func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptView, obs daemonObservation, shippedCapsule string) statusDoc {
+func statusDocument(snap store.Snapshot, cfg *config.Config, review manualReviewSummary, obs daemonObservation, shippedCapsule string) statusDoc {
 	topology := "unknown"
 	if cfg != nil {
 		topology = string(cfg.Host.Topology)
@@ -205,7 +214,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		doc.Scheduling = schedulingStatus(cfg, snap.Leases, snap.Queued, shippedCapsule)
 	}
 	if sb := snap.Sandbox; sb != nil {
-		doc.Sandbox = &sandboxDTO{LastPassAt: rfc3339(time.Unix(sb.At, 0)), Error: sb.Error}
+		doc.Sandbox = &sandboxDTO{LastPassAt: rfc3339(sb.At), Error: sb.Error}
 	}
 	if p := snap.Pressure; p != nil {
 		doc.DiskPressure = &pressureDTO{
@@ -213,23 +222,23 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 			FreeBytes:    p.FreeBytes,
 			FreeInodes:   p.FreeInodes,
 			ManagedBytes: p.ManagedBytes,
-			MeasuredAt:   rfc3339(time.Unix(p.MeasuredAt, 0)),
+			MeasuredAt:   rfc3339(p.MeasuredAt),
 		}
 	}
 	for _, b := range snap.Bindings {
 		doc.Bindings = append(doc.Bindings, bindingDTO{
-			TargetID: string(b.TargetID), ProviderKind: b.ProviderKind,
-			SourceBindingKey: string(b.SourceBindingKey),
-			LastContactAt:    rfc3339(b.Contact.LastContact),
-			LastError:        b.Contact.LastError,
-			LastErrorAt:      rfc3339(b.Contact.LastErrorAt),
+			TargetID: string(b.TargetID), ProviderKind: string(b.ProviderKind),
+			ConfiguredBindingKey: string(b.ConfiguredBindingKey),
+			LastContactAt:        rfc3339(b.Contact.LastContact),
+			LastError:            b.Contact.LastError,
+			LastErrorAt:          rfc3339(b.Contact.LastErrorAt),
 		})
 	}
 	for _, l := range snap.Leases {
 		attempt := snap.Attempts[l.ID]
 		project := ""
 		if attempt.TenantKey != "" || attempt.ProjectKey != "" {
-			project = attempt.TenantKey + "/" + attempt.ProjectKey
+			project = string(attempt.TenantKey) + "/" + string(attempt.ProjectKey)
 		}
 		lease := leaseDTO{
 			ID:          string(l.ID),
@@ -244,7 +253,7 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 		}
 		for _, in := range snap.Resources[l.ID] {
 			lease.Resources = append(lease.Resources, resourceDTO{
-				Kind: string(in.Kind), Role: in.Role, Name: in.Name, LeaseID: string(in.LeaseID), State: in.State,
+				Kind: string(in.Kind), Role: string(in.Role), Name: in.Name, LeaseID: string(in.LeaseID), State: string(in.State),
 			})
 		}
 		doc.Leases = append(doc.Leases, lease)
@@ -252,10 +261,12 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	for _, c := range snap.CacheLanes {
 		doc.CacheLanes = append(doc.CacheLanes, laneDTO{
 			ID: c.ID, SourceProjectKey: c.SourceProjectKey, Generation: c.Generation,
-			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(time.Unix(c.LastUsed, 0)),
+			LeasedBy: string(c.LeasedBy), LastUsed: rfc3339(c.LastUsed),
 		})
 	}
-	doc.ManualReview = append(doc.ManualReview, review...)
+	doc.ManualReview = append(doc.ManualReview, review.Attempts...)
+	doc.ManualReviewTotal = review.Total
+	doc.ManualReviewNextCursor = review.NextCursor
 	for _, c := range obs.containers {
 		doc.Containers = append(doc.Containers, containerDTO{
 			Name: c.Name, Role: string(c.Role), LeaseID: string(c.LeaseID), Running: c.Running,
@@ -275,7 +286,8 @@ func statusDocument(snap store.Snapshot, cfg *config.Config, review []attemptVie
 	return doc
 }
 
-func schedulingStatus(cfg *config.Config, leases []store.Lease, queued map[int64]int, shippedCapsule string) *schedulingDTO {
+func schedulingStatus(cfg *config.Config, leases []store.Lease,
+	queued map[assignment.BindingID]int, shippedCapsule string) *schedulingDTO {
 	activeByTier := make(map[assignment.TierID]int, len(cfg.Tiers))
 	active := 0
 	for _, lease := range leases {

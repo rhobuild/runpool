@@ -40,7 +40,7 @@ func fromStatistics(s *scaleset.RunnerScaleSetStatistic) *Statistics {
 // further. A message may be delivered more than once (acknowledgement
 // can fail after processing), so consumers must be idempotent.
 type Message struct {
-	ID         int
+	ID         assignment.SourceDeliveryID
 	Statistics *Statistics
 	// Assigned holds the workloads the broker committed to this scale set
 	// in the message itself. It is a function of the message id alone, so
@@ -76,7 +76,7 @@ type Message struct {
 // capacity is announced the broker assigns directly), but the protocol
 // defines the shape and silently dropping it would strand jobs.
 func translate(msg *scaleset.RunnerScaleSetMessage) (Message, []assignment.WorkloadAssignment) {
-	out := Message{ID: msg.MessageID, Statistics: fromStatistics(msg.Statistics)}
+	out := Message{ID: assignment.SourceDeliveryID(msg.MessageID), Statistics: fromStatistics(msg.Statistics)}
 	var available []assignment.WorkloadAssignment
 	for _, j := range msg.JobAvailableMessages {
 		available = append(available, workload(j.JobMessageBase))
@@ -100,9 +100,9 @@ func translate(msg *scaleset.RunnerScaleSetMessage) (Message, []assignment.Workl
 // request id rides along as observed correlation, never identity.
 func workload(b scaleset.JobMessageBase) assignment.WorkloadAssignment {
 	return assignment.WorkloadAssignment{
-		SourceWorkloadKey: b.JobID,
-		TenantKey:         b.OwnerName,
-		ProjectKey:        b.RepositoryName,
+		SourceWorkloadKey: assignment.SourceWorkloadKey(b.JobID),
+		TenantKey:         assignment.TenantKey(b.OwnerName),
+		ProjectKey:        assignment.ProjectKey(b.RepositoryName),
 		SourceRequestID:   b.RunnerRequestID,
 		SourceRunID:       b.WorkflowRunID,
 		Labels:            b.RequestLabels,
@@ -120,9 +120,9 @@ const resultCanceled = "canceled"
 // could then hit a new one.
 func observation(b scaleset.JobMessageBase, runnerName, result string) assignment.WorkloadLifecycleEvent {
 	return assignment.WorkloadLifecycleEvent{
-		SourceWorkloadKey: b.JobID,
-		TenantKey:         b.OwnerName,
-		ProjectKey:        b.RepositoryName,
+		SourceWorkloadKey: assignment.SourceWorkloadKey(b.JobID),
+		TenantKey:         assignment.TenantKey(b.OwnerName),
+		ProjectKey:        assignment.ProjectKey(b.RepositoryName),
 		RuntimeName:       assignment.RuntimeName(runnerName),
 		Result:            result,
 		Canceled:          result == resultCanceled,

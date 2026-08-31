@@ -142,6 +142,7 @@ func TestObligations(t *testing.T) {
 		closed, gc bool
 		aggressive bool
 	}{
+		{Unknown, true, false, false},
 		{Normal, false, false, false},
 		{High, false, true, false},
 		{SoftEmergency, true, true, true},
@@ -157,12 +158,12 @@ func TestObligations(t *testing.T) {
 func TestLevelStringsRoundTrip(t *testing.T) {
 	// The literals, not String() fed back to ParseLevel: ParseLevel is
 	// defined as the inverse of String, so a round trip can catch a
-	// collision and never a rename -- and these four strings are a
+	// collision and never a rename -- and these five strings are a
 	// durable contract, persisted in the pressure row and published in
 	// the runbook. A controller upgraded across a rename fails ParseLevel
-	// in resume, which returns before the admission gate is restored, and
-	// admits into the emergency it was resuming.
+	// during initialization and leaves admission closed.
 	for want, l := range map[string]Level{
+		"unknown":        Unknown,
 		"normal":         Normal,
 		"high":           High,
 		"soft_emergency": SoftEmergency,

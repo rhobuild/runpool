@@ -70,7 +70,7 @@ func TestTheLockBuildsForEveryPlatformAReleaseCan(t *testing.T) {
 		t.Fatal("the lock declares no platform, so a release builds for nothing it states")
 	}
 	declared := slices.Clone(lock.Platforms)
-	want := slices.Clone(platform.Buildable)
+	want := platform.BuildablePlatforms()
 	slices.Sort(declared)
 	slices.Sort(want)
 	if !slices.Equal(declared, want) {

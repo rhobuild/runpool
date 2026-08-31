@@ -41,7 +41,7 @@ func (q *Queries) GetGitHubBindingMetadata(ctx context.Context, bindingID int64)
 	err := row.Scan(
 		&i.BindingID,
 		&i.Scope,
-		&i.CanonicalUrl,
+		&i.CanonicalURL,
 		&i.RunnerGroup,
 		&i.ScaleSetName,
 		&i.ScaleSetID,
@@ -67,7 +67,7 @@ func (q *Queries) ListGitHubBindingMetadata(ctx context.Context) ([]GithubAction
 		if err := rows.Scan(
 			&i.BindingID,
 			&i.Scope,
-			&i.CanonicalUrl,
+			&i.CanonicalURL,
 			&i.RunnerGroup,
 			&i.ScaleSetName,
 			&i.ScaleSetID,
@@ -155,7 +155,7 @@ ON CONFLICT (binding_id) DO UPDATE SET
 type UpsertGitHubBindingMetadataParams struct {
 	BindingID    int64
 	Scope        string
-	CanonicalUrl string
+	CanonicalURL string
 	RunnerGroup  string
 	ScaleSetName string
 	ScaleSetID   sql.NullInt64
@@ -168,7 +168,7 @@ func (q *Queries) UpsertGitHubBindingMetadata(ctx context.Context, arg UpsertGit
 	_, err := q.db.ExecContext(ctx, upsertGitHubBindingMetadata,
 		arg.BindingID,
 		arg.Scope,
-		arg.CanonicalUrl,
+		arg.CanonicalURL,
 		arg.RunnerGroup,
 		arg.ScaleSetName,
 		arg.ScaleSetID,

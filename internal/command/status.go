@@ -18,6 +18,8 @@ import (
 	"github.com/rhobuild/runpool/internal/assignment"
 )
 
+const statusManualReviewPageSize = 50
+
 // runStatus answers the operability questions the design requires an
 // operator to answer without reading SQLite: what this instance owns,
 // which leases are live, which cache lanes are held, and whether the
@@ -52,17 +54,21 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 
 	// The held-work queue rides along: an operator reading status must
 	// see what is waiting for a person without knowing to ask.
-	var review []attemptView
+	review := manualReviewSummary{}
 	if err := st.Tx(ctx, func(tx *store.Tx) error {
-		attempts, err := tx.ManualReviewAttempts()
+		page, err := tx.ManualReviewAttemptPage(nil, statusManualReviewPageSize)
 		if err != nil {
 			return err
 		}
+		review.Total = page.Total
 		now := time.Now()
-		for _, a := range attempts {
-			review = append(review, viewOf(a, now))
+		for _, a := range page.Attempts {
+			review.Attempts = append(review.Attempts, viewOf(a, now))
 		}
-		return nil
+		if page.Next != nil {
+			review.NextCursor, err = encodeAttemptCursor(attemptListManualReview, *page.Next)
+		}
+		return err
 	}); err != nil {
 		return err
 	}
@@ -143,18 +149,23 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 		// nothing has been told the wrong thing.
 		if sb.Error != "" {
 			fmt.Fprintf(streams.Out, "\negress policy: every gateway closed to all egress %s (%s)\n",
-				ago(time.Now(), time.Unix(sb.At, 0)), sb.Error)
+				ago(time.Now(), sb.At), sb.Error)
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what closed them and what to do")
 		} else {
 			fmt.Fprintf(streams.Out, "\negress policy: in force, rechecked %s\n",
-				ago(time.Now(), time.Unix(sb.At, 0)))
+				ago(time.Now(), sb.At))
 		}
 	}
 
 	if p := snap.Pressure; p != nil {
-		fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
-			p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
-			ago(time.Now(), time.Unix(p.MeasuredAt, 0)))
+		if p.Level == "unknown" {
+			fmt.Fprintf(streams.Out, "\ndisk pressure: unknown (measurement unavailable, checked %s)\n",
+				ago(time.Now(), p.MeasuredAt))
+		} else {
+			fmt.Fprintf(streams.Out, "\ndisk pressure: %s (free %s, managed cache %s, measured %s)\n",
+				p.Level, config.ByteSize(p.FreeBytes), config.ByteSize(p.ManagedBytes),
+				ago(time.Now(), p.MeasuredAt))
+		}
 		if p.Level != "normal" {
 			fmt.Fprintln(streams.Out, "  see docs/runbook.md for what this level means and what to do")
 		}
@@ -164,7 +175,7 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	now := time.Now()
 	for _, b := range snap.Bindings {
 		fmt.Fprintf(streams.Out, "  %-14s %-16s %s\n",
-			b.TargetID, b.ProviderKind, b.SourceBindingKey)
+			b.TargetID, b.ProviderKind, b.ConfiguredBindingKey)
 		fmt.Fprintf(streams.Out, "  %-14s %s\n", "", providerReach(b.Contact, now))
 	}
 
@@ -179,12 +190,17 @@ func runStatus(streams IO, asJSON bool, buildCapsule string) error {
 	fmt.Fprintln(streams.Out)
 	renderLeases(streams.Out, live, snap)
 
-	if len(review) > 0 {
-		fmt.Fprintf(streams.Out, "\nmanual review (%d) — resolve with `runpool attempts resolve`\n", len(review))
-		for _, v := range review {
+	if review.Total > 0 {
+		fmt.Fprintf(streams.Out, "\nmanual review (%d total; showing %d) — resolve with `runpool attempts resolve`\n",
+			review.Total, len(review.Attempts))
+		for _, v := range review.Attempts {
 			fmt.Fprintf(streams.Out, "  %-22s %-28s %-24s held %s for %s\n",
 				v.ID, v.Workload, v.Project, v.ReviewReason,
 				(time.Duration(v.AgeSeconds) * time.Second).String())
+		}
+		if review.NextCursor != "" {
+			fmt.Fprintf(streams.Out, "  continue: runpool attempts list --state manual-review --cursor %s\n",
+				review.NextCursor)
 		}
 	}
 
@@ -273,7 +289,7 @@ func renderLeases(w io.Writer, live []store.Lease, snap store.Snapshot) {
 		resources := snap.Resources[l.ID]
 		project := ""
 		if a, ok := snap.Attempts[l.ID]; ok {
-			project = a.TenantKey + "/" + a.ProjectKey
+			project = string(a.TenantKey) + "/" + string(a.ProjectKey)
 		}
 		fmt.Fprintf(w, "  %-16s %-18s %-28s %d resources\n", l.ID, l.State, project, len(resources))
 		if l.State != store.LeaseQuarantined {

@@ -88,7 +88,7 @@ func TestExecutionIsRecordedAgainstTheWorkloadThatRan(t *testing.T) {
 
 	// The provider reports the requeued workload running, on the runner
 	// minted for the lapsed one.
-	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
+	h.srv.supervisor.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 901,
 		Started: []assignment.WorkloadLifecycleEvent{{
 			SourceWorkloadKey: "job-requeued",
@@ -117,7 +117,7 @@ func TestAnObservationWithNoAttemptFallsBackToTheRunner(t *testing.T) {
 	lease, attemptID := leaseFor(t, h, "job-known")
 	nameRuntime(t, h, lease, "runpool-known")
 
-	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
+	h.srv.supervisor.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 902,
 		Started: []assignment.WorkloadLifecycleEvent{{
 			SourceWorkloadKey: "job-never-seen",
@@ -172,7 +172,7 @@ func TestALateObservationStaysWithTheAttemptThatRanIt(t *testing.T) {
 	}
 
 	// The delayed report of the first run.
-	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
+	h.srv.supervisor.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 902,
 		Completed: []assignment.WorkloadLifecycleEvent{{
 			SourceWorkloadKey: "job-requeued",
@@ -221,7 +221,7 @@ func TestALateCancellationDoesNotCloseTheSuccessor(t *testing.T) {
 	}
 
 	// The provider cancels the run that preceded the requeue.
-	h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
+	h.srv.supervisor.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 		ID: 903,
 		Completed: []assignment.WorkloadLifecycleEvent{{
 			SourceWorkloadKey: "job-requeued",
@@ -260,7 +260,7 @@ func TestASecondServingsHintsAreNotSwallowed(t *testing.T) {
 	nameRuntime(t, h, firstLease, "runpool-first")
 
 	hint := func(runtime assignment.RuntimeName) {
-		h.srv.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
+		h.srv.supervisor.recordLifecycleEvents(t.Context(), h.bind, &githubactions.Message{
 			ID: 910,
 			Started: []assignment.WorkloadLifecycleEvent{{
 				SourceWorkloadKey: "job-retried",

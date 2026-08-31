@@ -438,3 +438,12 @@ func TestTheRefusalsAValidatorOwesAreItsOwn(t *testing.T) {
 			"unreviewed reference as reviewed")
 	}
 }
+
+func TestBuildablePlatformsReturnsASnapshot(t *testing.T) {
+	platforms := BuildablePlatforms()
+	want := platforms[0]
+	platforms[0] = "caller/mutation"
+	if got := BuildablePlatforms()[0]; got != want {
+		t.Errorf("BuildablePlatforms()[0] = %q after caller mutation; want %q", got, want)
+	}
+}

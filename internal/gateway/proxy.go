@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -48,7 +49,7 @@ const (
 	MaxUpstreamConns = 128
 )
 
-// AllowedConnectPorts is the explicit egress port set, applied to every
+// allowedConnectPorts is the explicit egress port set, applied to every
 // destination the relay dials — CONNECT tunnels and absolute-URI plain
 // HTTP alike. The name kept its CONNECT origin; the rule did not.
 //
@@ -60,10 +61,13 @@ const (
 // are the ports CI actually needs, and anything else is refused with a
 // reason. The relay does not inspect what flows inside a tunnel and
 // does not claim to.
-var AllowedConnectPorts = map[int]string{
+var allowedConnectPorts = map[int]string{
 	443: "HTTPS",
 	80:  "HTTP",
 }
+
+// AllowedConnectPorts returns the relay's explicit destination-port policy.
+func AllowedConnectPorts() map[int]string { return maps.Clone(allowedConnectPorts) }
 
 // hopByHop are the headers a proxy must not forward. RFC 9110 §7.6.1:
 // they describe the single-hop connection, not the message, and passing
@@ -695,7 +699,7 @@ func (r *Relay) dial(ctx context.Context, host string, port int) (net.Conn, erro
 	// CONNECT and absolute-URI requests reach the network through this one
 	// function. Guarding only the tunnel would leave `GET http://host:9200/`
 	// as an unpoliced path to the same destination and port.
-	if _, ok := AllowedConnectPorts[port]; !ok {
+	if _, ok := allowedConnectPorts[port]; !ok {
 		r.Log.Warn("egress refused: port outside the allowed set", "host", host, "port", port)
 		return nil, fmt.Errorf("%w: port %d is not allowed", ErrDenied, port)
 	}

@@ -46,7 +46,7 @@ func TestFailedBeforeAnyRunnerRequeuesItsAttempt(t *testing.T) {
 	// is back in the queue left the second serving untested, and it could
 	// not happen: the attempt already held a lease, and one per attempt
 	// was all the schema allowed.
-	h.srv.scheduleReadyAttempts(t.Context(), h.bind)
+	h.srv.scheduler.schedule(t.Context(), h.bind)
 	if got := len(h.ready()); got != 0 {
 		t.Fatalf("%d attempts still ready after a scheduling pass; the requeued "+
 			"attempt was not served again, so it waits at the head of a queue "+
@@ -106,7 +106,7 @@ func TestReassignmentOfASettledJobIsServable(t *testing.T) {
 	lease, attemptID := leaseFor(t, h, "job-reassigned")
 	driveLeaseTo(t, h, lease.ID, store.LeaseCleaning)
 	h.recordEvidence(lease.ID, store.EvidenceExitObserved)
-	if err := h.srv.leases.Finalize(t.Context(), lease.ID, assignment.NoObservation); err != nil {
+	if err := h.srv.executor.leases.Finalize(t.Context(), lease.ID, assignment.NoObservation); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(h.ready()); got != 0 {
@@ -241,7 +241,7 @@ func TestAttemptStrandedOnAReleasedLeaseIsRecovered(t *testing.T) {
 	// ReadyAttempts, and retried by nothing -- the sweep that pulls it
 	// back in by the attempt is the only thing that ever will, and a
 	// build that deleted the sweep kept every other test green.
-	if err := h.srv.reconcile(t.Context()); err != nil {
+	if err := h.srv.reconciler.reconcile(t.Context()); err != nil {
 		t.Fatalf("startup reconciliation: %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestRedeliveryToleratesADifferentAcquisition(t *testing.T) {
 		Assigned: []assignment.WorkloadAssignment{demand("job-assigned", "app", 80)},
 		Acquired: []assignment.WorkloadAssignment{demand("job-acquired-a", "app", 81)},
 	}
-	if _, err := h.srv.persistDelivery(t.Context(), h.bind, first); err != nil {
+	if _, err := h.srv.supervisor.persistDelivery(t.Context(), h.bind, first); err != nil {
 		t.Fatalf("first delivery: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func TestRedeliveryToleratesADifferentAcquisition(t *testing.T) {
 		Assigned: []assignment.WorkloadAssignment{demand("job-assigned", "app", 80)},
 		Acquired: []assignment.WorkloadAssignment{demand("job-acquired-b", "app", 82)},
 	}
-	if _, err := h.srv.persistDelivery(t.Context(), h.bind, second); err != nil {
+	if _, err := h.srv.supervisor.persistDelivery(t.Context(), h.bind, second); err != nil {
 		t.Fatalf("a redelivery with a different acquisition wedged the binding: %v", err)
 	}
 
@@ -329,7 +329,7 @@ func TestRedeliveryToleratesADifferentAcquisition(t *testing.T) {
 		ID:       7,
 		Assigned: []assignment.WorkloadAssignment{demand("job-different", "app", 99)},
 	}
-	if _, err := h.srv.persistDelivery(t.Context(), h.bind, drifted); err == nil {
+	if _, err := h.srv.supervisor.persistDelivery(t.Context(), h.bind, drifted); err == nil {
 		t.Error("a changed assigned set was accepted; contract drift is no longer detected")
 	}
 }
@@ -342,7 +342,7 @@ func TestRedeliveryToleratesADifferentAcquisition(t *testing.T) {
 // serving, and burning a capsule on, a job the provider already cancelled.
 func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	// One lane, already busy: the loop schedules before it receives, and
 	// a free lane would lease the attempt before the hint could reach it.
@@ -358,15 +358,15 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 		ID:       41,
 		Assigned: []assignment.WorkloadAssignment{demand("job-cancelled-upstream", "app", 41)},
 	}
-	delivery, err := h.srv.persistDelivery(t.Context(), h.bind, msg)
+	delivery, err := h.srv.supervisor.persistDelivery(t.Context(), h.bind, msg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.inStore(func(tx *store.Tx) error {
-		if _, err := tx.AckRequested(assignment.DeliveryID(delivery)); err != nil {
+		if _, err := tx.AckRequested(delivery); err != nil {
 			return err
 		}
-		return tx.AckConfirmed(assignment.DeliveryID(delivery))
+		return tx.AckConfirmed(delivery)
 	})
 
 	// The broker sends it again, now carrying the cancellation. One full
@@ -383,7 +383,7 @@ func TestAWedgedRedeliveryStillLandsItsHints(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-redelivery.drained:
@@ -442,10 +442,10 @@ func (s *replaySession) Receive(ctx context.Context) (*githubactions.Message, er
 	return nil, ctx.Err()
 }
 
-func (s *replaySession) Acknowledge(context.Context, int) error { return nil }
-func (s *replaySession) SetCapacity(int)                        {}
-func (s *replaySession) Initial() *githubactions.Statistics     { return nil }
-func (s *replaySession) Close(context.Context) error            { return nil }
+func (s *replaySession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (s *replaySession) SetCapacity(int)                                                {}
+func (s *replaySession) Initial() *githubactions.Statistics                             { return nil }
+func (s *replaySession) Close(context.Context) error                                    { return nil }
 
 // cancellingSession hands over one message and cancels the loop from
 // inside the acknowledgement — the shape of a shutdown that lands
@@ -471,7 +471,7 @@ func (s *cancellingSession) Receive(ctx context.Context) (*githubactions.Message
 	return nil, ctx.Err()
 }
 
-func (s *cancellingSession) Acknowledge(context.Context, int) error {
+func (s *cancellingSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
 	s.cancel()
 	return nil
 }
@@ -512,7 +512,7 @@ func TestACancellationIsDurableBeforeTheMessageIsAcknowledged(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-done:
@@ -575,7 +575,7 @@ func TestAnUnrecordedLifecycleEventIsReported(t *testing.T) {
 			Result:            "canceled", Canceled: true,
 		}},
 	}
-	if err := h.srv.recordLifecycleEvents(ctx, h.bind, msg); err == nil {
+	if err := h.srv.supervisor.recordLifecycleEvents(ctx, h.bind, msg); err == nil {
 		t.Fatal("a lifecycle event that could not be recorded reported success; " +
 			"the message that carried it would be acknowledged and never sent again")
 	}
@@ -597,7 +597,7 @@ func TestALostLeaseClaimReturnsItsCredit(t *testing.T) {
 	// so the compare-and-swap refuses.
 	var raced store.Attempt
 	h.inStore(func(tx *store.Tx) error {
-		ready, err := tx.ReadyAttempts(h.bind.bindingID)
+		ready, err := tx.AllReadyAttempts(h.bind.bindingID)
 		if err != nil {
 			return err
 		}
@@ -606,7 +606,7 @@ func TestALostLeaseClaimReturnsItsCredit(t *testing.T) {
 	})
 	leaseFor(t, h, "job-raced")
 
-	if !h.srv.admit(t.Context(), h.bind, raced) {
+	if !h.srv.scheduler.admit(t.Context(), h.bind, raced) {
 		t.Fatal("a lost claim reported admission full; the pass would stop instead of continuing")
 	}
 	if got := h.srv.alloc.Active(h.bind.key); got != 0 {
@@ -631,14 +631,14 @@ func TestAFailedAcknowledgementStaysRetryable(t *testing.T) {
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
 		var err error
 		delivery, err = tx.RecordDelivery(h.bind.bindingID,
-			assignment.DeliveryKey(h.bind.scaleSetID, 701), [32]byte{}, nil)
+			assignment.NewDeliveryKey(assignment.SourceQueueID(h.bind.scaleSetID), 701), nil, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	h.bind.session = &stubSession{ackErr: errors.New("broker unreachable")}
 
-	if h.srv.acknowledgeDelivery(t.Context(), h.bind, delivery, 701) {
+	if h.srv.supervisor.acknowledgeDelivery(t.Context(), h.bind, delivery, 701) {
 		t.Fatal("a failed acknowledgement reported the cursor advanced")
 	}
 

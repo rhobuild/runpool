@@ -17,7 +17,8 @@ import (
 func seedLease(t *testing.T, s *Store, key string) Lease {
 	t.Helper()
 	binding := seedBinding(t, s)
-	attempt := seedAttempt(t, s, binding, "msg-"+key, assignment.SourceWorkloadKey("job-"+key))
+	attempt := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+key),
+		assignment.SourceWorkloadKey("job-"+key))
 	var lease Lease
 	inTx(t, s, func(tx *Tx) error {
 		var err error
@@ -289,7 +290,7 @@ func TestTxRollsBackOnError(t *testing.T) {
 			t.Errorf("rolled-back lease persisted: %+v", leases)
 		}
 		// The claim rolled back with it, so the work is servable again.
-		ready, err := tx.ReadyAttempts(assignment.BindingID(binding))
+		ready, err := tx.AllReadyAttempts(assignment.BindingID(binding))
 		if err != nil {
 			return err
 		}
@@ -313,10 +314,10 @@ func TestResourceIntentLifecycleAndReleaseRule(t *testing.T) {
 	var netIntent, dindIntent assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if netIntent, err = tx.PlanResource(lease.ID, ResourceNetwork, "capsule-net", "runpool-net-x"); err != nil {
+		if netIntent, err = tx.PlanResource(lease.ID, ResourceNetwork, ResourceRoleCapsuleNetwork, "runpool-net-x"); err != nil {
 			return err
 		}
-		dindIntent, err = tx.PlanResource(lease.ID, ResourceContainer, "dind", "runpool-dind-x")
+		dindIntent, err = tx.PlanResource(lease.ID, ResourceContainer, ResourceRoleCapsule, "runpool-dind-x")
 		return err
 	})
 
@@ -415,10 +416,10 @@ func TestPendingRemovalsHonourBackoff(t *testing.T) {
 	var wedged, healthy assignment.ResourceIntentID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if wedged, err = tx.PlanResource(lease.ID, ResourceVolume, "work", "runpool-work-x"); err != nil {
+		if wedged, err = tx.PlanResource(lease.ID, ResourceVolume, ResourceRoleDindData, "runpool-work-x"); err != nil {
 			return err
 		}
-		if healthy, err = tx.PlanResource(lease.ID, ResourceVolume, "run", "runpool-run-x"); err != nil {
+		if healthy, err = tx.PlanResource(lease.ID, ResourceVolume, ResourceRoleDindData, "runpool-run-x"); err != nil {
 			return err
 		}
 		return tx.MarkResourceCleanup(lease.ID)
@@ -539,7 +540,7 @@ func TestPendingMigrationBacksUpFirst(t *testing.T) {
 	}
 }
 
-// TestLeaseStateListsCoverTheMachine. AllLeaseStates is what reporting,
+// TestLeaseStateListsCoverTheMachine. LeaseStates is what reporting,
 // the reconciler's working set and the resource sweep all enumerate, and
 // it is written by hand — so a state the machine can reach but the list
 // omits is invisible to every one of them, and a lease in it is treated
@@ -554,18 +555,18 @@ func TestLeaseStateListsCoverTheMachine(t *testing.T) {
 		}
 	}
 	listed := map[LeaseState]bool{}
-	for _, s := range AllLeaseStates {
+	for _, s := range LeaseStates() {
 		listed[s] = true
 	}
 	for s := range inMachine {
 		if !listed[s] {
-			t.Errorf("the machine reaches %s but AllLeaseStates omits it; every report and "+
+			t.Errorf("the machine reaches %s but LeaseStates omits it; every report and "+
 				"sweep enumerates that list, so leases in that state are invisible to all of them", s)
 		}
 	}
 	for s := range listed {
 		if !inMachine[s] {
-			t.Errorf("AllLeaseStates names %s, which no transition reaches", s)
+			t.Errorf("LeaseStates names %s, which no transition reaches", s)
 		}
 	}
 
@@ -573,16 +574,42 @@ func TestLeaseStateListsCoverTheMachine(t *testing.T) {
 	// to be exhaustive, so both halves are checked: nothing terminal in
 	// it, and nothing live left out of it.
 	live := map[LeaseState]bool{}
-	for _, s := range LiveLeaseStates {
+	for _, s := range LiveLeaseStates() {
 		if s.Terminal() {
 			t.Errorf("LiveLeaseStates carries the terminal state %s", s)
 		}
 		live[s] = true
 	}
-	for _, s := range AllLeaseStates {
+	for _, s := range LeaseStates() {
 		if !s.Terminal() && !live[s] {
 			t.Errorf("%s is live but missing from LiveLeaseStates; a snapshot without it makes "+
 				"cleanup delete the resources of a capsule that is running", s)
 		}
 	}
+}
+
+func assertVocabularySnapshot[T comparable](t *testing.T, values func() []T) {
+	t.Helper()
+	first := values()
+	if len(first) == 0 {
+		t.Fatal("vocabulary is empty")
+	}
+	want := first[0]
+	var changed T
+	first[0] = changed
+	if got := values()[0]; got != want {
+		t.Errorf("caller mutation changed the vocabulary: got %v, want %v", got, want)
+	}
+}
+
+func TestVocabularySnapshotsCannotMutateTheStoreDomain(t *testing.T) {
+	assertVocabularySnapshot(t, LeaseStates)
+	assertVocabularySnapshot(t, LiveLeaseStates)
+	assertVocabularySnapshot(t, ResourceKinds)
+	assertVocabularySnapshot(t, ResourceRoles)
+	assertVocabularySnapshot(t, ResourceStates)
+	assertVocabularySnapshot(t, AttemptStates)
+	assertVocabularySnapshot(t, EvidenceStates)
+	assertVocabularySnapshot(t, ReviewReasons)
+	assertVocabularySnapshot(t, EventKinds)
 }

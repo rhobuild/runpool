@@ -42,8 +42,8 @@ func TestTheBaselineIsTheBytesEveryDatabaseRecorded(t *testing.T) {
 // database this build cannot account for because a migration was edited
 // rather than added.
 //
-// PRAGMA user_version counts migrations, so editing the single reviewed
-// baseline in place leaves an older database reporting the current
+// PRAGMA user_version counts migrations, so editing any reviewed
+// migration in place leaves an older database reporting the current
 // version while holding different tables. Both guards then passed it and
 // the first query failed with the raw SQLite error they exist to replace.
 func TestSchemaIdentifiedByContentsNotCount(t *testing.T) {
@@ -51,19 +51,11 @@ func TestSchemaIdentifiedByContentsNotCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 1 {
-		t.Logf("note: %d migrations; this test is about a schema whose version cannot move", len(migrations))
-	}
-
-	// A database at the current version, applied from a different
-	// baseline: the same shape an in-place edit leaves behind.
+	// A database at the current version, applied from migration bytes this
+	// build does not carry: the same shape an in-place edit leaves behind.
 	dir := t.TempDir()
 	seed := migrations[len(migrations)-1]
-	seed.up = strings.Replace(migrations[len(migrations)-1].up,
-		"CREATE TABLE meta (", "CREATE TABLE unrelated (x INTEGER);\nCREATE TABLE meta (", 1)
-	if seed.up == migrations[len(migrations)-1].up {
-		t.Fatal("could not build a differing baseline; the anchor moved")
-	}
+	seed.up += "\n-- edited after publication\n"
 	older := append(append([]migration{}, migrations[:len(migrations)-1]...), seed)
 
 	s := openRaw(t, dir)
@@ -169,8 +161,7 @@ func TestAnEditedMigrationBelowAPendingOneIsRefused(t *testing.T) {
 	}
 	dir := t.TempDir()
 	seed := migrations[len(migrations)-1]
-	seed.up = strings.Replace(seed.up,
-		"CREATE TABLE meta (", "CREATE TABLE unrelated (x INTEGER);\nCREATE TABLE meta (", 1)
+	seed.up += "\n-- edited after publication\n"
 	older := append(append([]migration{}, migrations[:len(migrations)-1]...), seed)
 
 	s := openRaw(t, dir)

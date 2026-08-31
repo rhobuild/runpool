@@ -88,7 +88,7 @@ policy remain necessary in either topology.
 | Cross-repository cache contamination | Lanes are daemon-side named volumes, exclusive per lease, named by opaque ids, reused only for the same repository and generation | Live lane contract: marker persists for the same lane, another generation is blind |
 | Runpool deletes only what it owns | Instance- and lease-scoped ownership labels on every created object; creation recovery and destructive intent cleanup re-inspect ownership before acting; no daemon-wide prune | Foreign-resource contracts pass live; the controller E2E asserts unrelated container and network sentinels by exact id, and the volume by name |
 | A crashed controller leaves nothing | Adoption of running capsules, sweep of orphans, singleton flock | Live SIGKILL mid-capsule, successor adopted and cleaned |
-| The host cannot be starved by a job | One envelope per lease, split between the capsule and its egress gateway and placed under one parent cgroup: the capsule's aggregate covers runner, daemon and every inner container; the gateway holds the rest of the same tier, because every connection a job opens is work it performs. The doctor refuses a configuration whose full tiers plus reserve exceed the host, and the validator refuses a tier too small to split | Kernel-proven on the reference host: inner OOM charged to the capsule; both containers report one parent cgroup and their limits sum to the tier; a fork storm in the gateway stops at its own ceiling |
+| The host cannot be starved by a job | One envelope per lease, split between the capsule and its egress gateway and placed under one parent cgroup: the capsule's aggregate covers runner, daemon and every inner container; the gateway holds the rest of the same tier, because every connection a job opens is work it performs. The doctor refuses a configuration whose full tiers plus reserve exceed the host, and the validator refuses a tier too small to split | Kernel-proven on the reference host: actual pages cross `memory.max` and produce non-zero swap; an inner OOM increments the capsule's hierarchical `oom_kill`; both containers report one parent cgroup and their limits sum to the tier; a fork storm in the gateway stops at its own ceiling |
 | The host cannot be filled | Disk monitor probes the daemon's filesystem from inside it; admission closes at the soft floor, fails closed at the hard floor, and GC evicts only free lanes | Pressure transitions table-tested; disk-full behaviour live for both SQLite and containers |
 | Egress confinement | Under `public-internet-only`, the host kernel drops anything the capsule addresses beyond its bridge; the gateway relays DNS and HTTP(S) under default-deny, resolving before dialing (rebinding defence) | Live bypass suite: no direct route anywhere, denied addresses refused by name and by address, gateway loss removes egress |
 | A credential file readable by another account on the host | The token or App private key is refused if group or other can read it, before it is used; `shared-daemon` makes another uid on this host a party, not a hypothetical | Table-tested: every permissive mode refused, `0600` and `0400` accepted |
@@ -220,6 +220,9 @@ These are consequences of the design, not oversights:
   release workflow, from the evidence its gates emit: the live and
   end-to-end suites on the reference host, the upstream provider contracts
   against real fixtures, and the artifact checksums.
+  Each contributing suite emits a common manifest with its expected and
+  executed cases, result, interval, build identity and execution environment;
+  logs are retained for diagnosis but are not accepted as proof by themselves.
 
 ## What an auditor should attack first
 

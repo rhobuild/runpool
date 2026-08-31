@@ -106,6 +106,28 @@ func testCtx(t *testing.T) context.Context {
 	return ctx
 }
 
+func openContractSession(
+	t *testing.T,
+	ctx context.Context,
+	client *scaleset.Client,
+	setID int,
+	owner string,
+) *scaleset.MessageSessionClient {
+	t.Helper()
+	session, err := client.MessageSessionClient(ctx, setID, owner)
+	if err != nil {
+		t.Fatalf("open message session for scale set %d: %v", setID, err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := session.Close(closeCtx); err != nil {
+			t.Errorf("close message session for scale set %d: %v", setID, err)
+		}
+	})
+	return session
+}
+
 // newWrapper builds the production adapter the org/repo tests exercise,
 // so internal/githubactions is qualified by the same live suite
 // that pins the upstream contract.
@@ -213,22 +235,6 @@ func adoption(t *testing.T) *intentRecorder {
 		}
 	})
 	return r
-}
-
-// deleteNow removes a scale set the moment a test is done with it,
-// rather than leaving it to the cleanup. One test needs that: it holds a
-// label real workflows ask for, so its window is the risk.
-//
-// The removal is recorded so the shared cleanup can tell a set this run
-// deleted from one that went missing.
-func deleteNow(t *testing.T, c *scaleset.Client, set *scaleset.RunnerScaleSet) {
-	t.Helper()
-	earlyMu.Lock()
-	early[set.ID] = true
-	earlyMu.Unlock()
-	if err := c.DeleteRunnerScaleSet(testCtx(t), set.ID); err != nil {
-		t.Errorf("delete scale set %d: %v", set.ID, err)
-	}
 }
 
 var (

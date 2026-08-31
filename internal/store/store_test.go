@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -57,12 +56,12 @@ func seedBinding(t *testing.T, s *Store) assignment.BindingID {
 // ready attempt it produced — the starting point for anything that needs
 // work to lease.
 func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
-	deliveryKey string, workloadKey assignment.SourceWorkloadKey) assignment.AttemptID {
+	deliveryKey assignment.DeliveryKey, workloadKey assignment.SourceWorkloadKey) assignment.AttemptID {
 	t.Helper()
 	var id string
 	inTx(t, s, func(tx *Tx) error {
-		if _, err := tx.RecordDelivery(binding, deliveryKey, fingerprint(deliveryKey),
-			[]WorkloadRow{{SourceWorkloadKey: string(workloadKey), TenantKey: "acme", ProjectKey: "app"}}); err != nil {
+		if _, err := tx.RecordDelivery(binding, deliveryKey, payload(string(deliveryKey)),
+			[]WorkloadRow{{SourceWorkloadKey: workloadKey, TenantKey: "acme", ProjectKey: "app"}}); err != nil {
 			return err
 		}
 		attempt, err := tx.q.GetOpenAttemptByWorkload(tx.ctx, sqlitedb.GetOpenAttemptByWorkloadParams{
@@ -74,7 +73,9 @@ func seedAttempt(t *testing.T, s *Store, binding assignment.BindingID,
 	return assignment.AttemptID(id)
 }
 
-func fingerprint(s string) [32]byte { return sha256.Sum256([]byte(s)) }
+func payload(key string) []assignment.WorkloadAssignment {
+	return []assignment.WorkloadAssignment{{SourceWorkloadKey: assignment.SourceWorkloadKey(key)}}
+}
 
 // A redelivery repeats the delivery byte for byte, so it lands on the
 // same delivery row and creates no second attempt. The same natural key
@@ -88,13 +89,24 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 	var first assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		first, err = tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
+		first, err = tx.RecordDelivery(binding, "msg-7", payload("payload-a"), workloads)
+		if err != nil {
+			return err
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: int64(binding), SourceDeliveryKey: "msg-7",
+		})
+		currentFormat, _ := assignment.CurrentDeliveryFingerprint(payload("payload-a"))
+		if err == nil && delivery.PayloadFingerprintFormat != string(currentFormat) {
+			t.Errorf("new delivery fingerprint format = %q; want %q",
+				delivery.PayloadFingerprintFormat, currentFormat)
+		}
 		return err
 	})
 
 	// Exact redelivery: same row back, still exactly one attempt.
 	inTx(t, s, func(tx *Tx) error {
-		again, err := tx.RecordDelivery(binding, "msg-7", fingerprint("payload-a"), workloads)
+		again, err := tx.RecordDelivery(binding, "msg-7", payload("payload-a"), workloads)
 		if err != nil {
 			return err
 		}
@@ -113,12 +125,188 @@ func TestRedeliveryIsIdempotentAndDriftFailsClosed(t *testing.T) {
 
 	// Drift: same key, different payload.
 	err := s.Tx(t.Context(), func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-7", fingerprint("payload-B"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-7", payload("payload-B"), workloads)
 		return err
 	})
 	if !errors.Is(err, ErrContractDrift) {
 		t.Fatalf("drifted redelivery returned %v; want ErrContractDrift", err)
 	}
+}
+
+func TestFingerprintEncoderRegistryMatchesTheSchema(t *testing.T) {
+	s := newStore(t)
+	binding := seedBinding(t, s)
+	formats := assignment.DeliveryFingerprintFormats()
+	if len(formats) == 0 {
+		t.Fatal("the delivery fingerprint registry is empty")
+	}
+	inTx(t, s, func(tx *Tx) error {
+		for _, format := range formats {
+			if _, err := tx.tx.Exec(`
+				INSERT INTO broker_deliveries (
+					binding_id, source_delivery_key, payload_sha256,
+					payload_fingerprint_format
+				) VALUES (?, ?, ?, ?)`,
+				binding, "format-"+string(format), make([]byte, 32), format); err != nil {
+				t.Errorf("schema rejects registered fingerprint format %q: %v", format, err)
+			}
+		}
+		const unsupported = assignment.DeliveryFingerprintFormat("unregistered-sha256")
+		if _, err := tx.tx.Exec(`
+			INSERT INTO broker_deliveries (
+				binding_id, source_delivery_key, payload_sha256,
+				payload_fingerprint_format
+			) VALUES (?, ?, ?, ?)`,
+			binding, "unsupported-format", make([]byte, 32), unsupported); err == nil {
+			t.Errorf("schema accepted unregistered fingerprint format %q", unsupported)
+		}
+		return nil
+	})
+}
+
+// TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint
+// proves the compatibility reason for persisting an encoding name. v1.0.0
+// and v1.1.0 shipped the same delimiter encoding; after migration, their rows
+// name that encoder while new rows use the current one.
+func TestARedeliveryWrittenByThePublishedSchemaUsesItsOriginalFingerprint(t *testing.T) {
+	const publishedFingerprintFormat = assignment.FingerprintFormatDelimiterSeparatedSHA256
+
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 2 {
+		t.Fatal("the fingerprint migration is absent")
+	}
+
+	dir := t.TempDir()
+	old := openRaw(t, dir)
+	if err := old.applyScript(migrations[0].up, 1, schemaFingerprint(migrations[:1])); err != nil {
+		t.Fatal(err)
+	}
+	workload := assignment.WorkloadAssignment{
+		SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "app",
+		SourceRequestID: 7, SourceRunID: 41, Labels: []string{"self-hosted", "linux"},
+	}
+	assigned := []assignment.WorkloadAssignment{workload}
+	published, ok := assignment.DeliveryFingerprintForFormat(assigned, publishedFingerprintFormat)
+	if !ok {
+		t.Fatal("this build cannot compute the published fingerprint format")
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO provider_bindings (id, target_id, provider_kind, source_binding_key)
+		VALUES (1, 'app', 'github_actions', 'published-binding')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO broker_deliveries
+			(id, binding_id, source_delivery_key, payload_sha256)
+		VALUES (1, 1, 'msg-old', ?)`, published[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dir, DefaultRetryBudget)
+	if err != nil {
+		t.Fatalf("upgrade published schema: %v", err)
+	}
+	defer upgraded.Close()
+	row := WorkloadRow{
+		SourceWorkloadKey: workload.SourceWorkloadKey,
+		TenantKey:         workload.TenantKey,
+		ProjectKey:        workload.ProjectKey,
+	}
+	inTx(t, upgraded, func(tx *Tx) error {
+		id, err := tx.RecordDelivery(1, "msg-old", assigned, []WorkloadRow{row})
+		if err != nil {
+			return err
+		}
+		if id != 1 {
+			t.Errorf("redelivery returned delivery %d; want historical row 1", id)
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 1, SourceDeliveryKey: "msg-old",
+		})
+		if err == nil && delivery.PayloadFingerprintFormat != string(publishedFingerprintFormat) {
+			t.Errorf("historical row uses fingerprint format %q; want %q",
+				delivery.PayloadFingerprintFormat, publishedFingerprintFormat)
+		}
+		return err
+	})
+}
+
+// TestSemanticFormatMigrationPreservesPublishedDurableIdentity proves that
+// replacing ordinal tags is a representation migration, not a
+// delete-and-reinsert. The row ids and fingerprint bytes from the published
+// schema remain stable while every durable selector is translated to the
+// format name this build understands.
+func TestSemanticFormatMigrationPreservesPublishedDurableIdentity(t *testing.T) {
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 2 {
+		t.Fatal("the semantic-format migration is absent")
+	}
+
+	dir := t.TempDir()
+	old := openRaw(t, dir)
+	if err := old.applyMigrations(migrations[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`
+		INSERT INTO provider_bindings
+			(id, target_id, provider_kind, source_binding_key)
+		VALUES (17, 'app', 'github_actions', 'v2|app|default|runpool-standard')`); err != nil {
+		t.Fatal(err)
+	}
+	wantFingerprint := make([]byte, 32)
+	wantFingerprint[0] = 0x5a
+	if _, err := old.db.Exec(`
+		INSERT INTO broker_deliveries
+			(id, binding_id, source_delivery_key, payload_sha256)
+		VALUES (23, 17, 'v2|71|41', ?)`, wantFingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(dir, DefaultRetryBudget)
+	if err != nil {
+		t.Fatalf("upgrade published schema: %v", err)
+	}
+	defer upgraded.Close()
+	inTx(t, upgraded, func(tx *Tx) error {
+		bindings, err := tx.Bindings()
+		if err != nil {
+			return err
+		}
+		if len(bindings) != 1 || bindings[0].ID != 17 ||
+			bindings[0].ConfiguredBindingKey != "target-runner-group-scale-set|app|default|runpool-standard" {
+			t.Errorf("migrated binding = %+v; want row 17 with its semantic key", bindings)
+		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 17, SourceDeliveryKey: "queue-delivery|71|41",
+		})
+		if err != nil {
+			return err
+		}
+		if delivery.ID != 23 {
+			t.Errorf("migrated delivery id = %d; want row 23 preserved", delivery.ID)
+		}
+		if !slices.Equal(delivery.PayloadSha256, wantFingerprint) {
+			t.Errorf("migrated fingerprint = %x; want %x preserved",
+				delivery.PayloadSha256, wantFingerprint)
+		}
+		if delivery.PayloadFingerprintFormat != string(assignment.FingerprintFormatDelimiterSeparatedSHA256) {
+			t.Errorf("migrated fingerprint format = %q; want %q",
+				delivery.PayloadFingerprintFormat, assignment.FingerprintFormatDelimiterSeparatedSHA256)
+		}
+		return nil
+	})
 }
 
 // A reassignment arrives as a new delivery for a workload whose previous
@@ -132,13 +320,13 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	workloads := []WorkloadRow{{SourceWorkloadKey: "job-r", TenantKey: "acme", ProjectKey: "app"}}
 
 	inTx(t, s, func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-1", payload("first"), workloads)
 		return err
 	})
 
 	// While the first attempt is open, the new delivery is refused.
 	err := s.Tx(t.Context(), func(tx *Tx) error {
-		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 		return err
 	})
 	if !errors.Is(err, ErrOpenAttemptExists) {
@@ -151,12 +339,12 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 		if err := tx.SupersedeOpenAttempt(binding, "job-r", assignment.ResolutionSuperseded, 0); err != nil {
 			return err
 		}
-		_, err := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+		_, err := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 		return err
 	})
 
 	inTx(t, s, func(tx *Tx) error {
-		ready, err := tx.ReadyAttempts(binding)
+		ready, err := tx.AllReadyAttempts(binding)
 		if err != nil {
 			return err
 		}
@@ -174,6 +362,36 @@ func TestReassignmentNeedsThePredecessorResolved(t *testing.T) {
 	})
 }
 
+// Attempt insertion translates one particular SQLite invariant into an
+// open-attempt conflict. Error prose is not an invariant: a wrapped
+// application error may contain the same words, and a different SQLite
+// constraint requires a different response.
+func TestUniqueViolationClassificationUsesTheDriverCode(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-a', 'provider-a', 'same-key')`); err != nil {
+		t.Fatal(err)
+	}
+	_, uniqueErr := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-b', 'provider-a', 'same-key')`)
+	if !isUniqueViolation(uniqueErr) {
+		t.Fatalf("driver UNIQUE error classified as non-unique: %v", uniqueErr)
+	}
+
+	lookalike := errors.New("upstream said UNIQUE constraint failed while parsing a payload")
+	if isUniqueViolation(lookalike) {
+		t.Fatal("message text was classified as a SQLite UNIQUE result")
+	}
+	_, checkErr := s.db.Exec(`
+		INSERT INTO provider_bindings (target_id, provider_kind, source_binding_key)
+		VALUES ('target-c', '', 'other-key')`)
+	if isUniqueViolation(checkErr) {
+		t.Fatalf("a different SQLite constraint was classified as UNIQUE: %v", checkErr)
+	}
+}
+
 // The one-open-attempt rule is the database's, not a map's: two
 // transactions racing to open an attempt for the same workload cannot
 // both win, whatever the interleaving.
@@ -183,10 +401,10 @@ func TestOneOpenAttemptUnderContention(t *testing.T) {
 
 	results := make(chan error, 2)
 	for i := range 2 {
-		key := "msg-c" + string(rune('a'+i))
+		key := assignment.DeliveryKey("msg-c" + string(rune('a'+i)))
 		go func() {
 			results <- s.Tx(context.Background(), func(tx *Tx) error {
-				_, err := tx.RecordDelivery(binding, key, fingerprint(key),
+				_, err := tx.RecordDelivery(binding, key, payload(string(key)),
 					[]WorkloadRow{{SourceWorkloadKey: "job-contended", TenantKey: "acme", ProjectKey: "app"}})
 				return err
 			})
@@ -245,7 +463,7 @@ func TestAckStateMachineConvergesAfterUncertainty(t *testing.T) {
 	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", fingerprint("ack"),
+		deliveryID, err = tx.RecordDelivery(binding, "msg-ack", payload("ack"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-ack", TenantKey: "acme", ProjectKey: "app"}})
 		return err
 	})
@@ -318,7 +536,7 @@ func TestLeaseAttemptClaimsExactlyOnce(t *testing.T) {
 		t.Fatalf("second lease of the same attempt = %v; want ErrConflict", err)
 	}
 	inTx(t, s, func(tx *Tx) error {
-		leases, err := tx.LeasesInStates(AllLeaseStates...)
+		leases, err := tx.LeasesInStates(LeaseStates()...)
 		if err != nil {
 			return err
 		}
@@ -504,7 +722,7 @@ func TestAckRequestedIsRetriedAfterACrashInFlight(t *testing.T) {
 	var deliveryID assignment.DeliveryID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", fingerprint("wedge"),
+		deliveryID, err = tx.RecordDelivery(binding, "msg-wedge", payload("wedge"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-wedge", TenantKey: "acme", ProjectKey: "app"}})
 		return err
 	})
@@ -611,7 +829,7 @@ func TestSnapshotBoundsHistoryButNeverLiveWork(t *testing.T) {
 	live := map[assignment.LeaseID]bool{}
 	for i, state := range []LeaseState{LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered} {
 		key := assignment.SourceWorkloadKey(fmt.Sprintf("live-%d", i))
-		attempt := seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
+		attempt := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+string(key)), "job-"+key)
 		inTx(t, s, func(tx *Tx) error {
 			lease, err := tx.LeaseAttempt(attempt, binding, "standard")
 			if err != nil {
@@ -700,7 +918,7 @@ func backdateLease(t *testing.T, s *Store, leaseID assignment.LeaseID, started, 
 // releasedLease drives one attempt to a released lease and returns both ids.
 func releasedLease(t *testing.T, s *Store, binding assignment.BindingID, key assignment.SourceWorkloadKey) (leaseID assignment.LeaseID, attemptID assignment.AttemptID) {
 	t.Helper()
-	attemptID = seedAttempt(t, s, binding, "msg-"+string(key), "job-"+key)
+	attemptID = seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+string(key)), "job-"+key)
 	inTx(t, s, func(tx *Tx) error {
 		lease, err := tx.LeaseAttempt(attemptID, binding, "standard")
 		if err != nil {
@@ -825,7 +1043,7 @@ func TestPruneLeaseHistoryHonoursBothGuards(t *testing.T) {
 		if err := tx.Settle(wedgedAttempt, AttemptLeased, assignment.ResolutionCompletedObserved); err != nil {
 			return err
 		}
-		_, err := tx.PlanResource(wedged, ResourceContainer, "runner", "runpool-wedged")
+		_, err := tx.PlanResource(wedged, ResourceContainer, ResourceRoleCapsule, "runpool-wedged")
 		return err
 	})
 
@@ -924,7 +1142,7 @@ func TestReadyAttemptsAreServedOldestFirst(t *testing.T) {
 	var ready []Attempt
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		ready, err = tx.ReadyAttempts(binding)
+		ready, err = tx.AllReadyAttempts(binding)
 		return err
 	})
 
@@ -1332,10 +1550,10 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 
 			var attemptID assignment.AttemptID
 			inTx(t, s, func(tx *Tx) error {
-				if _, err := tx.RecordDelivery(binding, "msg-1", fingerprint("first"), workloads); err != nil {
+				if _, err := tx.RecordDelivery(binding, "msg-1", payload("first"), workloads); err != nil {
 					return err
 				}
-				ready, err := tx.ReadyAttempts(binding)
+				ready, err := tx.AllReadyAttempts(binding)
 				if err != nil {
 					return err
 				}
@@ -1351,7 +1569,7 @@ func TestSupersedingAHeldAttemptTurnsOnWhatItConsumed(t *testing.T) {
 				if serr != nil {
 					return serr
 				}
-				_, rerr := tx.RecordDelivery(binding, "msg-2", fingerprint("second"), workloads)
+				_, rerr := tx.RecordDelivery(binding, "msg-2", payload("second"), workloads)
 				return rerr
 			})
 
@@ -1395,16 +1613,16 @@ func TestABindingConfigurationNoLongerClaimsIsForgotten(t *testing.T) {
 	var kept, dropped, withWork assignment.BindingID
 	inTx(t, s, func(tx *Tx) error {
 		var err error
-		if kept, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-standard"); err != nil {
+		if kept, err = tx.EnsureBinding("app", "github_actions", "target-runner-group-scale-set|app|default|runpool-standard"); err != nil {
 			return err
 		}
-		if dropped, err = tx.EnsureBinding("app", "github_actions", "v2|app|default|runpool-renamed"); err != nil {
+		if dropped, err = tx.EnsureBinding("app", "github_actions", "target-runner-group-scale-set|app|default|runpool-renamed"); err != nil {
 			return err
 		}
-		if withWork, err = tx.EnsureBinding("old", "github_actions", "v2|old|default|runpool-old"); err != nil {
+		if withWork, err = tx.EnsureBinding("old", "github_actions", "target-runner-group-scale-set|old|default|runpool-old"); err != nil {
 			return err
 		}
-		_, err = tx.RecordDelivery(withWork, "msg-old", fingerprint("old"),
+		_, err = tx.RecordDelivery(withWork, "msg-old", payload("old"),
 			[]WorkloadRow{{SourceWorkloadKey: "job-old", TenantKey: "acme", ProjectKey: "old"}})
 		return err
 	})
@@ -1532,7 +1750,7 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	for _, c := range cases {
 		decided[c.state] = true
 	}
-	for _, state := range AllAttemptStates {
+	for _, state := range AttemptStates() {
 		if !decided[state] {
 			t.Errorf("an attempt can be %q and this test decides nothing about starting it", state)
 		}
@@ -1545,7 +1763,8 @@ func TestOnlyAnUnstartedAttemptOfThisServingIsAuthorized(t *testing.T) {
 	// one: an attempt in a servable state is not enough on its own.
 	leased := func(t *testing.T, name string, state AttemptState) (assignment.LeaseID, assignment.AttemptID) {
 		t.Helper()
-		id := seedAttempt(t, s, binding, "msg-"+name, assignment.SourceWorkloadKey("job-"+name))
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-"+name),
+			assignment.SourceWorkloadKey("job-"+name))
 		var leaseID assignment.LeaseID
 		inTx(t, s, func(tx *Tx) error {
 			lease, err := tx.LeaseAttempt(id, binding, "tier-a")
@@ -1773,8 +1992,9 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 	}
 	constraint := body[start : start+strings.Index(body[start:], "))")]
 
-	listed := make(map[AttemptState]bool, len(AllAttemptStates))
-	for _, s := range AllAttemptStates {
+	states := AttemptStates()
+	listed := make(map[AttemptState]bool, len(states))
+	for _, s := range states {
 		listed[s] = true
 	}
 	found := 0
@@ -1784,12 +2004,12 @@ func TestAttemptStatesCoverTheSchema(t *testing.T) {
 		}
 		found++
 		if !listed[AttemptState(state)] {
-			t.Errorf("the schema allows attempt state %q and AllAttemptStates omits it", state)
+			t.Errorf("the schema allows attempt state %q and AttemptStates omits it", state)
 		}
 	}
-	if found != len(AllAttemptStates) {
-		t.Errorf("the constraint names %d states and AllAttemptStates has %d; "+
-			"one of them lists something the other does not", found, len(AllAttemptStates))
+	if found != len(states) {
+		t.Errorf("the constraint names %d states and AttemptStates has %d; "+
+			"one of them lists something the other does not", found, len(states))
 	}
 }
 
@@ -1932,7 +2152,7 @@ func seedEverything(t *testing.T, s *Store) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.PlanResource(lease.ID, ResourceContainer, "capsule", "runpool-seed"); err != nil {
+		if _, err := tx.PlanResource(lease.ID, ResourceContainer, ResourceRoleCapsule, "runpool-seed"); err != nil {
 			return err
 		}
 		project, err := tx.EnsureCacheProject("acme/app")
@@ -2262,16 +2482,18 @@ func TestTheVocabulariesCoverTheirColumns(t *testing.T) {
 	s := newStore(t)
 	binding := seedBinding(t, s)
 
-	for _, r := range assignment.AllResolutions {
-		id := seedAttempt(t, s, binding, "msg-res-"+string(r), assignment.SourceWorkloadKey("job-res-"+string(r)))
+	for _, r := range assignment.Resolutions() {
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-res-"+string(r)),
+			assignment.SourceWorkloadKey("job-res-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.CancelReady(id, r)
 		}); err != nil {
 			t.Errorf("the column refuses the resolution %q the machine produces: %v", r, err)
 		}
 	}
-	for _, r := range AllReviewReasons {
-		id := seedAttempt(t, s, binding, "msg-rr-"+string(r), assignment.SourceWorkloadKey("job-rr-"+string(r)))
+	for _, r := range ReviewReasons() {
+		id := seedAttempt(t, s, binding, assignment.DeliveryKey("msg-rr-"+string(r)),
+			assignment.SourceWorkloadKey("job-rr-"+string(r)))
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.HoldForReview(id, r)
 		}); err != nil {
@@ -2300,7 +2522,7 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-kinds", "job-kinds")
 
-	for _, k := range AllEventKinds {
+	for _, k := range EventKinds() {
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.RecordEvent(id, "idem-"+string(k), k)
 		}); err != nil {
@@ -2311,12 +2533,13 @@ func TestEveryEventKindIsOneTheColumnAdmits(t *testing.T) {
 	// The other direction, against the column itself: the list is not
 	// short. Every kind the schema admits has a constant here.
 	admitted := checkVocabulary(t, s, "attempt_events", "kind")
-	if len(admitted) != len(AllEventKinds) {
-		t.Fatalf("the column admits %d kinds and AllEventKinds holds %d: %v",
-			len(admitted), len(AllEventKinds), admitted)
+	eventKinds := EventKinds()
+	if len(admitted) != len(eventKinds) {
+		t.Fatalf("the column admits %d kinds and EventKinds holds %d: %v",
+			len(admitted), len(eventKinds), admitted)
 	}
 	for _, a := range admitted {
-		if !slices.Contains(AllEventKinds, EventKind(a)) {
+		if !slices.Contains(eventKinds, EventKind(a)) {
 			t.Errorf("the column admits %q and no constant names it", a)
 		}
 	}
@@ -2338,7 +2561,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"lease states": {"capsule_leases", "state         TEXT",
 			func() []string {
 				var o []string
-				for _, v := range AllLeaseStates {
+				for _, v := range LeaseStates() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2346,7 +2569,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"resolutions": {"assignment_attempts", "resolution",
 			func() []string {
 				var o []string
-				for _, v := range assignment.AllResolutions {
+				for _, v := range assignment.Resolutions() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2354,7 +2577,7 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"review reasons": {"assignment_attempts", "review_reason",
 			func() []string {
 				var o []string
-				for _, v := range AllReviewReasons {
+				for _, v := range ReviewReasons() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2362,7 +2585,31 @@ func TestTheStateVocabulariesCoverTheirColumns(t *testing.T) {
 		"execution evidence": {"assignment_attempts", "execution_evidence",
 			func() []string {
 				var o []string
-				for _, v := range AllEvidence {
+				for _, v := range EvidenceStates() {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource kinds": {"resource_intents", "kind",
+			func() []string {
+				var o []string
+				for _, v := range ResourceKinds() {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource roles": {"resource_intents", "role",
+			func() []string {
+				var o []string
+				for _, v := range ResourceRoles() {
+					o = append(o, string(v))
+				}
+				return o
+			}()},
+		"resource states": {"resource_intents", "state       TEXT",
+			func() []string {
+				var o []string
+				for _, v := range ResourceStates() {
 					o = append(o, string(v))
 				}
 				return o
@@ -2445,7 +2692,7 @@ func TestTheEstablishingObservationsAreExactlyWhatTheColumnAdmits(t *testing.T) 
 	slices.Sort(admitted)
 
 	var establishes []string
-	for _, o := range assignment.AllExecutionObservations {
+	for _, o := range assignment.ExecutionObservations() {
 		if o.Establishes() {
 			establishes = append(establishes, string(o))
 		}
@@ -2472,7 +2719,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 	binding := seedBinding(t, s)
 	id := seedAttempt(t, s, binding, "msg-trail", "job-trail")
 
-	for _, e := range AllEvidence[1:] {
+	for _, e := range EvidenceStates()[1:] {
 		if err := s.Tx(t.Context(), func(tx *Tx) error {
 			return tx.RecordEvidence(id, e)
 		}); err != nil {
@@ -2491,7 +2738,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 		}
 		return nil
 	})
-	for _, e := range AllEvidence[1:] {
+	for _, e := range EvidenceStates()[1:] {
 		want := eventKindOf(e)
 		if want == "" {
 			t.Errorf("the advance to %s names no trail entry", e)
@@ -2500,7 +2747,7 @@ func TestEveryEvidenceAdvanceReachesTheTrail(t *testing.T) {
 		if !slices.Contains(kinds, want) {
 			t.Errorf("advancing to %s wrote no %s into the trail: %v", e, want, kinds)
 		}
-		if !slices.Contains(AllEventKinds, want) {
+		if !slices.Contains(EventKinds(), want) {
 			t.Errorf("%s is not a kind the column admits", want)
 		}
 	}
@@ -2661,6 +2908,16 @@ func TestADatabaseWrittenByTheFirstReleaseStillOpens(t *testing.T) {
 		if len(bindings) != 1 || bindings[0].TargetID != "app" {
 			t.Errorf("the restored books hold %d bindings; the fixture wrote one", len(bindings))
 		}
+		delivery, err := tx.q.GetDeliveryByKey(tx.ctx, sqlitedb.GetDeliveryByKeyParams{
+			BindingID: 1, SourceDeliveryKey: "msg-fixture",
+		})
+		if err != nil {
+			return err
+		}
+		if delivery.PayloadFingerprintFormat != string(assignment.FingerprintFormatDelimiterSeparatedSHA256) {
+			t.Errorf("migrated delivery fingerprint format = %q; want published delimiter format preserved",
+				delivery.PayloadFingerprintFormat)
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -2700,15 +2957,13 @@ func quotedStates(list string) []AttemptState {
 	return out
 }
 
-// TestTheOpenAttemptSetIsSpelledOnceForEveryReader: four readers decide
-// which attempts are still live, and each carries its own copy of the
-// answer.
+// TestTheOpenAttemptSetIsSpelledOnceForEveryReader: the index and each
+// generated query that decides which attempts are still live carry their own
+// copy of the answer.
 //
-// The index enforces one open attempt per workload; openAttemptStates
-// gates the two hand-written queries that prune lease history and find
-// stranded work; and two generated queries ask the same question again.
-// The comment above openAttemptStates already names the index as the
-// authority the others agree with — and nothing checked that they do.
+// The index enforces one open attempt per workload. Generated queries gate
+// attempt lookup, reporting, lease retention and individual lease purge. The
+// index is the authority all of them must agree with.
 //
 // A state added to the index and missed in the Go copy makes a live
 // attempt's lease prunable, and an attempt whose lease was pruned is
@@ -2735,14 +2990,9 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 		t.Fatal("the index names no state, so this proves nothing")
 	}
 
-	if got := quotedStates(openAttemptStates); !slices.Equal(got, authority) {
-		t.Errorf("openAttemptStates is %v; the index is %v. The Go copy gates pruning "+
-			"lease history, and a state it omits makes a live attempt's lease prunable",
-			got, authority)
-	}
-
-	known := make(map[AttemptState]bool, len(AllAttemptStates))
-	for _, s := range AllAttemptStates {
+	attemptStates := AttemptStates()
+	known := make(map[AttemptState]bool, len(attemptStates))
+	for _, s := range attemptStates {
 		known[s] = true
 	}
 	// The authority is spelled from the vocabulary too: a lease state
@@ -2787,8 +3037,8 @@ func TestTheOpenAttemptSetIsSpelledOnceForEveryReader(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no query selects by attempt state, so this proves nothing")
 	}
-	if agreed < 2 {
-		t.Errorf("%d generated queries ask the open-attempt question; two did, and a "+
+	if agreed < 5 {
+		t.Errorf("%d generated queries ask the open-attempt question; five did, and a "+
 			"reader that stopped matching the index by length is one this no longer compares", agreed)
 	}
 }

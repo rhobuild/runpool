@@ -30,7 +30,7 @@ type AttemptEvent struct {
 	AttemptID      string
 	IdempotencyKey string
 	Kind           string
-	DetailJson     string
+	DetailJSON     string
 	CreatedAt      int64
 }
 
@@ -44,14 +44,15 @@ type AuditLog struct {
 }
 
 type BrokerDelivery struct {
-	ID                int64
-	BindingID         int64
-	SourceDeliveryKey string
-	PayloadSha256     []byte
-	AckState          string
-	ReceivedAt        int64
-	AckUpdatedAt      sql.NullInt64
-	AcknowledgedAt    sql.NullInt64
+	ID                       int64
+	BindingID                int64
+	SourceDeliveryKey        string
+	PayloadSha256            []byte
+	AckState                 string
+	ReceivedAt               int64
+	AckUpdatedAt             sql.NullInt64
+	AcknowledgedAt           sql.NullInt64
+	PayloadFingerprintFormat string
 }
 
 type CacheLane struct {
@@ -91,7 +92,7 @@ type GithubActionsAttemptMetadatum struct {
 type GithubActionsBindingMetadatum struct {
 	BindingID    int64
 	Scope        string
-	CanonicalUrl string
+	CanonicalURL string
 	RunnerGroup  string
 	ScaleSetName string
 	ScaleSetID   sql.NullInt64

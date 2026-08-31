@@ -8,8 +8,11 @@
 package assignment
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -22,11 +25,11 @@ type WorkloadAssignment struct {
 	// itself, opaque and non-empty. It is the only field the domain
 	// deduplicates on: grouping identities (a run, a batch) hold many
 	// workloads, and keying on one of those collapses siblings.
-	SourceWorkloadKey string
+	SourceWorkloadKey SourceWorkloadKey
 	// TenantKey and ProjectKey locate the workload's owner — for cache
 	// scoping and diagnostics, never for identity.
-	TenantKey  string
-	ProjectKey string
+	TenantKey  TenantKey
+	ProjectKey ProjectKey
 	// SourceRequestID is the provider's attempt correlation number as
 	// observed. Zero is a legitimate value; it is never a key.
 	SourceRequestID int64
@@ -59,42 +62,84 @@ func (a WorkloadAssignment) Validate() error {
 	return nil
 }
 
-// DeliveryKeyVersion prefixes the delivery key. It is named, and named
-// separately from the binding key's version, because the two are
-// unrelated encodings that happen to be at the same number, and the
-// cost of bumping them is not the same.
-//
-// Bumping this one re-keys deliveries. A message already recorded stops
-// matching, so it is processed again; the attempts it created are still
-// there, and the redelivery finds them by workload key rather than
-// creating a second set. Recoverable.
-//
-// Bumping the binding key's is a rename of every binding. See
-// bindingKeyVersion in internal/app, which says what that costs, and do not treat the
-// two as one value because they read alike.
-const DeliveryKeyVersion = "v2"
+// deliveryKeyFormat names the fields encoded into a delivery key. A change
+// requires a forward migration of source_delivery_key; it is unrelated to the
+// configured binding key format.
+const deliveryKeyFormat = "queue-delivery"
 
-// DeliveryKey encodes a provider's delivery identity as the opaque,
-// versioned key the store deduplicates on. The version prefix is what
-// lets the encoding evolve without two encodings of one delivery ever
-// comparing equal.
+// NewDeliveryKey encodes a provider's delivery identity as the opaque key the
+// store deduplicates on. The semantic format prefix lets the encoding evolve
+// without two encodings of one delivery ever comparing equal.
 //
 // The queue's identity is part of it, because a delivery id is only
 // unique within the queue that issued it. A queue destroyed upstream and
 // recreated starts numbering again, and the binding outlives that: keyed
 // on the id alone, a fresh message can collide with a delivery this
 // binding already recorded and confirmed.
-func DeliveryKey(sourceQueueID, sourceID int) string {
-	return fmt.Sprintf("%s|%d|%d", DeliveryKeyVersion, sourceQueueID, sourceID)
+func NewDeliveryKey(sourceQueueID SourceQueueID, sourceID SourceDeliveryID) DeliveryKey {
+	return DeliveryKey(fmt.Sprintf("%s|%d|%d", deliveryKeyFormat, sourceQueueID, sourceID))
 }
 
-// Fingerprint digests the normalized content of a delivery: every field
-// of every assignment the domain processes, in a canonical order that
-// does not depend on how the provider happened to arrange the message.
-// A redelivery must reproduce it byte for byte; the same delivery key
-// with a different fingerprint is contract drift, and the store fails
-// closed on it.
-func Fingerprint(assignments []WorkloadAssignment) [32]byte {
+// DeliveryFingerprintFormat is the persisted selector for a canonical
+// encoder. Each value describes the representation it identifies.
+type DeliveryFingerprintFormat string
+
+const (
+	// FingerprintFormatDelimiterSeparatedSHA256 identifies the original
+	// delimiter-separated canonical encoding retained for durable rows.
+	FingerprintFormatDelimiterSeparatedSHA256 DeliveryFingerprintFormat = "delimiter-separated-sha256"
+	// FingerprintFormatLengthPrefixedSHA256 identifies the unambiguous
+	// length-prefixed canonical encoding written by this build.
+	FingerprintFormatLengthPrefixedSHA256 DeliveryFingerprintFormat = "length-prefixed-sha256"
+	currentDeliveryFingerprintFormat                                = FingerprintFormatLengthPrefixedSHA256
+)
+
+// PayloadFingerprint is the fixed-size digest persisted for one broker
+// delivery payload.
+type PayloadFingerprint [sha256.Size]byte
+
+var deliveryFingerprintEncoders = map[DeliveryFingerprintFormat]func([]WorkloadAssignment) PayloadFingerprint{
+	FingerprintFormatDelimiterSeparatedSHA256: fingerprintDelimited,
+	FingerprintFormatLengthPrefixedSHA256: func(assignments []WorkloadAssignment) PayloadFingerprint {
+		return PayloadFingerprint(sha256.Sum256(canonicalFingerprintPreimage(assignments)))
+	},
+}
+
+// DeliveryFingerprintFormats returns the durable encoder vocabulary in stable
+// order. The store uses it to hold its schema constraint in parity with the
+// algorithms this build can read.
+func DeliveryFingerprintFormats() []DeliveryFingerprintFormat {
+	formats := make([]DeliveryFingerprintFormat, 0, len(deliveryFingerprintEncoders))
+	for format := range deliveryFingerprintEncoders {
+		formats = append(formats, format)
+	}
+	sort.Slice(formats, func(i, j int) bool { return formats[i] < formats[j] })
+	return formats
+}
+
+// CurrentDeliveryFingerprint returns the format and digest written for a new
+// delivery. Only the current encoder runs on this path; retaining historical
+// readers does not make new deliveries progressively more expensive.
+func CurrentDeliveryFingerprint(assignments []WorkloadAssignment) (DeliveryFingerprintFormat, PayloadFingerprint) {
+	return currentDeliveryFingerprintFormat,
+		deliveryFingerprintEncoders[currentDeliveryFingerprintFormat](assignments)
+}
+
+// DeliveryFingerprintForFormat computes a payload with the encoder named by a
+// durable row. It returns false for a format this build cannot interpret.
+func DeliveryFingerprintForFormat(assignments []WorkloadAssignment,
+	format DeliveryFingerprintFormat) (PayloadFingerprint, bool) {
+	encode, ok := deliveryFingerprintEncoders[format]
+	if !ok {
+		return PayloadFingerprint{}, false
+	}
+	return encode(assignments), true
+}
+
+// fingerprintDelimited is retained for rows whose persisted format names this
+// encoding. Its bytes are a durable compatibility contract; the format name
+// describes it without assigning it a historical ordinal.
+func fingerprintDelimited(assignments []WorkloadAssignment) PayloadFingerprint {
 	lines := make([]string, len(assignments))
 	for i, a := range assignments {
 		labels := append([]string(nil), a.Labels...)
@@ -104,7 +149,43 @@ func Fingerprint(assignments []WorkloadAssignment) [32]byte {
 			a.SourceRequestID, a.SourceRunID, strings.Join(labels, ","))
 	}
 	sort.Strings(lines)
-	return sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return PayloadFingerprint(sha256.Sum256([]byte(strings.Join(lines, "\n"))))
+}
+
+const canonicalFingerprintDomain = "runpool.delivery-fingerprint.length-prefixed\x00"
+
+func canonicalFingerprintPreimage(assignments []WorkloadAssignment) []byte {
+	records := make([][]byte, len(assignments))
+	for i, a := range assignments {
+		labels := append([]string(nil), a.Labels...)
+		sort.Strings(labels)
+
+		var record []byte
+		record = appendLengthPrefixedString(record, string(a.SourceWorkloadKey))
+		record = appendLengthPrefixedString(record, string(a.TenantKey))
+		record = appendLengthPrefixedString(record, string(a.ProjectKey))
+		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRequestID))
+		record = binary.BigEndian.AppendUint64(record, uint64(a.SourceRunID))
+		record = binary.BigEndian.AppendUint64(record, uint64(len(labels)))
+		for _, label := range labels {
+			record = appendLengthPrefixedString(record, label)
+		}
+		records[i] = record
+	}
+	sort.Slice(records, func(i, j int) bool { return bytes.Compare(records[i], records[j]) < 0 })
+
+	out := append([]byte(nil), canonicalFingerprintDomain...)
+	out = binary.BigEndian.AppendUint64(out, uint64(len(records)))
+	for _, record := range records {
+		out = binary.BigEndian.AppendUint64(out, uint64(len(record)))
+		out = append(out, record...)
+	}
+	return out
+}
+
+func appendLengthPrefixedString(dst []byte, value string) []byte {
+	dst = binary.BigEndian.AppendUint64(dst, uint64(len(value)))
+	return append(dst, value...)
 }
 
 // Resolution says exactly what was observed and what was decided, never
@@ -140,10 +221,7 @@ const (
 	ResolutionSuperseded Resolution = "superseded"
 )
 
-// AllResolutions is every decision Runpool can reach, for the tests that
-// hold the vocabulary against the schema and against the machine that
-// produces it.
-var AllResolutions = []Resolution{
+var resolutions = []Resolution{
 	ResolutionCompletedObserved,
 	ResolutionStartedObserved,
 	ResolutionMayHaveExecuted,
@@ -151,14 +229,17 @@ var AllResolutions = []Resolution{
 	ResolutionSuperseded,
 }
 
+// Resolutions returns every durable disposition Runpool can reach.
+func Resolutions() []Resolution { return slices.Clone(resolutions) }
+
 // WorkloadLifecycleEvent is a provider observation about one workload.
 // It carries the workload's own key: an event that names only the
 // runtime cannot be correlated to the attempt it belongs to, which is
 // how a cancellation aimed at an old attempt could hit a new one.
 type WorkloadLifecycleEvent struct {
-	SourceWorkloadKey string
-	TenantKey         string
-	ProjectKey        string
+	SourceWorkloadKey SourceWorkloadKey
+	TenantKey         TenantKey
+	ProjectKey        ProjectKey
 	// RuntimeName identifies the provider-side runtime the observation
 	// names, opaque to the domain. It is the handle a late report
 	// correlates by, which is why the workload key travels beside it
@@ -242,7 +323,7 @@ func (o ExecutionObservation) Establishes() bool {
 	}
 }
 
-// AllExecutionObservations is every value of this vocabulary, which is
+// executionObservations contains every value of this vocabulary, which is
 // one more than the observations: NoObservation is a value and not an
 // observation, and a switch that leaves it out decides for it by
 // omission -- in the one function whose contract is that nothing is
@@ -253,7 +334,7 @@ func (o ExecutionObservation) Establishes() bool {
 // whatever branch is last, which reads as a decision and is not one. A
 // value added here without a home elsewhere is what a totality check
 // has to fail on.
-var AllExecutionObservations = []ExecutionObservation{
+var executionObservations = []ExecutionObservation{
 	NoObservation,
 	ObservedCreated,
 	ObservedNeverStarted,
@@ -261,4 +342,10 @@ var AllExecutionObservations = []ExecutionObservation{
 	ObservedExited,
 	ObservedAbsent,
 	ObservedUnavailable,
+}
+
+// ExecutionObservations returns every runtime-observation value, including
+// NoObservation.
+func ExecutionObservations() []ExecutionObservation {
+	return slices.Clone(executionObservations)
 }

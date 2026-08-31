@@ -4,15 +4,149 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/allocator"
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/credential"
 	"github.com/rhobuild/runpool/internal/githubactions"
 	"github.com/rhobuild/runpool/internal/store"
-
-	"github.com/rhobuild/runpool/internal/assignment"
 )
+
+// bindingSupervisor owns provider-facing bindings and their message-session
+// loops. It translates provider deliveries into durable attempts and delegates
+// admission to the scheduler; it does not execute or recover leases.
+type bindingSupervisor struct {
+	log                 *slog.Logger
+	store               *store.Store
+	allocator           *allocator.Allocator
+	scheduler           *attemptScheduler
+	shippedCapsuleImage string
+	bindings            []*binding
+	byBinding           map[assignment.BindingID]*binding
+	pollBackoff         time.Duration
+	conflictBackoff     time.Duration
+	conflictGrace       time.Duration
+}
+
+// provider is the complete provider surface one binding uses. Keeping one
+// seam reflects the single credentialed client while letting tests exercise
+// provider failures without a live service.
+type provider interface {
+	EnsureScaleSet(ctx context.Context, groupName, name string, knownID int, intended bool, recordIntent func() error) (githubactions.ScaleSet, error)
+	GenerateJITConfig(ctx context.Context, scaleSetID int, runnerName, workFolder string) (githubactions.JITConfig, error)
+	RemoveRunner(ctx context.Context, id int) error
+	OpenSession(ctx context.Context, scaleSetID int, owner string) (*githubactions.Session, error)
+}
+
+// providerSession is the message-session surface consumed by one binding.
+type providerSession interface {
+	Receive(ctx context.Context) (*githubactions.Message, error)
+	Acknowledge(ctx context.Context, messageID assignment.SourceDeliveryID) error
+	SetCapacity(n int)
+	Initial() *githubactions.Statistics
+	Close(ctx context.Context) error
+}
+
+// binding is one configured target and tier pair with its provider-side
+// scale set and session. Durable delivery and attempt identity stay in the
+// store; this object contains only process-local coordination state.
+type binding struct {
+	key    assignment.BindingKey
+	target config.Target
+	tier   config.Tier
+	ref    config.TargetRef
+	// gh is the provider client. A concrete client here would make provider
+	// failure paths unreachable from focused tests.
+	gh provider
+	// scaleSetID is the provider id used by session and JIT calls. bindingID
+	// is the durable identity used by deliveries, attempts, and leases.
+	scaleSetID int
+	// scaleSetName is configured locally and known before any provider call.
+	scaleSetName string
+	// ensured is owned by this binding's loop and is reset on every process
+	// start; a stored provider id proves ownership, not current existence.
+	ensured bool
+	// lastContactWrite paces durable provider-success observations.
+	lastContactWrite time.Time
+	// reaching and lastFailure hold the last durable reachability state.
+	reaching    bool
+	lastFailure string
+	// conflictSince tracks the current run of broker session conflicts.
+	conflictSince time.Time
+	bindingID     assignment.BindingID
+	cacheEnabled  bool
+	generation    string
+	// capsuleImage is resolved once so the launch path never reinterprets
+	// configuration.
+	capsuleImage string
+	// maxLanes is this tier's concurrency capped by any instance-wide limit.
+	maxLanes int
+
+	session providerSession
+	// newSession is a factory so session replacement remains local to the
+	// binding loop and directly testable.
+	newSession func(ctx context.Context) (providerSession, error)
+
+	// lastAdvertised suppresses duplicate capacity log records.
+	lastAdvertised int
+	// mu serializes scheduling passes for this binding.
+	mu sync.Mutex
+}
+
+// configureSessions binds every provider session to this process identity.
+// It runs after startup reconciliation so no broker delivery can race recovery.
+func (s *bindingSupervisor) configureSessions(owner string) {
+	for _, b := range s.bindings {
+		b.newSession = func(ctx context.Context) (providerSession, error) {
+			return b.gh.OpenSession(ctx, b.scaleSetID, owner)
+		}
+	}
+}
+
+// run serves all bindings and returns after every loop has observed
+// cancellation. Session shutdown therefore sees quiescent binding state.
+func (s *bindingSupervisor) run(ctx context.Context) {
+	var loops sync.WaitGroup
+	for _, b := range s.bindings {
+		loops.Add(1)
+		go func(b *binding) {
+			defer loops.Done()
+			s.loop(ctx, b)
+		}(b)
+	}
+	loops.Wait()
+}
+
+// closeSessions closes every binding session concurrently under one shared
+// budget. The deployment shutdown allowance stays constant as bindings grow.
+func (s *bindingSupervisor) closeSessions() {
+	ctx, cancel := context.WithTimeout(context.Background(), SessionCloseBudget)
+	defer cancel()
+	var closes sync.WaitGroup
+	for _, b := range s.bindings {
+		if b.session == nil {
+			continue
+		}
+		closes.Add(1)
+		go func(b *binding) {
+			defer closes.Done()
+			err := b.session.Close(ctx)
+			if s.allocator != nil {
+				s.allocator.SessionClosed(b.key, err == nil)
+			}
+			if err != nil {
+				s.log.Warn("cannot close the message session; the broker holds it until it "+
+					"expires and the next start waits that out",
+					"binding", b.key, "error", err)
+			}
+		}(b)
+	}
+	closes.Wait()
+}
 
 // buildBindings resolves every configured (target, tier) pair into a
 // binding registered with the allocator. One GitHub client per target;
@@ -23,7 +157,7 @@ import (
 // binding must exist before the first provider call rather than as its
 // result. Creating-or-adopting the scale set is the binding's own loop's
 // first act, where a failure is retried instead of ending the process.
-func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, environ func(string) string) error {
+func (s *bindingSupervisor) buildBindings(ctx context.Context, cfg *config.Config, environ func(string) string) error {
 	var claimed []assignment.BindingID
 	tiers := make(map[string]config.Tier, len(cfg.Tiers))
 	for _, t := range cfg.Tiers {
@@ -71,12 +205,13 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 
 			// The neutral binding row comes first: it keys the delivery,
 			// attempt and lease machinery.
-			sourceBindingKey := sourceBindingKey(target, tb.ScaleSetName)
+			configuredKey := configuredBindingKey(target, tb.ScaleSetName)
 			var bindingID assignment.BindingID
 			var knownSetID int64
 			if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 				var err error
-				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID), "github_actions", sourceBindingKey); err != nil {
+				if bindingID, err = tx.EnsureBinding(assignment.TargetID(target.ID),
+					assignment.ProviderGitHubActions, configuredKey); err != nil {
 					return err
 				}
 				// The scale set id recorded against this binding is the
@@ -110,7 +245,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 				maxLanes:     laneCeiling(cfg, tier),
 				capsuleImage: tier.Image(s.shippedCapsuleImage),
 			}
-			if err := s.alloc.Register(assignment.TierID(tier.ID), b.key, tier.Parallelism); err != nil {
+			if err := s.allocator.Register(assignment.TierID(tier.ID), b.key, tier.Parallelism); err != nil {
 				return err
 			}
 			s.bindings = append(s.bindings, b)
@@ -128,7 +263,7 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 	// A binding that still holds deliveries is kept: forgetting it would
 	// orphan the attempts hanging off those rows. Everything else goes,
 	// including the recorded scale set id — which is why a rename is a
-	// migration rather than an edit, and why sourceBindingKey's own
+	// migration rather than an edit, and why configuredBindingKey's own
 	// documentation says what a moved key costs.
 	if err := s.store.Tx(ctx, func(tx *store.Tx) error {
 		forgotten, err := tx.ForgetUnclaimedBindings(claimed)
@@ -145,38 +280,18 @@ func (s *Controller) buildBindings(ctx context.Context, cfg *config.Config, envi
 	return nil
 }
 
-// bindingKeyVersion prefixes the binding key, and is not the delivery
-// key's version even though it reads the same today.
-//
-// Bumping it renames every binding. The new key matches no row, so a row
-// is written for it and the old one is unclaimed — ForgetUnclaimedBindings
-// deletes it on the same startup, taking the scale set id recorded
-// against it, unless it still holds deliveries. Every binding then meets
-// a provider that already has its scale set under the unchanged name and
-// refuses to adopt one it has no record of creating, once each, before
-// settling. The contact history does not come back.
-//
-// That is a migration, not an encoding change. Anything that makes this
-// value move deserves the same reading as renaming a targets[].id, which
-// docs/adrs/2026-08-17-target-hosts-and-scopes.md records.
-const bindingKeyVersion = "v2"
+// configuredBindingKeyFormat names the fields encoded into a binding key. A
+// change requires a forward migration: every delivery, attempt, lease and
+// provider metadata row is owned through the existing binding id.
+const configuredBindingKeyFormat = "target-runner-group-scale-set"
 
-// sourceBindingKey is a binding's durable identity: the row every
-// delivery, attempt and lease hangs off.
-//
-// It is built from what an operator configured and never from a parsed
-// form of the target's URL. A key carrying the parsed scope and the
-// canonical URL moves whenever the parser changes how it reads an
-// address a deployment did not touch, and a key that moves is a rename:
-// the new one matches no row, so a row is written for it, and the old
-// one is forgotten by ForgetUnclaimedBindings on the same startup —
-// taking the scale set id recorded against it. The next pass then has to
-// adopt a set it has no record of creating, which is a refusal before it
-// is an adoption. Scope and canonical URL still travel, in the adapter's
-// own metadata, which is where provider identity belongs.
-func sourceBindingKey(target config.Target, scaleSetName string) assignment.SourceBindingKey {
-	return assignment.SourceBindingKey(fmt.Sprintf("%s|%s|%s|%s",
-		bindingKeyVersion, target.ID, target.RunnerGroup, scaleSetName))
+// configuredBindingKey is a binding's durable identity: the row every
+// delivery, attempt and lease hangs off. It uses operator configuration rather
+// than parsed URL output, so parser changes cannot rename a binding. Canonical
+// provider identity remains in adapter metadata.
+func configuredBindingKey(target config.Target, scaleSetName string) assignment.ConfiguredBindingKey {
+	return assignment.ConfiguredBindingKey(fmt.Sprintf("%s|%s|%s|%s",
+		configuredBindingKeyFormat, target.ID, target.RunnerGroup, scaleSetName))
 }
 
 // ensureScaleSet creates or adopts this binding's scale set and records
@@ -184,7 +299,7 @@ func sourceBindingKey(target config.Target, scaleSetName string) assignment.Sour
 // provider that is unreachable costs this binding its turn rather than
 // costing the process its startup: the capsules other bindings adopted
 // keep running, and their exits are still observed.
-func (s *Controller) ensureScaleSet(ctx context.Context, b *binding) error {
+func (s *bindingSupervisor) ensureScaleSet(ctx context.Context, b *binding) error {
 	// Creating a set at the provider and writing its id here are two
 	// steps, and the gap between them is where the process can die. The
 	// name is therefore written down first, as an intention: a row with
@@ -265,7 +380,7 @@ const contactHeartbeat = 15 * time.Second
 // exists so an operator can see a binding that reaches nothing, and a
 // binding that cannot write is one whose store is already reporting for
 // itself.
-func (s *Controller) recordProviderContact(ctx context.Context, b *binding) {
+func (s *bindingSupervisor) recordProviderContact(ctx context.Context, b *binding) {
 	// Cancelled on the way out of a shutdown, where a store write would
 	// fail for that reason alone and say nothing about the provider.
 	if ctx.Err() != nil {
@@ -296,7 +411,7 @@ func (s *Controller) recordProviderContact(ctx context.Context, b *binding) {
 // the same heartbeat as a success: what an operator needs is what is
 // wrong and how long it has been wrong, and neither answer improves by
 // rewriting the same sentence on every poll.
-func (s *Controller) recordProviderFailure(ctx context.Context, b *binding, cause error) {
+func (s *bindingSupervisor) recordProviderFailure(ctx context.Context, b *binding, cause error) {
 	if ctx.Err() != nil {
 		return
 	}

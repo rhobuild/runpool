@@ -33,13 +33,13 @@ func TestReconcileAdoptsWhatIsStillRunning(t *testing.T) {
 	h.objects.containers = []engine.OwnedContainer{
 		{ID: "runner-alive", Role: engine.RoleCapsule, LeaseID: alive.ID, Running: true},
 	}
-	h.srv.caps = &fakeCapsule{obs: assignment.ObservedAbsent}
-	h.srv.wait = &fakeWaiter{}
+	h.srv.executor.capsule = &fakeCapsule{obs: assignment.ObservedAbsent}
+	h.srv.executor.waiter = &fakeWaiter{}
 
-	if err := h.srv.reconcile(t.Context()); err != nil {
+	if err := h.srv.reconciler.reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	h.srv.wg.Wait()
+	<-h.srv.ownership.wait()
 
 	// The adopted lease was awaited to its exit and then released; the
 	// one with no capsule was resolved without ever being awaited.
@@ -66,7 +66,7 @@ func TestReconcileFailsWhenTheDaemonCannotBeRead(t *testing.T) {
 	h := newHarness(t, 1)
 	h.objects.listErr = errDaemon
 
-	if err := h.srv.reconcile(t.Context()); err == nil {
+	if err := h.srv.reconciler.reconcile(t.Context()); err == nil {
 		t.Error("reconciliation succeeded without reading the daemon")
 	}
 }
@@ -86,7 +86,7 @@ func TestSweepPeriodicallyKeepsWhatIsBeingWorkedOn(t *testing.T) {
 		{ID: "runner-orphan", Role: engine.RoleCapsule, LeaseID: "lse-vanished"},
 	}
 
-	h.srv.sweepPeriodically(t.Context())
+	h.srv.reconciler.sweepPeriodically(t.Context())
 
 	for _, id := range h.objects.removed {
 		if id == "runner-live" {

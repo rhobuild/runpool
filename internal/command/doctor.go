@@ -100,7 +100,7 @@ func runHealthcheck(streams IO, mode string) error {
 			return fmt.Errorf("state unreadable: %w", err)
 		}
 		defer st.Close()
-		var measured int64
+		var measured time.Time
 		if err := st.Tx(ctx, func(tx *store.Tx) error {
 			p, err := tx.Pressure()
 			if err != nil {
@@ -115,8 +115,8 @@ func runHealthcheck(streams IO, mode string) error {
 		}
 		// No verdict yet is a controller that has not finished starting;
 		// the deployment's start_period owns that window.
-		if measured != 0 {
-			if age := time.Since(time.Unix(measured, 0)); age > livenessVerdictTolerance {
+		if !measured.IsZero() {
+			if age := time.Since(measured); age > livenessVerdictTolerance {
 				return fmt.Errorf("the disk monitor's last verdict is %s old; the serve loop has stopped",
 					age.Round(time.Second))
 			}

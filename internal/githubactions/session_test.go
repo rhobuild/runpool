@@ -10,7 +10,7 @@ import (
 
 func offer(key assignment.SourceWorkloadKey, request int64) assignment.WorkloadAssignment {
 	return assignment.WorkloadAssignment{
-		SourceWorkloadKey: string(key), TenantKey: "acme", ProjectKey: "app",
+		SourceWorkloadKey: key, TenantKey: "acme", ProjectKey: "app",
 		SourceRequestID: request,
 	}
 }
@@ -65,7 +65,7 @@ func TestOfferableRefusesToGuessBetweenSharedIDs(t *testing.T) {
 		}
 		var keys []string
 		for _, id := range ids {
-			keys = append(keys, byID[id].SourceWorkloadKey)
+			keys = append(keys, string(byID[id].SourceWorkloadKey))
 		}
 		if !slices.Equal(keys, tc.wantKeys) && !(len(keys) == 0 && len(tc.wantKeys) == 0) {
 			t.Errorf("%s: paired %v; want %v", name, keys, tc.wantKeys)

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "suite_id": "controller-e2e-portable",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "started_at": "2026-08-18T09:13:07Z",
+  "completed_at": "2026-08-18T09:14:07Z",
+  "environment": {
+    "kind": "github-hosted",
+    "runner": "ubuntu-24.04"
+  },
+  "controller_image": "ghcr.io/rhobuild/runpool@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "expected_cases": [
+    "TestControllerEndToEnd"
+  ],
+  "cases": [
+    {
+      "id": "TestControllerEndToEnd",
+      "outcome": "passed",
+      "duration_ms": 10
+    }
+  ],
+  "summary": {
+    "expected": 1,
+    "executed": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0
+  },
+  "outcome": "passed"
+}

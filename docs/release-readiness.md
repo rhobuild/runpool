@@ -33,12 +33,12 @@ the commit and the image digests it was produced from.
 
 | Gate | Completion evidence |
 | --- | --- |
-| Hermetic CI | `ci.yml` passes formatting, vet, staticcheck, race, coverage, sqlc parity, builds, link checks, vulnerability scan, and image build |
+| Hermetic CI | `ci.yml` passes formatting, vet, staticcheck, race, coverage, sqlc parity, builds, link checks, vulnerability scan, and image build; its aggregate manifest names every successful boundary |
 | Live Docker contracts | Docker, capsule, egress, cache, SQLite, and lifecycle suites pass without skips on the reference host |
 | Upstream provider contracts | Live GitHub Actions contracts pass without skips using short-lived GitHub App installation tokens |
-| Controller end-to-end workload | The exact controller runs in `shared-daemon`, receives real fixture assignments, launches the exact capsule candidate under restricted egress, completes checkout, dependency download, Docker build and registry push, proves cache reuse and generation isolation, survives controller restart, removes owned resources, and preserves unrelated container and network sentinels by exact id and the volume sentinel by name |
+| Controller end-to-end workload | The exact controller runs in `shared-daemon`, receives real fixture assignments, launches the exact capsule candidate under restricted egress, completes checkout, dependency download, Docker build and registry push, proves cache reuse and generation isolation, survives `SIGKILL` through successor adoption, removes owned resources, and preserves unrelated container and network sentinels by exact id and the volume sentinel by name. The workload passes once on `ubuntu-24.04` for portable coverage and once on the exact reference host for release authorization |
 | Host topology contracts | Shared mode enforces positive reserves, restricted egress, organization runner-group isolation, ownership-verified cleanup and idle-uplink recovery; the shared controller E2E and common Docker contracts pass on the reference host |
-| Scheduling and swap envelope | Global and tier parallelism constrain provider announcements and local admission through restart and quarantine; preflight proves the worst admitted CPU, memory, and swap set plus host reserve fits; configured swap is enforced in a real capsule on the reference host |
+| Scheduling and swap envelope | Global and tier parallelism constrain provider announcements and local admission through restart and quarantine; preflight proves the worst admitted CPU, memory, and swap set plus host reserve fits; a real capsule drives pages beyond `memory.max`, observes non-zero `memory.swap.current`, and attributes an inner workload's OOM through the aggregate cgroup |
 | Immutable release candidates | Controller and capsule images are built before qualification and identified by digest; the standalone binary and completions are retained by checksum; publication promotes or downloads those exact bytes without rebuilding |
 | Exact platform match | The reviewed lock is frozen before the candidate; every observed fact matches and missing facts fail the gate |
 | External security review | Findings affecting the release boundary are [resolved or explicitly accepted](security/review-findings.md) before release approval |
@@ -59,8 +59,9 @@ A protected SemVer tag starts the release workflow. The workflow:
    the remaining gates on hosted runners;
 3. requires hermetic CI, live Docker and provider contracts, and the real
    controller end-to-end workload with no skipped required contract;
-4. creates `release-qualification.json` from the evidence and verifies it
-   against the commit and candidate digests;
+4. creates `release-qualification.json` only after every structured suite
+   manifest proves the complete expected case set, then verifies the record
+   again against the commit and candidate digests at publication;
 5. promotes the qualified image digests and publishes the already-built
    standalone artifacts without rebuilding them;
 6. creates provenance and SBOM attestations; and

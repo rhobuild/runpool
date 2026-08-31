@@ -1,4 +1,4 @@
--- Code generated from internal/store/migrations (schema version 1). DO NOT EDIT.
+-- Code generated from internal/store/migrations (schema version 4). DO NOT EDIT.
 -- Regenerate with: go run ./internal/store/schema/gen
 
 CREATE TABLE assignment_attempts (
@@ -76,7 +76,10 @@ CREATE TABLE broker_deliveries (
 		CHECK (ack_state IN ('pending', 'requested', 'confirmed', 'uncertain')),
 	received_at          INTEGER NOT NULL DEFAULT (unixepoch()),
 	ack_updated_at       INTEGER,
-	acknowledged_at      INTEGER,
+	acknowledged_at      INTEGER, payload_fingerprint_format TEXT NOT NULL
+		DEFAULT 'delimiter-separated-sha256'
+		CHECK (payload_fingerprint_format IN (
+			'delimiter-separated-sha256', 'length-prefixed-sha256')),
 	FOREIGN KEY (binding_id) REFERENCES provider_bindings (id),
 	UNIQUE (binding_id, source_delivery_key),
 	-- The composite key assignment_attempts points at, so an attempt can
@@ -185,11 +188,11 @@ CREATE TABLE provider_bindings (
 	UNIQUE (provider_kind, source_binding_key)
 );
 
-CREATE TABLE resource_intents (
+CREATE TABLE "resource_intents" (
 	id          INTEGER PRIMARY KEY,
 	lease_id    TEXT NOT NULL REFERENCES capsule_leases (id),
 	kind        TEXT NOT NULL CHECK (kind IN ('container', 'network', 'volume')),
-	role        TEXT NOT NULL,
+	role        TEXT NOT NULL CHECK (role IN ('capsule', 'gateway', 'capsule-net', 'dind-data')),
 	name        TEXT NOT NULL CHECK (length(name) > 0),
 	docker_id   TEXT NOT NULL DEFAULT '',
 	state       TEXT NOT NULL DEFAULT 'planned'
@@ -208,6 +211,10 @@ WHERE state = 'manual_review';
 
 CREATE INDEX attempts_ready
 ON assignment_attempts (binding_id, received_at, id)
+WHERE state = 'ready';
+
+CREATE INDEX attempts_ready_global
+ON assignment_attempts (received_at, id)
 WHERE state = 'ready';
 
 CREATE INDEX cache_lanes_pool ON cache_lanes (project_id, generation, leased_by);

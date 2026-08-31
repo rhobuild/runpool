@@ -83,13 +83,14 @@ on and SemVer is what describes them:
 | --- | --- |
 | CLI commands, flags, exit codes | [CLI reference](reference/cli.md) |
 | Configuration schema | [Configuration reference](reference/configuration.md); the validator is the authority |
-| `status --json` document | [Status API reference](reference/status-api.md) — versioned separately as `v1` |
+| `status --json` document | [Status API reference](reference/status-api.md) — versioned separately as `v2` |
 | On-disk state | Migrations, forward-only after a release |
 | Capsule control protocol | `internal/capsule/protocol` — the version a capsule declares and the controller speaks; a capsule declaring a version this build does not speak is refused, never guessed at |
 | Operational procedures | [Runbook](runbook.md) |
 
 The configuration and status API versions move independently of the product
-version. Breaking either V1 contract requires an explicit version change.
+version. Breaking either contract requires an explicit change to that
+surface's own version.
 
 ## The support matrix
 

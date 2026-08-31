@@ -591,3 +591,64 @@ func TestEveryJobThatCallsTheHelperHasTheTreeItLivesIn(t *testing.T) {
 		t.Logf("%d jobs call %s, all with the tree", checked, helperPath)
 	}
 }
+
+// TestEveryExternalWorkflowActionIsPinnedToACommit includes the deployment
+// example because it is copied into repositories that may execute untrusted
+// pull requests. A moving major tag lets an action publisher replace code
+// without any change to the consuming repository; a full commit SHA makes the
+// update visible and reviewable. Local reusable workflows are repository code
+// already bound to the checked-out commit and therefore need no external ref.
+func TestEveryExternalWorkflowActionIsPinnedToACommit(t *testing.T) {
+	paths, err := filepath.Glob(repoPath(".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	examples, err := filepath.Glob(repoPath("deploy", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, examples...)
+	if len(paths) == 0 {
+		t.Fatal("no workflows found, so this proves nothing")
+	}
+
+	commit := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	checked := 0
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document yaml.Node
+		if err := yaml.Unmarshal(body, &document); err != nil {
+			t.Fatalf("%s: %v", filepath.Base(path), err)
+		}
+		var inspect func(*yaml.Node)
+		inspect = func(node *yaml.Node) {
+			if node.Kind == yaml.MappingNode {
+				for i := 0; i+1 < len(node.Content); i += 2 {
+					key, value := node.Content[i], node.Content[i+1]
+					if key.Value == "uses" && value.Kind == yaml.ScalarNode {
+						ref := value.Value
+						if strings.HasPrefix(ref, "./") {
+							continue
+						}
+						checked++
+						_, revision, ok := strings.Cut(ref, "@")
+						if !ok || !commit.MatchString(revision) {
+							t.Errorf("%s pins external action %q without a full commit SHA",
+								filepath.Base(path), ref)
+						}
+					}
+				}
+			}
+			for _, child := range node.Content {
+				inspect(child)
+			}
+		}
+		inspect(&document)
+	}
+	if checked == 0 {
+		t.Fatal("no external workflow actions found, so this proves nothing")
+	}
+}

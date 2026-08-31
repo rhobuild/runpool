@@ -400,7 +400,7 @@ func finishOpen(ctx context.Context, st *store.Store, release func()) (*store.St
 // queuedAttemptCount is the work admitted from the provider that has not
 // reached a lease. It is invisible to liveLeaseCount by construction, and
 // it is exactly what an idle-looking instance can still be holding.
-func queuedAttemptCount(queued map[int64]int) int {
+func queuedAttemptCount(queued map[assignment.BindingID]int) int {
 	n := 0
 	for _, q := range queued {
 		n += q

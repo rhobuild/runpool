@@ -141,16 +141,23 @@ func (d *dockerHarness) start(ctx context.Context, generation string) error {
 	return d.waitForLogCount(ctx, "session open", 1, 5*time.Minute)
 }
 
-func (d *dockerHarness) restart(ctx context.Context) error {
-	logs, err := d.run(ctx, "logs", d.control)
-	if err != nil {
-		return fmt.Errorf("read controller logs before restart: %w", err)
+func (d *dockerHarness) killAndReplace(ctx context.Context, generation string) error {
+	if _, err := d.run(ctx, "kill", "--signal", "KILL", d.control); err != nil {
+		return fmt.Errorf("SIGKILL controller: %w", err)
 	}
-	want := strings.Count(logs, "session open") + 1
-	if _, err := d.run(ctx, "restart", "--time", "30", d.control); err != nil {
-		return fmt.Errorf("restart controller: %w", err)
+	if logs, err := d.run(ctx, "logs", d.control); err == nil {
+		d.logs = append(d.logs, logs)
 	}
-	return d.waitForLogCount(ctx, "session open", want, 5*time.Minute)
+	if _, err := d.run(ctx, "rm", d.control); err != nil {
+		return fmt.Errorf("remove killed controller: %w", err)
+	}
+	if err := d.start(ctx, generation); err != nil {
+		return fmt.Errorf("start successor controller: %w", err)
+	}
+	if err := d.waitForLogCount(ctx, "adopting running capsule", 1, 5*time.Minute); err != nil {
+		return fmt.Errorf("successor did not adopt the live capsule: %w", err)
+	}
+	return nil
 }
 
 func (d *dockerHarness) switchGeneration(ctx context.Context, generation string) error {

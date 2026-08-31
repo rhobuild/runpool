@@ -16,16 +16,16 @@ the release boundary, and one finding recorded below. That finding was
 resolved after the review ended, and the resolution is held by the regression
 tests its entry names rather than re-confirmed by the reviewer.
 
-The second was internal, before `v1.2.0`, against the tree at `88244d4` — six
-reviews, one per boundary surface plus the build and release chain and the
-question of what reaches an operator-readable surface. It was run because two
-of the eight changes since `v1.1.0` land on surfaces the scope names: the
-capsule envelope, and egress. Every surface came back safe to release. Four
-findings are recorded below; none blocks the boundary, and each is either
-resolved with the test that holds it or accepted with the reasoning.
+The second was internal, after `v1.1.0`, against the tree at `88244d4`. It
+covered each boundary surface, the build and release chain, and what reaches an
+operator-readable surface. Four findings are recorded below; each is resolved
+with the test that holds it or accepted with the reasoning.
 
 A review covers the commit it read: a later tree is covered only to the extent
-it has not moved.
+it has not moved. The current tree postdates both reviews and changes admission,
+durable identity and qualification. Neither earlier review authorizes its next
+release; the release gate requires an external review of the final candidate
+commit.
 
 ## Recording a finding
 

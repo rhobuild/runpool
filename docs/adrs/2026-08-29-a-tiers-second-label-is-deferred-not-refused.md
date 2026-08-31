@@ -32,7 +32,7 @@ Against live GitHub, from `test/contract/githubactions`:
 - **A scale set is matched on holding all of the labels a job asks for,
   not on carrying exactly them.** A job asking for two labels was
   offered to the only set present, which carried those two and a third.
-  `TestAJobReachesAScaleSetCarryingMoreLabelsThanItAsksFor`.
+  `TestObservationJobReachesScaleSetWithSupersetLabels`.
 
 So two tiers whose labels overlap both answer one `runs-on`, and which
 of them serves a job — with its resource ceiling, its capsule image and

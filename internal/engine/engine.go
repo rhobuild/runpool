@@ -220,8 +220,9 @@ const (
 // tmpfs control surface is gone — so the exit code is the only account of
 // itself a capsule can leave behind.
 type ContainerState struct {
-	Status   ContainerStatus
-	ExitCode int
+	Status    ContainerStatus
+	ExitCode  int
+	OOMKilled bool
 }
 
 // OwnedContainer is one labeled container found during reconciliation.

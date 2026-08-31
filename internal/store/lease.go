@@ -55,14 +55,16 @@ func ValidTransition(from, to LeaseState) bool {
 
 func (s LeaseState) Terminal() bool { return s == LeaseReleased }
 
-// AllLeaseStates lists every state, including released.
-var AllLeaseStates = []LeaseState{
+var leaseStates = []LeaseState{
 	LeaseReserved, LeaseProvisioning, LeaseRuntimeRegistered,
 	LeaseWorkloadRunning, LeaseDraining, LeaseCleaning, LeaseReleased,
 	LeaseFailed, LeaseQuarantined,
 }
 
-// LiveLeaseStates is every state but released: the work an instance is
+// LeaseStates returns every state, including released.
+func LeaseStates() []LeaseState { return slices.Clone(leaseStates) }
+
+// liveLeaseStates contains every state but released: the work an instance is
 // still responsible for. Reporting, the reconciler's working set and the
 // resource sweep all read it.
 //
@@ -71,7 +73,10 @@ var AllLeaseStates = []LeaseState{
 // silent and expensive: a live state missing here drops those leases out
 // of the snapshot, so cleanup builds its keep set without them and
 // deletes the resources of a capsule that is running.
-var LiveLeaseStates = slices.DeleteFunc(slices.Clone(AllLeaseStates), LeaseState.Terminal)
+var liveLeaseStates = slices.DeleteFunc(slices.Clone(leaseStates), LeaseState.Terminal)
+
+// LiveLeaseStates returns the work an instance remains responsible for.
+func LiveLeaseStates() []LeaseState { return slices.Clone(liveLeaseStates) }
 
 // ReportedReleasedLeases is how much finished history a snapshot carries.
 // A report wants recent history, not all of it — and the difference is
@@ -108,11 +113,9 @@ type Lease struct {
 	UpdatedAt        time.Time
 }
 
-// ResourceKind is the Docker object type of an owned capsule resource;
-// Role says which part of the capsule it is, spelled as engine.Role and
-// stored as text. Neither is derived from the port's type: this is a row
-// that outlives the build that wrote it, and a role that stopped
-// existing must still read back.
+// ResourceKind is the container-engine object type of an owned capsule
+// resource. It is persisted because the intent outlives the process that
+// planned the external effect.
 type ResourceKind string
 
 const (
@@ -120,6 +123,53 @@ const (
 	ResourceNetwork   ResourceKind = "network"
 	ResourceVolume    ResourceKind = "volume"
 )
+
+var resourceKinds = []ResourceKind{
+	ResourceContainer, ResourceNetwork, ResourceVolume,
+}
+
+// ResourceKinds returns every persisted resource kind.
+func ResourceKinds() []ResourceKind { return slices.Clone(resourceKinds) }
+
+// ResourceRole identifies the part of a capsule an intent owns. Only
+// lease-scoped roles belong here; instance infrastructure and short-lived
+// probes are discovered through engine ownership labels and never acquire a
+// resource-intent row.
+type ResourceRole string
+
+const (
+	ResourceRoleCapsule        ResourceRole = "capsule"
+	ResourceRoleGateway        ResourceRole = "gateway"
+	ResourceRoleCapsuleNetwork ResourceRole = "capsule-net"
+	ResourceRoleDindData       ResourceRole = "dind-data"
+)
+
+var resourceRoles = []ResourceRole{
+	ResourceRoleCapsule, ResourceRoleGateway,
+	ResourceRoleCapsuleNetwork, ResourceRoleDindData,
+}
+
+// ResourceRoles returns every persisted resource role.
+func ResourceRoles() []ResourceRole { return slices.Clone(resourceRoles) }
+
+// ResourceState is the durable state of one external-effect saga.
+type ResourceState string
+
+const (
+	ResourcePlanned        ResourceState = "planned"
+	ResourceCreating       ResourceState = "creating"
+	ResourcePresent        ResourceState = "present"
+	ResourceCleanupPending ResourceState = "cleanup_pending"
+	ResourceDeleting       ResourceState = "deleting"
+)
+
+var resourceStates = []ResourceState{
+	ResourcePlanned, ResourceCreating, ResourcePresent,
+	ResourceCleanupPending, ResourceDeleting,
+}
+
+// ResourceStates returns every persisted resource state.
+func ResourceStates() []ResourceState { return slices.Clone(resourceStates) }
 
 // ResourceIntent is the durable plan for one external object, committed
 // before the effect that creates it and deleted only when the object is
@@ -131,13 +181,14 @@ type ResourceIntent struct {
 	ID        assignment.ResourceIntentID
 	LeaseID   assignment.LeaseID
 	Kind      ResourceKind
-	Role      string
+	Role      ResourceRole
 	Name      string
 	DockerID  string
-	State     string
+	State     ResourceState
 	Retries   int64
 	LastError string
-	NotBefore int64
+	// NotBefore is zero when no retry delay is active.
+	NotBefore time.Time
 	CreatedAt time.Time
 }
 

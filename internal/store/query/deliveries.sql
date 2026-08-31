@@ -5,14 +5,18 @@
 -- caller re-reads.
 
 -- name: InsertDelivery :one
-INSERT INTO broker_deliveries (binding_id, source_delivery_key, payload_sha256)
-VALUES (@binding_id, @source_delivery_key, @payload_sha256)
+INSERT INTO broker_deliveries (
+  binding_id, source_delivery_key, payload_sha256, payload_fingerprint_format
+)
+VALUES (@binding_id, @source_delivery_key, @payload_sha256, @payload_fingerprint_format)
 RETURNING id, binding_id, source_delivery_key, payload_sha256, ack_state,
-          received_at, ack_updated_at, acknowledged_at;
+          received_at, ack_updated_at, acknowledged_at,
+          payload_fingerprint_format;
 
 -- name: GetDeliveryByKey :one
 SELECT id, binding_id, source_delivery_key, payload_sha256, ack_state,
-       received_at, ack_updated_at, acknowledged_at
+       received_at, ack_updated_at, acknowledged_at,
+       payload_fingerprint_format
 FROM broker_deliveries
 WHERE binding_id = @binding_id
   AND source_delivery_key = @source_delivery_key;
@@ -35,4 +39,3 @@ WHERE id = @delivery_id AND ack_state IN ('pending', 'requested', 'uncertain');
 UPDATE broker_deliveries
 SET ack_state = 'uncertain', ack_updated_at = unixepoch()
 WHERE id = @delivery_id AND ack_state IN ('pending', 'requested');
-

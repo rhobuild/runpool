@@ -149,7 +149,7 @@ func TestConnectPortPolicy(t *testing.T) {
 		}
 	}
 	for _, port := range []int{80, 443} {
-		if _, ok := AllowedConnectPorts[port]; !ok {
+		if _, ok := AllowedConnectPorts()[port]; !ok {
 			t.Errorf("port %d must be in the allowed set; CI cannot work without it", port)
 		}
 	}
@@ -1036,13 +1036,18 @@ func TestTheAddressCheckedIsTheAddressDialed(t *testing.T) {
 // sixth port added here is a widening nothing reads back.
 func TestTheAllowedPortSetIsExactlyTwo(t *testing.T) {
 	want := map[int]string{80: "HTTP", 443: "HTTPS"}
-	if len(AllowedConnectPorts) != len(want) {
+	got := AllowedConnectPorts()
+	if len(got) != len(want) {
 		t.Fatalf("the relay allows %d ports: %v. Every one is a protocol a tunnel can carry "+
-			"to an allowed address", len(AllowedConnectPorts), AllowedConnectPorts)
+			"to an allowed address", len(got), got)
 	}
 	for port, name := range want {
-		if got, ok := AllowedConnectPorts[port]; !ok || got != name {
-			t.Errorf("port %d is %q, %v; want %q", port, got, ok, name)
+		if label, ok := got[port]; !ok || label != name {
+			t.Errorf("port %d is %q, %v; want %q", port, label, ok, name)
 		}
+	}
+	got[22] = "SSH"
+	if _, ok := AllowedConnectPorts()[22]; ok {
+		t.Error("mutating the returned port policy widened the relay's live policy")
 	}
 }

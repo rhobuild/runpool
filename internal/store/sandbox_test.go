@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestNoSandboxPassIsNotAHealthyOne: absent and healthy are different
 // answers, and the difference matters more here than in most places. An
@@ -42,16 +45,16 @@ func TestTheLastSandboxPassIsWhatIsRead(t *testing.T) {
 		return got
 	}
 
-	write(SandboxPass{At: 1000, Error: "the probe could not run"})
-	if got := read(); got == nil || got.At != 1000 || got.Error != "the probe could not run" {
+	write(SandboxPass{At: time.Unix(1000, 0), Error: "the probe could not run"})
+	if got := read(); got == nil || !got.At.Equal(time.Unix(1000, 0)) || got.Error != "the probe could not run" {
 		t.Fatalf("read back %+v; want the failure that was written", got)
 	}
 	// Recovery has to be readable, not only failure. A pass that
 	// succeeds must clear the reason, or a gateway that reopened still
 	// reports as closed.
-	write(SandboxPass{At: 2000})
+	write(SandboxPass{At: time.Unix(2000, 0)})
 	got := read()
-	if got == nil || got.At != 2000 {
+	if got == nil || !got.At.Equal(time.Unix(2000, 0)) {
 		t.Fatalf("read back %+v; want the later pass", got)
 	}
 	if got.Error != "" {

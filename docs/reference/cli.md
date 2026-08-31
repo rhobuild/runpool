@@ -50,6 +50,29 @@ reference](status-api.md). The other `--json` outputs — `version`,
 than contracts. They carry no version, and a consumer parsing them should
 expect fields to be added.
 
+## Paginated attempt listings
+
+`attempts list` returns at most 50 rows by default and accepts `--limit` from 1
+through 1000. Ordering is FIFO by the durable `(received_at, attempt_id)` key;
+pagination uses that key instead of `OFFSET`, so reading a deep queue does not
+scan and discard every earlier row. Pass `--cursor` the opaque value returned by
+the preceding page. A cursor is scoped to its `--state` and is rejected if used
+against the other queue.
+
+The JSON form is a document rather than a bare array:
+
+```json
+{
+  "state": "manual-review",
+  "attempts": [],
+  "total": 0
+}
+```
+
+`next_cursor` is present only when another page exists. `total` is the complete
+queue depth at the time that page was read; the listing is a live view, not a
+database snapshot held across CLI invocations.
+
 ## Completions
 
 `go generate ./internal/command/...` writes bash, zsh and fish

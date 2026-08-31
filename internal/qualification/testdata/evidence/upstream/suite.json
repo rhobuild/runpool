@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "suite_id": "contracts-github-actions",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "started_at": "2026-08-18T09:13:07Z",
+  "completed_at": "2026-08-18T09:14:07Z",
+  "environment": {
+    "kind": "github-hosted",
+    "runner": "ubuntu-24.04"
+  },
+  "expected_cases": [
+    "TestOrganizationJitAssignmentNotBound",
+    "TestInvalidCredentialFailsClosed",
+    "TestZeroCapacityDoesNotRevealQueuedDemand",
+    "TestDiscoveryCreditReachesASilentBinding",
+    "TestEveryContractFixtureIsInstalled",
+    "TestDeliveryIdentityIsStable",
+    "TestLapsedAssignmentIsCancelledAndRequeued",
+    "TestScaleSetSystemLabel",
+    "TestRepositoryScaleSetAndJitRunner",
+    "TestASecondSessionIsRefusedRecognisably",
+    "TestOrganizationDefaultGroupScaleSet",
+    "TestTheScaleSetForbidsRunnerSelfUpdate",
+    "TestAnAdoptedScaleSetForbidsRunnerSelfUpdate",
+    "TestAdoptionLeavesACorrectScaleSetAlone"
+  ],
+  "cases": [
+    {
+      "id": "TestOrganizationJitAssignmentNotBound",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestInvalidCredentialFailsClosed",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestZeroCapacityDoesNotRevealQueuedDemand",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestDiscoveryCreditReachesASilentBinding",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestEveryContractFixtureIsInstalled",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestDeliveryIdentityIsStable",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestLapsedAssignmentIsCancelledAndRequeued",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestScaleSetSystemLabel",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestRepositoryScaleSetAndJitRunner",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestASecondSessionIsRefusedRecognisably",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestOrganizationDefaultGroupScaleSet",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestTheScaleSetForbidsRunnerSelfUpdate",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestAnAdoptedScaleSetForbidsRunnerSelfUpdate",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestAdoptionLeavesACorrectScaleSetAlone",
+      "outcome": "passed",
+      "duration_ms": 10
+    }
+  ],
+  "summary": {
+    "expected": 14,
+    "executed": 14,
+    "passed": 14,
+    "failed": 0,
+    "skipped": 0
+  },
+  "outcome": "passed"
+}

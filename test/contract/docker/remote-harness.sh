@@ -13,6 +13,10 @@ set -euo pipefail
 # reference and compares the host against it.
 #
 # Usage: test/contract/docker/remote-harness.sh <dir with docker-contract.test>
+if [ "$#" -ne 1 ]; then
+  echo "usage: remote-harness.sh <dir with docker-contract.test>" >&2
+  exit 2
+fi
 dir=${1:?usage: remote-harness.sh <dir with docker-contract.test>}
 
 # The image TestPullOnMissingImage pulls. Held equal to the suite's own

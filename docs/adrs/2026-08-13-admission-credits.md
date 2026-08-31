@@ -33,11 +33,27 @@ this order, from one consistent read of the pool:
 3. **One credit, if still unclaimed, is the discovery credit.** It goes
    to a single binding with no demand signal and no running capsule.
 
-The discovery credit rotates. Each empty long-poll advances it to the
-next binding that could use it, skipping any binding that already has
-demand or a running capsule — those can already see and be seen.
-Skipping them is what bounds the wait: every silent binding holds the
-credit within one pass of the pool.
+The allocator publishes that distribution as an immutable `AllocationPlan`.
+Allocation changes advance its generation and invalidate the cached plan;
+remote poll acknowledgements do not rebuild a desired distribution that did
+not change. Water-filling is performed in batches in O(B log P), where B is the
+number of bindings and P is the configured parallelism, rather than scanning
+every binding once per credit.
+
+The discovery credit rotates. A successful empty long-poll advances it only
+when that poll was made by the holder under the current discovery generation.
+An empty poll from a binding at zero, or from another tier, carries no evidence
+about the holder and cannot move it. Bindings with demand or a running capsule
+are skipped because they can already see and be seen.
+
+Provider polls are concurrent, so a desired snapshot is not by itself the
+remote invariant. The allocator also accounts for the last capacity a session
+confirmed and every poll in flight. An increase reserves its remote credit
+before the request begins; a decrease releases the old value only after a
+successful response. The next discovery holder therefore remains at zero until
+the previous holder has confirmed its revoke. On restart, a tier remains at
+zero until every predecessor session sharing its budget has been replaced or
+closed; under an instance-wide limit that requirement spans all tiers.
 
 So the floor's guarantee survives in a weaker, affordable form. Sight is
 no longer a permanent per-binding reservation; it is a bounded wait for
@@ -49,11 +65,10 @@ capacity that will not be served must not be announced.
 
 ## Consequences
 
-- `sum(advertised) <= tier parallelism` holds for any single state of a pool, and
-  the tests assert it across the states a pool passes through and under
-  concurrent traffic. The invariant is a statement about the pool, so it
-  is read through `AdvertisedAll`; summing per-binding calls samples as
-  many instants as there are bindings and proves nothing.
+- `sum(advertised) <= tier parallelism` holds for any single desired state,
+  while the maximum capacity that concurrent polls may have established
+  remotely is bounded separately. Tests cover pending increases, failed
+  revokes, session replacement, cross-tier isolation and global limits.
 - More bindings than tier parallelism is a legal configuration. The validator
   accepts it and the doctor warns instead of failing, because the cost
   is real but bounded: a first job for a silent binding may wait one
@@ -62,7 +77,10 @@ capacity that will not be served must not be announced.
   the operator the whole tier's accounting — demand, reserved,
   advertised, and who holds discovery — and the controller logs it
   whenever a binding's announcement changes.
-- Release qualification includes the live upstream behaviour: a silent binding must
-  discover a queued job through the rotating credit against the real broker.
-  Hermetic tests prove the local allocation contract; they do not replace that
+- Release qualification must include the live upstream behaviour: multiple
+  silent bindings must discover queued work through the rotating credit against
+  the real broker. Hermetic tests prove the local protocol; they do not replace
   provider evidence.
+- The supported-scale benchmark covers 10,000 bindings and 10,000 credits in
+  independent-tier and global-limit modes. Rebuilds budget 20 ms, bounded
+  candidate visits, and bounded allocations; cached reads allocate nothing.

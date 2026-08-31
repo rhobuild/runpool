@@ -4,7 +4,7 @@
 Persistence rows change with migrations; this shape changes only with
 its `api_version`, so something reading it can be written once.
 
-**Current version: `v1`.** The product version and this document version move
+**Current version: `v2`.** The product version and this document version move
 independently; consumers must reject unknown versions rather than interpreting
 them under the wrong schema.
 
@@ -14,15 +14,17 @@ them under the wrong schema.
   test asserts they have not leaked in.
 - **Collections are always arrays.** An empty one is `[]`, never
   `null`, so a consumer branches on length rather than presence.
-- **`null` means absent, not empty.** `disk_pressure` is `null` before
-  the monitor has run once; `egress_sandbox` is `null` before the first
+- **`null` means absent, not empty.** `disk_pressure` is `null` only for
+  state created before the pressure monitor recorded its first verdict;
+  current controllers record `unknown` when measurement is unavailable.
+  `egress_sandbox` is `null` before the first
   rediscovery pass and for the whole life of an instance that maintains
   no policy; `discrepancies` is `null` when the daemon could not be
   reached, which is different from finding none.
 
 ## The two forms, and their discriminator
 
-`served` is a boolean in every v1 document, and it is what a consumer
+`served` is a boolean in every v2 document, and it is what a consumer
 branches on — never on which fields happen to exist.
 
 **`served: false`** is the whole document before the controller's first
@@ -31,7 +33,7 @@ nothing is invented. It carries exactly `api_version`, `served`,
 `state_dir` and `detail`.
 
 ```json
-{"api_version": "v1", "served": false,
+{"api_version": "v2", "served": false,
  "state_dir": "/var/lib/runpool/state",
  "detail": "this instance has not run yet"}
 ```
@@ -48,20 +50,22 @@ absent state, because the attempt it was asked about cannot exist.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `api_version` | string | `v1` |
+| `api_version` | string | `v2` |
 | `served` | boolean | The discriminator above; `true` in this form |
 | `instance` | string | This instance's opaque id |
 | `host_topology` | string | Effective `shared-daemon` or `dedicated-daemon`; `unknown` only when status cannot read configuration |
 | `schema_version` | number | The state schema in use |
 | `scheduling` | object, optional | Present when status can read configuration: `mode`, `instance_parallelism`, `effective_parallelism`, `active`, `available`, `queued`, and `tiers[]` |
-| `disk_pressure` | object or null | `level`, `free_bytes`, `free_inodes`, `managed_bytes`, `measured_at` |
+| `disk_pressure` | object or null | `level` is `unknown`, `normal`, `high`, `soft_emergency`, or `hard_emergency`; `free_bytes`, `free_inodes`, `managed_bytes`, and `measured_at` carry the verdict's facts. All three quantities are `-1` when `level` is `unknown` because no measurement was available |
 | `egress_sandbox` | object or null | `last_pass_at`, and `error` when the last rediscovery failed. A non-empty `error` means every gateway on this host is closed to all egress; a `last_pass_at` that has stopped moving means the pass itself has stopped running |
-| `bindings` | array | `target_id`, `provider_kind`, `source_binding_key`, and the provider reach fields below |
+| `bindings` | array | `target_id`, `provider_kind`, `configured_binding_key`, and the provider reach fields below |
 | `leases` | array | `id`, `state`, `terminal`, `attempt_id`, `project`, `runtime_name`, `evidence`, `created_at`, `resources[]`. Every live lease, plus recent finished ones — see below |
 | `leases[].resources` | array | What the lease owns on the daemon: `kind`, `role`, `name`, `lease_id`, and `state` — one of `planned`, `creating`, `present`, `cleanup_pending`, `deleting`, which is the books' account of the object rather than the daemon's |
 | `released_total` | number | How many finished leases the store holds, which is more than the `leases` array carries |
 | `cache_lanes` | array | `id`, `source_project_key`, `generation`, `leased_by`, `last_used` |
-| `manual_review` | array | Attempts held for a person: `id`, `workload`, `project`, `state`, `review_reason`, `age_seconds`, and once resolved `resolution` and `reviewed_by` |
+| `manual_review` | array | The oldest attempts held for a person, capped at 50: `id`, `workload`, `project`, `state`, `review_reason`, `age_seconds`, and once resolved `resolution` and `reviewed_by` |
+| `manual_review_total` | number | Complete count of attempts held for review when the report was read |
+| `manual_review_next_cursor` | string, optional | Opaque cursor for `runpool attempts list --state manual-review --cursor <value>` when more than 50 attempts are held |
 | `containers` | array | Owned containers: `name`, `role`, `lease_id`, `running` |
 | `networks`, `volumes` | array | Owned objects: `kind`, `role`, `name`, `lease_id`. No `state` — it is recorded per lease, and these are reported from the daemon |
 | `discrepancies` | array or null | Where the books and the daemon disagree; `null` if the daemon could not be asked |
@@ -120,14 +124,18 @@ ranking it by its start would put it outside the window the array carries.
 needs that figure must read it there rather than measure the `leases` array,
 whose length is what the document reports and not what exists.
 
+`manual_review` follows the same bounded-report rule. It contains at most the
+50 oldest held attempts, while `manual_review_total` reports the whole queue.
+When more exist, `manual_review_next_cursor` continues from the last included
+attempt through `attempts list`; consumers must treat the cursor as opaque.
+
 ## Vocabulary
 
-The document is provider neutral, and deliberately so: a consumer that
-parses `source_binding_key` is reading the wrong document. It is the
-binding's own identity, versioned and opaque here; for a GitHub Actions
-binding it is built from the configured target id, the runner group and
-the scale set name, which is enough to tell two bindings apart without
-knowing what any of it means.
+The document is provider neutral, and deliberately so: a consumer that parses
+`configured_binding_key` is reading the wrong document. It is a named, opaque
+encoding of operator configuration; for a GitHub Actions binding it contains
+the configured target id, runner group and scale set name. Provider-issued
+identity remains in the adapter and is not encoded into this field.
 
 One consequence an operator needs, because it is not visible from the
 key: renaming a `targets[].id` in configuration produces a different

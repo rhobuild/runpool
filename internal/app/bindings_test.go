@@ -49,7 +49,7 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	h.bind.scaleSetID = 0
 	sets := &flakyScaleSets{failures: 2}
 	h.bind.gh = sets
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 	// The broker stays unreachable too, so the loop is exercised in the
 	// state this test is about: connected to nothing, still running.
 	// Reaching the session open is the loop's own statement that the
@@ -70,7 +70,7 @@ func TestAnUnreachableProviderDoesNotEndTheLoop(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 
 	select {
@@ -153,7 +153,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 	h.bind.gh = &refusingScaleSets{calls: &attempts, reached: func() {
 		once.Do(func() { close(tried) })
 	}}
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 	h.bind.newSession = func(context.Context) (providerSession, error) {
 		return nil, errors.New("broker unreachable")
 	}
@@ -162,7 +162,7 @@ func TestAnUnreachableProviderDoesNotSpendTheQueue(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	<-tried
 	// Wait for the second pass rather than sleeping a window and hoping
@@ -234,7 +234,7 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 	}
 
 	same := errors.New("provider unreachable")
-	h.srv.recordProviderFailure(ctx, h.bind, same)
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, same)
 	first := read()
 	if first.LastError != same.Error() {
 		t.Fatalf("first failure not recorded: %+v", first)
@@ -245,7 +245,7 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 	// "did not write" observable at all, since the only evidence of a
 	// write is a moment that moved.
 	time.Sleep(5 * time.Millisecond)
-	h.srv.recordProviderFailure(ctx, h.bind, same)
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, same)
 	if again := read(); !again.LastErrorAt.Equal(first.LastErrorAt) {
 		t.Errorf("a repeated failure moved its own start from %v to %v",
 			first.LastErrorAt, again.LastErrorAt)
@@ -253,13 +253,13 @@ func TestProviderReachIsWrittenOnTransition(t *testing.T) {
 
 	// A different failure is a transition and is written at once.
 	time.Sleep(5 * time.Millisecond)
-	h.srv.recordProviderFailure(ctx, h.bind, errors.New("401 Unauthorized"))
+	h.srv.supervisor.recordProviderFailure(ctx, h.bind, errors.New("401 Unauthorized"))
 	if got := read(); got.LastError != "401 Unauthorized" {
 		t.Errorf("a changed failure was not recorded: %+v", got)
 	}
 
 	// Recovery is a transition too, and must not wait out the heartbeat.
-	h.srv.recordProviderContact(ctx, h.bind)
+	h.srv.supervisor.recordProviderContact(ctx, h.bind)
 	got := read()
 	if got.LastError != "" {
 		t.Errorf("recovery left the failure in place: %+v", got)
@@ -318,7 +318,7 @@ func TestACrashBetweenCreatingAndRecordingConverges(t *testing.T) {
 				})
 			}}
 			h.bind.gh = sets
-			if err := h.srv.ensureScaleSet(t.Context(), h.bind); err != nil {
+			if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err != nil {
 				t.Fatalf("ensureScaleSet: %v", err)
 			}
 			if sets.lastIntended != tc.wantIntended {
@@ -383,10 +383,10 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 		}
 		t.Cleanup(func() { st.Close() })
 		var buf strings.Builder
-		s := &Controller{
+		s := &bindingSupervisor{
 			log:       slog.New(slog.NewTextHandler(&buf, nil)),
 			store:     st,
-			alloc:     allocator.New(),
+			allocator: allocator.New(),
 			byBinding: map[assignment.BindingID]*binding{},
 		}
 		cfg := &config.Config{
@@ -426,42 +426,22 @@ func TestStartupSaysWhereEachCredentialTravels(t *testing.T) {
 	}
 }
 
-// TestTheBindingKeyIsVersionedAndPinned: the durable binding key is a
-// literal here, not a comparison against itself.
-//
-// Its sibling in internal/assignment pins the delivery key this way, and
-// that is the cheaper of the two to move: a re-keyed delivery is
-// processed again and finds its attempts by workload key. This one is
-// the expensive one. Moving it renames every binding — the old row is
-// forgotten on the next startup with the scale set id recorded against
-// it, and each binding then meets a provider that already holds its
-// scale set and refuses to adopt one it has no record of creating.
-//
-// The test that existed compared sourceBindingKey's output to
-// sourceBindingKey's output, so any change to the encoding, version
-// included, left the suite green. The costly one was the unpinned one.
-func TestTheBindingKeyIsVersionedAndPinned(t *testing.T) {
-	got := sourceBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
-	if want := assignment.SourceBindingKey("v2|app|default|runpool-standard"); got != want {
-		t.Errorf("sourceBindingKey = %q; want %q. This value keys every delivery, attempt "+
+// TestTheBindingKeyFormatIsNamedAndPinned holds the durable encoding against a
+// literal. Changing it requires a migration of the binding-owned graph.
+func TestTheBindingKeyFormatIsNamedAndPinned(t *testing.T) {
+	got := configuredBindingKey(config.Target{ID: "app", RunnerGroup: "default"}, "runpool-standard")
+	if want := assignment.ConfiguredBindingKey("target-runner-group-scale-set|app|default|runpool-standard"); got != want {
+		t.Errorf("configuredBindingKey = %q; want %q. This value keys every delivery, attempt "+
 			"and lease a binding owns, and moving it is a migration rather than an encoding change",
 			got, want)
 	}
 }
 
-// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser: a binding's
-// durable identity is what an operator configured, not a parsed form of
-// the address they wrote.
-//
-// The key was built from the parsed scope and the canonical URL, so a
-// change to how a URL is read moves the key of a deployment that changed
-// nothing: the next start inserts a second binding beside the first, and
-// the original is left in `status` for good with no command that removes
-// it. Every delivery, attempt and lease hangs off that row, so the
-// history goes with it.
+// TestTheDurableBindingKeyDoesNotMoveWithTheURLParser keeps parsed provider
+// identity out of the operator-configured durable key.
 func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	base := config.Target{ID: "app", RunnerGroup: "default"}
-	want := sourceBindingKey(base, "runpool-standard")
+	want := configuredBindingKey(base, "runpool-standard")
 
 	for name, url := range map[string]string{
 		"a plain repository URL": "https://github.com/acme/app",
@@ -472,7 +452,7 @@ func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			target := base
 			target.URL = url
-			if got := sourceBindingKey(target, "runpool-standard"); got != want {
+			if got := configuredBindingKey(target, "runpool-standard"); got != want {
 				t.Errorf("key = %q for %s; want %q — the identity moved with the address form",
 					got, url, want)
 			}
@@ -482,10 +462,10 @@ func TestTheDurableBindingKeyDoesNotMoveWithTheURLParser(t *testing.T) {
 	// And it still separates what genuinely differs.
 	other := base
 	other.RunnerGroup = "isolated"
-	if sourceBindingKey(other, "runpool-standard") == want {
+	if configuredBindingKey(other, "runpool-standard") == want {
 		t.Error("two runner groups share one binding key")
 	}
-	if sourceBindingKey(base, "runpool-large") == want {
+	if configuredBindingKey(base, "runpool-large") == want {
 		t.Error("two scale sets share one binding key")
 	}
 }
@@ -525,10 +505,10 @@ func TestARefusedNameStaysRefusedOnTheNextPass(t *testing.T) {
 	sets := &occupiedScaleSets{}
 	h.bind.gh = sets
 
-	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+	if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err == nil {
 		t.Fatal("the first pass adopted a scale set this instance did not create")
 	}
-	if err := h.srv.ensureScaleSet(t.Context(), h.bind); err == nil {
+	if err := h.srv.supervisor.ensureScaleSet(t.Context(), h.bind); err == nil {
 		t.Fatal("the second pass adopted it: the refusal was defeated by the intention the refused pass wrote")
 	}
 	if sets.adopted != 0 {
@@ -553,10 +533,10 @@ func TestTheTierImageIsResolvedWhereBindingsAreBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	s := &Controller{
+	s := &bindingSupervisor{
 		log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 		store:               st,
-		alloc:               allocator.New(),
+		allocator:           allocator.New(),
 		byBinding:           map[assignment.BindingID]*binding{},
 		shippedCapsuleImage: "runpool-capsule:dev",
 	}

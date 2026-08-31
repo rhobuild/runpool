@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -85,15 +86,29 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cacheMgr := cache.New(st, nopVolumes{}, st.InstanceID())
 	h.objects = &fakeObjects{wedged: map[string]bool{}}
+	byBinding := map[assignment.BindingID]*binding{bindingID: b}
 	h.srv = &Controller{
 		log:       log,
 		store:     st,
-		objects:   h.objects,
+		alloc:     allocator.New(),
+		ownership: newLeaseOwnership(),
+	}
+	h.srv.executor = &leaseExecutor{
+		log:       log,
+		store:     st,
 		leases:    lease.NewManager(st, nopRemover{}, log),
 		cache:     cacheMgr,
-		alloc:     allocator.New(),
-		bindings:  []*binding{b},
-		byBinding: map[assignment.BindingID]*binding{bindingID: b},
+		allocator: h.srv.alloc,
+		ownership: h.srv.ownership,
+	}
+	h.srv.reconciler = &reconciler{
+		log:       log,
+		store:     st,
+		objects:   h.objects,
+		allocator: h.srv.alloc,
+		executor:  h.srv.executor,
+		ownership: h.srv.ownership,
+		byBinding: byBinding,
 		// A lease this harness calls stranded was written moments ago,
 		// because no test here simulates the passage of time. The grace
 		// exists for a real gap between a lease committing and its owner
@@ -103,6 +118,7 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	if err := h.srv.alloc.Register(assignment.TierID(b.tier.ID), b.key, parallelism); err != nil {
 		t.Fatal(err)
 	}
+	h.srv.alloc.SessionOpened(b.key)
 	// The monitor is real, on a defaulted policy and a probe that reports
 	// room: admission consults the level on every delivery, and a nil
 	// monitor would make "no pressure" indistinguishable from "not wired".
@@ -110,22 +126,41 @@ func newHarnessOnStore(t *testing.T, st *store.Store, parallelism int) *harness 
 	config.ApplyDefaults(monitorCfg)
 	h.probe = &fakeProbe{free: engine.FilesystemFree{FreeBytes: 1 << 40, FreeInodes: 1 << 20}}
 	h.srv.disk = newDiskMonitor(monitorCfg, log, st, h.probe, cacheMgr, h.srv.alloc, "probe-image")
+	if err := h.srv.disk.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	// The default launch records the claim and leaves the lease running,
 	// so a test decides its outcome explicitly.
-	h.srv.launch = func(_ *binding, lease store.Lease) {
-		defer h.srv.wg.Done()
-		h.mu.Lock()
-		h.launched = append(h.launched, lease.AttemptID)
-		h.leases[lease.AttemptID] = lease
-		h.mu.Unlock()
+	h.srv.scheduler = &attemptScheduler{
+		log:         log,
+		store:       st,
+		allocator:   h.srv.alloc,
+		ownership:   h.srv.ownership,
+		pressure:    h.srv.currentPressure,
+		createLease: h.srv.executor.createLease,
+		launch: func(_ *binding, lease store.Lease) {
+			h.mu.Lock()
+			h.launched = append(h.launched, lease.AttemptID)
+			h.leases[lease.AttemptID] = lease
+			h.mu.Unlock()
+		},
+	}
+	h.srv.supervisor = &bindingSupervisor{
+		log:       log,
+		store:     st,
+		allocator: h.srv.alloc,
+		scheduler: h.srv.scheduler,
+		bindings:  []*binding{b},
+		byBinding: byBinding,
 	}
 	return h
 }
 
 // deliverMsg persists one broker message through the production path.
 // The message id is explicit so a test can redeliver the same message.
-func (h *harness) deliverMsg(msgID int, workloads ...assignment.WorkloadAssignment) error {
-	_, err := h.srv.persistDelivery(h.t.Context(), h.bind, &githubactions.Message{
+func (h *harness) deliverMsg(msgID assignment.SourceDeliveryID,
+	workloads ...assignment.WorkloadAssignment) error {
+	_, err := h.srv.supervisor.persistDelivery(h.t.Context(), h.bind, &githubactions.Message{
 		ID: msgID, Assigned: workloads,
 	})
 	return err
@@ -134,12 +169,12 @@ func (h *harness) deliverMsg(msgID int, workloads ...assignment.WorkloadAssignme
 // deliver persists one fresh message.
 func (h *harness) deliver(workloads ...assignment.WorkloadAssignment) error {
 	h.msgSeq++
-	return h.deliverMsg(h.msgSeq, workloads...)
+	return h.deliverMsg(assignment.SourceDeliveryID(h.msgSeq), workloads...)
 }
 
 func (h *harness) serve() {
-	h.srv.scheduleReadyAttempts(h.t.Context(), h.bind)
-	h.srv.wg.Wait()
+	h.srv.scheduler.schedule(h.t.Context(), h.bind)
+	<-h.srv.ownership.wait()
 }
 
 func (h *harness) launchedAttempts() []assignment.AttemptID {
@@ -151,7 +186,7 @@ func (h *harness) launchedAttempts() []assignment.AttemptID {
 // useRemover rebuilds the lease manager over a faulted daemon, so a test
 // can drive the cleanup saga through removal failures.
 func (h *harness) useRemover(r lease.Remover) {
-	h.srv.leases = lease.NewManager(h.store, r, h.srv.log)
+	h.srv.executor.leases = lease.NewManager(h.store, r, h.srv.log)
 }
 
 func (h *harness) recordEvidence(leaseID assignment.LeaseID, e store.Evidence) {
@@ -176,7 +211,7 @@ func (h *harness) ready() []store.Attempt {
 	var out []store.Attempt
 	h.inStore(func(s *store.Tx) error {
 		var err error
-		out, err = s.ReadyAttempts(h.bind.bindingID)
+		out, err = s.AllReadyAttempts(h.bind.bindingID)
 		return err
 	})
 	return out
@@ -207,12 +242,13 @@ func (h *harness) attemptByLease(leaseID assignment.LeaseID) store.Attempt {
 // resolveWithoutRuntime runs recovery for a lease whose capsule
 // no longer exists — the common crash shape these tests construct.
 func (h *harness) resolveWithoutRuntime(ctx context.Context, lease store.Lease) {
-	h.srv.resolveInterrupted(ctx, h.bind, lease, engine.OwnedContainer{}, false)
+	h.srv.reconciler.resolveInterrupted(ctx, h.bind, lease, engine.OwnedContainer{}, false)
 }
 
 func demand(workloadKey, project string, run int64) assignment.WorkloadAssignment {
 	return assignment.WorkloadAssignment{
-		SourceWorkloadKey: workloadKey, TenantKey: "acme", ProjectKey: project, SourceRunID: run,
+		SourceWorkloadKey: assignment.SourceWorkloadKey(workloadKey), TenantKey: "acme",
+		ProjectKey: assignment.ProjectKey(project), SourceRunID: run,
 	}
 }
 
@@ -378,6 +414,25 @@ func TestAttemptsWaitForACreditAndSurvive(t *testing.T) {
 	}
 }
 
+func TestSchedulerDrainsSeveralBoundedBatches(t *testing.T) {
+	const attempts = maxReadyAttemptBatch*2 + 2
+	h := newHarness(t, attempts)
+	workloads := make([]assignment.WorkloadAssignment, attempts)
+	for index := range workloads {
+		workloads[index] = demand(fmt.Sprintf("job-%03d", index), "app", int64(index+1))
+	}
+	if err := h.deliver(workloads...); err != nil {
+		t.Fatal(err)
+	}
+	h.serve()
+	if got := len(h.launchedAttempts()); got != attempts {
+		t.Fatalf("launched %d attempts; want all %d across bounded batches", got, attempts)
+	}
+	if ready := h.ready(); len(ready) != 0 {
+		t.Fatalf("%d attempts remain ready after capacity admitted the complete backlog", len(ready))
+	}
+}
+
 // The lease machine's own contracts — disposition by evidence, the
 // atomicity of the finalizing transaction, the cleanup saga's backoff —
 // live with the code that owns them, in internal/lease. What stays here
@@ -443,7 +498,7 @@ func leaseFor(t *testing.T, h *harness, workloadKey assignment.SourceWorkloadKey
 	var lease store.Lease
 	var attemptID assignment.AttemptID
 	if err := h.store.Tx(context.Background(), func(tx *store.Tx) error {
-		ready, err := tx.ReadyAttempts(h.bind.bindingID)
+		ready, err := tx.AllReadyAttempts(h.bind.bindingID)
 		if err != nil {
 			return err
 		}
@@ -452,7 +507,7 @@ func leaseFor(t *testing.T, h *harness, workloadKey assignment.SourceWorkloadKey
 				continue
 			}
 			attemptID = a.ID
-			lease, err = tx.LeaseAttempt(a.ID, h.bind.bindingID, h.bind.tier.ID)
+			lease, err = tx.LeaseAttempt(a.ID, h.bind.bindingID, assignment.TierID(h.bind.tier.ID))
 			return err
 		}
 		t.Fatalf("no ready attempt for workload %q", workloadKey)
@@ -510,7 +565,7 @@ func driveLeaseTo(t *testing.T, h *harness, leaseID assignment.LeaseID, target s
 // start took effect. The observation the capsule answers with is the
 // caller's to choose, because it is the fact under test.
 func (h *harness) resolveWithRuntime(ctx context.Context, lease store.Lease, obs assignment.ExecutionObservation) {
-	h.srv.caps = &fakeCapsule{obs: obs}
-	h.srv.resolveInterrupted(ctx, h.bind, lease,
+	h.srv.executor.capsule = &fakeCapsule{obs: obs}
+	h.srv.reconciler.resolveInterrupted(ctx, h.bind, lease,
 		engine.OwnedContainer{ID: "runner-x", Role: engine.RoleCapsule, Running: false}, true)
 }

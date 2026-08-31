@@ -110,6 +110,13 @@ assignment carries the same workload key, so the index does not tell the
 two apart: it is what forces the requeue to supersede the open attempt
 instead of opening a second one beside it.
 
+The delivery also carries a digest of its assigned payload and the semantic
+name of the encoding that produced it. The current encoding is canonical and
+length-prefixed; a historical row is compared with the encoder named beside
+its digest. An exact historical redelivery therefore remains idempotent, while
+structurally different content under the same provider key still fails closed
+as contract drift.
+
 Nothing is acknowledged before it is durable. Execution evidence is
 monotonic and never guesses: `not_started`, `runtime_prepared`,
 `execution_start_authorized`, `running_observed`, `exit_observed`.
@@ -169,20 +176,38 @@ A tier holds as many credits as its configured parallelism. Running capsules hol
 free credits follow demand, max-min fair; one still-unclaimed credit is
 the tier's rotating discovery credit, which is what keeps a binding
 with no demand signal from going blind to its own queue. The sum a tier
-advertises never exceeds it.
+desires never exceeds it. All binding loops read the same immutable,
+generation-tagged allocation plan; batch water-filling bounds a rebuild by the
+number of bindings and the logarithm of configured parallelism. Capacity that
+may still be in force at the provider
+is accounted separately: increases reserve before polling, decreases release
+only after a successful poll, and only the current holder's empty poll rotates
+discovery.
 
 When `scheduling.parallelism` is configured, the same accounting also has an
 instance-wide ceiling across every tier and target. Provider announcements and
 local admission consume the same credits, and startup adoption restores the
 count before new work can enter. With no global limit, tiers remain independent.
 
+Ready work remains in SQLite until a credit can serve it. The scheduler reads
+that FIFO in batches bounded by both currently reservable capacity and a fixed
+64-row ceiling, then claims each attempt and creates its lease in one
+compare-and-swap transaction. Backlog depth therefore does not determine the
+controller's query result size, and concurrent scheduling passes cannot create
+two leases for one attempt.
+
 ## The host is a budget too
 
 A monitor measures the daemon's filesystem from inside it and the
 daemon-accounted size of every cache lane, and a pure state machine
-decides the level: normal, high, soft emergency, hard emergency.
+decides the level: unknown, normal, high, soft emergency, hard emergency.
 Recovery is hysteretic. High collects garbage; soft closes admission
-and collects aggressively; hard fails closed and deletes nothing.
+and collects aggressively; hard fails closed and deletes nothing. Unknown
+also closes admission: construction holds the allocator, startup performs a
+fresh measurement before provider sessions are built, and a failed probe
+persists unavailable facts rather than inheriting an old normal verdict.
+Transitions that close admission take effect before their store write;
+transitions that open it are persisted first.
 
 The host topology is part of configuration, not an installation assumption.
 `shared-daemon` requires a positive reserve for colocated platform and

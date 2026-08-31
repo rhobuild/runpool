@@ -37,6 +37,8 @@ concurrency:
 env:
   # Held equal to go.mod by the consistency suite.
   GOTOOLCHAIN: go1.26.7
+  QUALIFICATION_COMMIT: ${{ github.sha }}
+  QUALIFICATION_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   contracts:
@@ -110,11 +112,8 @@ jobs:
           permission-contents: read
           permission-organization-self-hosted-runners: write
 
-      # Before the suite, because the suite is eight minutes long and a
-      # fixture that is not installed is knowable in five seconds. The
-      # last release cycle was spent finding one of these from a single
-      # test, after the tag had been cut.
-      - name: Verify the installed fixtures
+      # Check all required fixtures before the longer contracts dispatch.
+      - name: Verify the installed contract fixtures
         env:
           RUNPOOL_CONTRACT_ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
           RUNPOOL_CONTRACT_ORG_TOKEN: ${{ steps.org-token.outputs.token }}
@@ -122,10 +121,9 @@ jobs:
           RUNPOOL_CONTRACT_REPO_B: ${{ vars.RUNPOOL_CONTRACT_REPO_B }}
           RUNPOOL_CONTRACT_QUALIFY: ${{ inputs.qualify && '1' || '' }}
         run: |
-          check=TestEveryFixtureThisSuiteReadsIsInstalled
-          # `go test -run` that matches nothing exits 0, so a rename of
-          # the function would leave this step green and this gate gone.
-          # The name has to appear in the output, not only in the flag.
+          check=TestEveryContractFixtureIsInstalled
+          # `go test -run` that matches nothing exits 0. Require the test's
+          # start marker so a rename cannot silently remove this gate.
           go test ./test/contract/githubactions/ -count=1 -run "$check" -v | tee fixture-check.log
           grep -q "^=== RUN   $check\$" fixture-check.log || {
             echo "$check did not run; it was renamed or removed, and this step was gating nothing" >&2
@@ -153,9 +151,32 @@ jobs:
           # find that drift, so it runs there too and not only when a
           # release is being qualified.
           RUNPOOL_CONTRACT_REASSIGNMENT: "1"
+          QUALIFYING: ${{ inputs.qualify && '1' || '' }}
         run: |
           mkdir -p upstream-evidence
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go test -count=1 -v -timeout 40m ./test/contract/githubactions/... 2>&1 | tee upstream-evidence/contract.log
+          if [ -n "$QUALIFYING" ]; then
+            completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            go run ./internal/qualification/cmd/suite-evidence \
+              -suite contracts-github-actions -commit "$QUALIFICATION_COMMIT" -run "$QUALIFICATION_RUN_URL" \
+              -started-at "$started" -completed-at "$completed" \
+              -environment github-hosted -runner ubuntu-24.04 \
+              -log upstream-evidence/contract.log > upstream-evidence/suite.json
+          fi
+
+      - name: Observe optional upstream behavior
+        # These probes inform capabilities Runpool does not expose. Drift is
+        # worth reporting on scheduled and manual runs, but it cannot qualify
+        # or block a release that does not consume the behavior.
+        if: ${{ !inputs.qualify }}
+        env:
+          RUNPOOL_CONTRACT_ORG_URL: ${{ vars.RUNPOOL_CONTRACT_ORG_URL }}
+          RUNPOOL_CONTRACT_ORG_TOKEN: ${{ steps.org-token.outputs.token }}
+          RUNPOOL_CONTRACT_REPO_A: ${{ vars.RUNPOOL_CONTRACT_REPO_A }}
+        run: |
+          go test -tags=github_observation -count=1 -v -timeout 20m \
+            -run '^TestObservation' ./test/contract/githubactions/... 2>&1 | tee upstream-evidence/observation.log
 
       - name: Refuse credential-bearing evidence
         id: evidence-check

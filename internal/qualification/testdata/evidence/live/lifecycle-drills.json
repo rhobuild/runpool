@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "suite_id": "lifecycle-drills",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "started_at": "2026-08-18T09:13:07Z",
+  "completed_at": "2026-08-18T09:14:07Z",
+  "environment": {
+    "kind": "release-platform",
+    "runner": "self-hosted",
+    "facts": {
+      "os": "debian",
+      "os_version": "13",
+      "os_codename": "trixie",
+      "arch": "amd64",
+      "kernel": "6.12.48+deb13-amd64",
+      "engine": "29.7.2",
+      "api": "1.53",
+      "cgroup_version": "2",
+      "cgroup_driver": "systemd",
+      "storage_driver": "overlayfs",
+      "backing_filesystem": "extfs",
+      "rootless": false,
+      "containerd": "2.2.0",
+      "runc": "1.4.2",
+      "buildx": "v0.32.0",
+      "compose": "2.42.0",
+      "iptables": "iptables v1.8.11 (nf_tables)",
+      "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+    }
+  },
+  "expected_cases": [
+    "install",
+    "backup",
+    "restore",
+    "upgrade",
+    "uninstall"
+  ],
+  "cases": [
+    {
+      "id": "install",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "backup",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "restore",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "upgrade",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "uninstall",
+      "outcome": "passed",
+      "duration_ms": 10
+    }
+  ],
+  "summary": {
+    "expected": 5,
+    "executed": 5,
+    "passed": 5,
+    "failed": 0,
+    "skipped": 0
+  },
+  "outcome": "passed"
+}

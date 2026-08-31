@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "suite_id": "capsule-contract",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "run": "https://github.com/rhobuild/runpool/actions/runs/1",
+  "started_at": "2026-08-18T09:13:07Z",
+  "completed_at": "2026-08-18T09:14:07Z",
+  "environment": {
+    "kind": "release-platform",
+    "runner": "self-hosted",
+    "facts": {
+      "os": "debian",
+      "os_version": "13",
+      "os_codename": "trixie",
+      "arch": "amd64",
+      "kernel": "6.12.48+deb13-amd64",
+      "engine": "29.7.2",
+      "api": "1.53",
+      "cgroup_version": "2",
+      "cgroup_driver": "systemd",
+      "storage_driver": "overlayfs",
+      "backing_filesystem": "extfs",
+      "rootless": false,
+      "containerd": "2.2.0",
+      "runc": "1.4.2",
+      "buildx": "v0.32.0",
+      "compose": "2.42.0",
+      "iptables": "iptables v1.8.11 (nf_tables)",
+      "nftables": "nftables v1.1.1 (Commodore Bullmoose)"
+    }
+  },
+  "capsule_image": "ghcr.io/rhobuild/runpool/capsule@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "expected_cases": [
+    "TestLeaseResourceEnvelopeAndGatewayPIDRecovery",
+    "TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope",
+    "TestNetworkSandboxBypass",
+    "TestCapsuleLifecycle",
+    "TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks",
+    "TestPrepareWaitsForAProvenDaemon",
+    "TestAbortBeforeStartExitsWithTheReservedCode"
+  ],
+  "cases": [
+    {
+      "id": "TestLeaseResourceEnvelopeAndGatewayPIDRecovery",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestCapsuleSwapAndOOMStayWithinTheLeaseEnvelope",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestNetworkSandboxBypass",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestCapsuleLifecycle",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestTheCapsuleDeclaresTheProtocolThisBuildSpeaks",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestPrepareWaitsForAProvenDaemon",
+      "outcome": "passed",
+      "duration_ms": 10
+    },
+    {
+      "id": "TestAbortBeforeStartExitsWithTheReservedCode",
+      "outcome": "passed",
+      "duration_ms": 10
+    }
+  ],
+  "summary": {
+    "expected": 7,
+    "executed": 7,
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0
+  },
+  "outcome": "passed"
+}

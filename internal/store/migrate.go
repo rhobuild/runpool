@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 )
 
 //go:embed migrations
@@ -199,8 +201,7 @@ func (s *Store) applyMigrations(migrations []migration) error {
 // and is refused for the same reason as one that disagrees: this build
 // cannot show that it knows what is in there.
 func (s *Store) verifyFingerprint(migrations []migration) error {
-	var recorded string
-	err := s.db.QueryRow(`SELECT v FROM meta WHERE k = ?`, schemaKey).Scan(&recorded)
+	recorded, err := sqlitedb.New(s.db).GetMetaValue(context.Background(), schemaKey)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return alteredSchemaError(s.dir)
@@ -245,9 +246,9 @@ func (s *Store) applyScript(script string, resultVersion int, fingerprint string
 		return err
 	}
 	if fingerprint != "" {
-		if _, err := tx.Exec(
-			`INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v`,
-			schemaKey, fingerprint); err != nil {
+		if err := sqlitedb.New(tx).UpsertMetaValue(context.Background(), sqlitedb.UpsertMetaValueParams{
+			Key: schemaKey, Value: fingerprint,
+		}); err != nil {
 			tx.Rollback()
 			return err
 		}

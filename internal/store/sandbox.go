@@ -1,6 +1,10 @@
 package store
 
-import "strconv"
+import (
+	"errors"
+	"strconv"
+	"time"
+)
 
 // The egress sandbox's last completed rediscovery pass, as two
 // instance-scoped singletons.
@@ -29,7 +33,7 @@ const (
 // is also every running job losing its network at once.
 type SandboxPass struct {
 	// At is when the pass completed, successful or not.
-	At int64
+	At time.Time
 	// Error is why it failed, and empty when it did not. A non-empty
 	// value means every gateway on this host was closed to all egress.
 	Error string
@@ -37,7 +41,10 @@ type SandboxPass struct {
 
 // SetSandboxPass records the outcome of one rediscovery pass.
 func (t *Tx) SetSandboxPass(p SandboxPass) error {
-	if err := t.metaSet(sandboxPassAtKey, strconv.FormatInt(p.At, 10)); err != nil {
+	if p.At.IsZero() {
+		return errors.New("sandbox pass time must not be zero")
+	}
+	if err := t.metaSet(sandboxPassAtKey, strconv.FormatInt(p.At.Unix(), 10)); err != nil {
 		return err
 	}
 	return t.metaSet(sandboxPassErrorKey, p.Error)
@@ -59,5 +66,5 @@ func (t *Tx) SandboxPass() (*SandboxPass, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SandboxPass{At: seconds, Error: reason}, nil
+	return &SandboxPass{At: unixTime(seconds), Error: reason}, nil
 }

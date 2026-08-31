@@ -19,3 +19,40 @@ sql:
         emit_interface: false
         emit_json_tags: false
         emit_prepared_queries: false
+        initialisms:
+          - acl
+          - api
+          - ascii
+          - cpu
+          - css
+          - dns
+          - eof
+          - guid
+          - html
+          - http
+          - https
+          - id
+          - ip
+          - json
+          - qps
+          - ram
+          - rpc
+          - sla
+          - smtp
+          - sql
+          - ssh
+          - tcp
+          - tls
+          - ttl
+          - udp
+          - ui
+          - uid
+          - uri
+          - url
+          - utf8
+          - uuid
+          - vm
+          - xml
+          - xmpp
+          - xsrf
+          - xss

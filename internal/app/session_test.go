@@ -61,7 +61,7 @@ func (s *stubSession) Receive(ctx context.Context) (*githubactions.Message, erro
 		s.mu.Lock()
 		id := s.receives
 		s.mu.Unlock()
-		return &githubactions.Message{ID: id, AcquireError: s.offerErr}, nil
+		return &githubactions.Message{ID: assignment.SourceDeliveryID(id), AcquireError: s.offerErr}, nil
 	}
 	if s.block {
 		<-ctx.Done()
@@ -70,9 +70,11 @@ func (s *stubSession) Receive(ctx context.Context) (*githubactions.Message, erro
 	return nil, s.fail
 }
 
-func (s *stubSession) Acknowledge(context.Context, int) error { return s.ackErr }
-func (s *stubSession) SetCapacity(int)                        {}
-func (s *stubSession) Initial() *githubactions.Statistics     { return s.backlog }
+func (s *stubSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
+	return s.ackErr
+}
+func (s *stubSession) SetCapacity(int)                    {}
+func (s *stubSession) Initial() *githubactions.Statistics { return s.backlog }
 
 func (s *stubSession) Close(context.Context) error {
 	s.mu.Lock()
@@ -94,7 +96,7 @@ func (s *stubSession) counts() (receives, closes int) {
 // working while the process reports itself healthy.
 func TestARepeatedlyFailingSessionIsReplaced(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	broken := &stubSession{fail: errors.New("session id does not exist")}
 	replacement := &stubSession{block: true, polled: make(chan struct{})}
@@ -108,7 +110,7 @@ func TestARepeatedlyFailingSessionIsReplaced(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 
 	// Waiting for the replacement to be polled, not merely built: the
@@ -148,7 +150,7 @@ func TestARepeatedlyFailingSessionIsReplaced(t *testing.T) {
 // session that was only ever unlucky.
 func TestASessionThatRecoversIsNotReplaced(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	const shortOfThreshold = receiveFailuresBeforeReopen - 1
 	if shortOfThreshold < 1 {
@@ -169,7 +171,7 @@ func TestASessionThatRecoversIsNotReplaced(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-flaky.settled:
@@ -209,7 +211,7 @@ func (s *intermittentSession) Receive(ctx context.Context) (*githubactions.Messa
 	case n <= 2*perRun+1:
 		return nil, errors.New("transient")
 	case n == 2*perRun+2:
-		return &githubactions.Message{ID: n}, nil // a message, nothing to acquire
+		return &githubactions.Message{ID: assignment.SourceDeliveryID(n)}, nil // a message, nothing to acquire
 	case n <= 3*perRun+2:
 		return nil, errors.New("transient")
 	}
@@ -218,10 +220,12 @@ func (s *intermittentSession) Receive(ctx context.Context) (*githubactions.Messa
 	return nil, ctx.Err()
 }
 
-func (s *intermittentSession) Acknowledge(context.Context, int) error { return nil }
-func (s *intermittentSession) SetCapacity(int)                        {}
-func (s *intermittentSession) Initial() *githubactions.Statistics     { return nil }
-func (s *intermittentSession) Close(context.Context) error            { return nil }
+func (s *intermittentSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error {
+	return nil
+}
+func (s *intermittentSession) SetCapacity(int)                    {}
+func (s *intermittentSession) Initial() *githubactions.Statistics { return nil }
+func (s *intermittentSession) Close(context.Context) error        { return nil }
 
 // TestAFailedReopenDoesNotKeepTheDeadSession. Recovery can fail: the
 // broker is unreachable, or still holds the session that was just closed.
@@ -232,7 +236,7 @@ func (s *intermittentSession) Close(context.Context) error            { return n
 // orderly stop.
 func TestAFailedReopenDoesNotKeepTheDeadSession(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	dead := &stubSession{fail: errors.New("session id does not exist")}
 	replacement := &stubSession{block: true, polled: make(chan struct{})}
@@ -251,7 +255,7 @@ func TestAFailedReopenDoesNotKeepTheDeadSession(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 
 	select {
@@ -286,7 +290,7 @@ func TestAFailedReopenDoesNotKeepTheDeadSession(t *testing.T) {
 // it can never turn into work for as long as the process runs.
 func TestASessionThatCannotAcquireIsReplaced(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	cannotAcquire := &stubSession{offerErr: errors.New("acquire 1 offered jobs: 401")}
 	replacement := &stubSession{block: true, polled: make(chan struct{})}
@@ -300,7 +304,7 @@ func TestASessionThatCannotAcquireIsReplaced(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 
 	select {
@@ -325,7 +329,7 @@ func TestASessionThatCannotAcquireIsReplaced(t *testing.T) {
 // drains.
 func TestAReopenedSessionPublishesItsBacklog(t *testing.T) {
 	h := newHarness(t, 4)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	// A second binding in the same pool, holding demand of its own. The
 	// credit is water-filled by demand, so the recovered binding only
@@ -355,7 +359,7 @@ func TestAReopenedSessionPublishesItsBacklog(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-replacement.polled:
@@ -384,8 +388,8 @@ func TestAReopenedSessionPublishesItsBacklog(t *testing.T) {
 // test's deadline instead of passing by accident.
 func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Hour
-	h.srv.conflictBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Hour
+	h.srv.supervisor.conflictBackoff = time.Millisecond
 
 	replacement := &stubSession{block: true, polled: make(chan struct{})}
 
@@ -404,7 +408,7 @@ func TestAReopenConflictWaitsAtItsOwnInterval(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-replacement.polled:
@@ -455,9 +459,9 @@ func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
 	// and returns once it has answered n times.
 	conflicting := func(t *testing.T, h *harness, grace time.Duration, n int64) {
 		t.Helper()
-		h.srv.pollBackoff = time.Hour
-		h.srv.conflictBackoff = time.Millisecond
-		h.srv.conflictGrace = grace
+		h.srv.supervisor.pollBackoff = time.Hour
+		h.srv.supervisor.conflictBackoff = time.Millisecond
+		h.srv.supervisor.conflictGrace = grace
 
 		var attempts atomic.Int64
 		reached := make(chan struct{})
@@ -473,7 +477,7 @@ func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			h.srv.loop(ctx, h.bind)
+			h.srv.supervisor.loop(ctx, h.bind)
 		}()
 		select {
 		case <-reached:
@@ -521,9 +525,9 @@ func TestASessionThatWillNotClearReportsSomethingElse(t *testing.T) {
 // session that will not clear before it has waited out a single one.
 func TestAnUnrelatedOutageDoesNotAgeTheConflict(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
-	h.srv.conflictBackoff = time.Millisecond
-	h.srv.conflictGrace = time.Hour
+	h.srv.supervisor.pollBackoff = time.Millisecond
+	h.srv.supervisor.conflictBackoff = time.Millisecond
+	h.srv.supervisor.conflictGrace = time.Hour
 
 	// One conflict starts the run; an unrelated failure has to end it.
 	h.bind.conflictSince = time.Now().Add(-2 * time.Hour)
@@ -535,7 +539,7 @@ func TestAnUnrelatedOutageDoesNotAgeTheConflict(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -574,10 +578,10 @@ func (s *driftingSession) Receive(context.Context) (*githubactions.Message, erro
 	}, nil
 }
 
-func (s *driftingSession) Acknowledge(context.Context, int) error { return nil }
-func (s *driftingSession) SetCapacity(int)                        {}
-func (s *driftingSession) Initial() *githubactions.Statistics     { return nil }
-func (s *driftingSession) Close(context.Context) error            { return nil }
+func (s *driftingSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (s *driftingSession) SetCapacity(int)                                                {}
+func (s *driftingSession) Initial() *githubactions.Statistics                             { return nil }
+func (s *driftingSession) Close(context.Context) error                                    { return nil }
 
 // TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy.
 //
@@ -595,7 +599,7 @@ func (s *driftingSession) Close(context.Context) error            { return nil }
 // these two branches did not.
 func TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy(t *testing.T) {
 	h := newHarness(t, 1)
-	h.srv.pollBackoff = time.Millisecond
+	h.srv.supervisor.pollBackoff = time.Millisecond
 
 	drifting := &driftingSession{polled: make(chan struct{})}
 	h.bind.session = drifting
@@ -604,7 +608,7 @@ func TestABindingThatCannotPersistWhatItIsHandedStopsReadingAsHealthy(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.loop(ctx, h.bind)
+		h.srv.supervisor.loop(ctx, h.bind)
 	}()
 	select {
 	case <-drifting.polled:

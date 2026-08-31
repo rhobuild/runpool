@@ -15,7 +15,7 @@ import (
 // binding, one row per neutral binding.
 func (t *Tx) RecordGitHubBindingMetadata(bindingID assignment.BindingID, scope, canonicalURL, runnerGroup, scaleSetName string, scaleSetID int64) error {
 	return t.q.UpsertGitHubBindingMetadata(t.ctx, sqlitedb.UpsertGitHubBindingMetadataParams{
-		BindingID: int64(bindingID), Scope: scope, CanonicalUrl: canonicalURL,
+		BindingID: int64(bindingID), Scope: scope, CanonicalURL: canonicalURL,
 		RunnerGroup: runnerGroup, ScaleSetName: scaleSetName,
 		ScaleSetID: sql.NullInt64{Int64: scaleSetID, Valid: scaleSetID > 0},
 	})
@@ -23,9 +23,10 @@ func (t *Tx) RecordGitHubBindingMetadata(bindingID assignment.BindingID, scope, 
 
 // RecordGitHubAttemptMetadata stores the provider identifiers observed for an
 // attempt. Runner request ids are diagnostic metadata and may be zero.
-func (t *Tx) RecordGitHubAttemptMetadata(attemptID assignment.AttemptID, jobID string, runnerRequestID, workflowRunID int64) error {
+func (t *Tx) RecordGitHubAttemptMetadata(attemptID assignment.AttemptID,
+	jobID assignment.SourceWorkloadKey, runnerRequestID, workflowRunID int64) error {
 	return t.q.UpsertGitHubAttemptMetadata(t.ctx, sqlitedb.UpsertGitHubAttemptMetadataParams{
-		AttemptID: string(attemptID), JobID: jobID,
+		AttemptID: string(attemptID), JobID: string(jobID),
 		RunnerRequestID: runnerRequestID, WorkflowRunID: workflowRunID,
 	})
 }
@@ -51,7 +52,7 @@ func (t *Tx) GitHubBindings() ([]GitHubBinding, error) {
 	out := make([]GitHubBinding, len(rows))
 	for i, row := range rows {
 		out[i] = GitHubBinding{
-			BindingID: row.BindingID, Scope: row.Scope, CanonicalURL: row.CanonicalUrl,
+			BindingID: row.BindingID, Scope: row.Scope, CanonicalURL: row.CanonicalURL,
 			RunnerGroup: row.RunnerGroup, ScaleSetName: row.ScaleSetName,
 			ScaleSetID: row.ScaleSetID.Int64,
 		}

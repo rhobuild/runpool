@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
@@ -35,21 +36,24 @@ const (
 	AttemptCanceled     AttemptState = "canceled"
 )
 
-// AllAttemptStates lists every state an attempt can hold, terminal ones
+// attemptStates lists every state an attempt can hold, terminal ones
 // included, in the order the walk reaches them.
 //
-// It exists for the reason AllLeaseStates does. Anything that has to
+// It exists for the reason LeaseStates does. Anything that has to
 // decide something for every state — a disposition, a report, a table
 // test — needs the list to come from one place, or a state added later
 // is quietly left undecided by whichever copy nobody updated.
 // TestAttemptStatesCoverTheSchema holds it against the constraint the
 // database enforces, so the list cannot drift from what a row may
 // actually contain.
-var AllAttemptStates = []AttemptState{
+var attemptStates = []AttemptState{
 	AttemptReady, AttemptLeased, AttemptPreparing, AttemptPrepared,
 	AttemptStarting, AttemptRunning, AttemptManualReview,
 	AttemptSuperseded, AttemptSettled, AttemptCanceled,
 }
+
+// AttemptStates returns every persisted attempt state in lifecycle order.
+func AttemptStates() []AttemptState { return slices.Clone(attemptStates) }
 
 // Attempt is the store's domain-facing view of one attempt row. It is a
 // translation, not the generated row: consumers never see table types,
@@ -59,16 +63,38 @@ type Attempt struct {
 	DeliveryID        assignment.DeliveryID
 	BindingID         assignment.BindingID
 	SourceWorkloadKey assignment.SourceWorkloadKey
-	TenantKey         string
-	ProjectKey        string
+	TenantKey         assignment.TenantKey
+	ProjectKey        assignment.ProjectKey
 	State             AttemptState
 	Evidence          Evidence
 	ReviewReason      ReviewReason
 	Resolution        assignment.Resolution
 	ReviewedBy        string
-	ReceivedAt        int64
-	ReviewedAt        int64
-	SettledAt         int64
+	ReceivedAt        time.Time
+	// ReviewedAt and SettledAt are zero until their respective events.
+	ReviewedAt time.Time
+	SettledAt  time.Time
+}
+
+// MaxAttemptPageSize is the largest operator-facing page the store will
+// materialize. Callers may choose a smaller page, but cannot turn a reporting
+// endpoint back into an unbounded query.
+const MaxAttemptPageSize = 1_000
+
+// AttemptCursor identifies the last attempt returned by a page. ReceivedAt and
+// ID form the store's deterministic FIFO order; callers encode this value as an
+// opaque transport cursor rather than exposing persistence fields directly.
+type AttemptCursor struct {
+	ReceivedAt time.Time
+	ID         assignment.AttemptID
+}
+
+// AttemptPage is one bounded view of an operator-facing attempt queue. Total is
+// the queue depth when the page transaction ran; Next is nil at the end.
+type AttemptPage struct {
+	Attempts []Attempt
+	Total    int64
+	Next     *AttemptCursor
 }
 
 func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
@@ -80,16 +106,16 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 		DeliveryID:        assignment.DeliveryID(r.DeliveryID),
 		BindingID:         assignment.BindingID(r.BindingID),
 		SourceWorkloadKey: assignment.SourceWorkloadKey(r.SourceWorkloadKey),
-		TenantKey:         r.TenantKey,
-		ProjectKey:        r.ProjectKey,
+		TenantKey:         assignment.TenantKey(r.TenantKey),
+		ProjectKey:        assignment.ProjectKey(r.ProjectKey),
 		State:             AttemptState(r.State),
 		Evidence:          Evidence(r.ExecutionEvidence),
 		ReviewReason:      ReviewReason(r.ReviewReason.String),
 		Resolution:        assignment.Resolution(r.Resolution.String),
 		ReviewedBy:        r.ReviewedBy.String,
-		ReceivedAt:        r.ReceivedAt,
-		ReviewedAt:        r.ReviewedAt.Int64,
-		SettledAt:         r.SettledAt.Int64,
+		ReceivedAt:        unixTime(r.ReceivedAt),
+		ReviewedAt:        optionalUnixTime(r.ReviewedAt.Int64),
+		SettledAt:         optionalUnixTime(r.SettledAt.Int64),
 	}
 }
 
@@ -98,7 +124,7 @@ func fromRow(r sqlitedb.AssignmentAttempt) Attempt {
 type Event struct {
 	Kind      string
 	Detail    string
-	CreatedAt int64
+	CreatedAt time.Time
 }
 
 // Events lists an attempt's lifecycle, oldest first.
@@ -109,7 +135,7 @@ func (t *Tx) Events(attemptID assignment.AttemptID) ([]Event, error) {
 	}
 	out := make([]Event, len(rows))
 	for i, r := range rows {
-		out[i] = Event{Kind: r.Kind, Detail: r.DetailJson, CreatedAt: r.CreatedAt}
+		out[i] = Event{Kind: r.Kind, Detail: r.DetailJSON, CreatedAt: unixTime(r.CreatedAt)}
 	}
 	return out, nil
 }
@@ -122,22 +148,107 @@ func fromRows(rows []sqlitedb.AssignmentAttempt) []Attempt {
 	return out
 }
 
-// ReadyAttempts lists a binding's servable work, oldest first.
-func (t *Tx) ReadyAttempts(bindingID assignment.BindingID) ([]Attempt, error) {
-	rows, err := t.q.ListReadyAttempts(t.ctx, int64(bindingID))
+// AllReadyAttempts lists all of a binding's servable work, oldest first. It is
+// an inspection API; scheduling uses ReadyAttemptBatch so backlog depth cannot
+// determine memory use.
+func (t *Tx) AllReadyAttempts(bindingID assignment.BindingID) ([]Attempt, error) {
+	rows, err := t.q.ListAllReadyAttempts(t.ctx, int64(bindingID))
 	if err != nil {
 		return nil, err
 	}
 	return fromRows(rows), nil
 }
 
-// ManualReviewAttempts lists everything held for a person, oldest first.
-func (t *Tx) ManualReviewAttempts() ([]Attempt, error) {
-	rows, err := t.q.ListManualReviewAttempts(t.ctx)
+// ReadyAttemptBatch returns at most batchSize servable attempts in FIFO order.
+// Scheduling uses this query so the amount materialized from SQLite is bounded
+// by local admission, regardless of durable backlog depth.
+func (t *Tx) ReadyAttemptBatch(bindingID assignment.BindingID, batchSize int) ([]Attempt, error) {
+	if batchSize < 1 {
+		return nil, fmt.Errorf("ready attempt batch size must be positive, got %d", batchSize)
+	}
+	rows, err := t.q.ListReadyAttemptBatch(t.ctx, sqlitedb.ListReadyAttemptBatchParams{
+		BindingID: int64(bindingID), BatchSize: int64(batchSize),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return fromRows(rows), nil
+}
+
+func attemptPagePosition(cursor *AttemptCursor, pageSize int) (int64, string, error) {
+	if pageSize < 1 || pageSize > MaxAttemptPageSize {
+		return 0, "", fmt.Errorf("attempt page size must be between 1 and %d, got %d",
+			MaxAttemptPageSize, pageSize)
+	}
+	if cursor == nil {
+		return 0, "", nil
+	}
+	if cursor.ID == "" {
+		return 0, "", errors.New("attempt cursor id must not be empty")
+	}
+	if cursor.ReceivedAt.Before(time.Unix(0, 0)) {
+		return 0, "", errors.New("attempt cursor time must not be before the Unix epoch")
+	}
+	return cursor.ReceivedAt.Unix(), string(cursor.ID), nil
+}
+
+func newAttemptPage(rows []sqlitedb.AssignmentAttempt, total int64, pageSize int) AttemptPage {
+	hasMore := len(rows) > pageSize
+	if hasMore {
+		rows = rows[:pageSize]
+	}
+	page := AttemptPage{Attempts: fromRows(rows), Total: total}
+	if hasMore {
+		last := page.Attempts[len(page.Attempts)-1]
+		page.Next = &AttemptCursor{
+			ReceivedAt: last.ReceivedAt,
+			ID:         last.ID,
+		}
+	}
+	return page
+}
+
+// ManualReviewAttemptPage lists work held for a person in stable FIFO order.
+func (t *Tx) ManualReviewAttemptPage(cursor *AttemptCursor, pageSize int) (AttemptPage, error) {
+	afterReceivedAt, afterID, err := attemptPagePosition(cursor, pageSize)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	rows, err := t.q.ListManualReviewAttemptPage(t.ctx, sqlitedb.ListManualReviewAttemptPageParams{
+		AfterReceivedAt: afterReceivedAt,
+		AfterID:         afterID,
+		PageSize:        int64(pageSize + 1),
+	})
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	total, err := t.q.CountManualReviewAttempts(t.ctx)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	return newAttemptPage(rows, total, pageSize), nil
+}
+
+// ReadyAttemptPage lists work waiting for admission across every binding in
+// stable FIFO order. Scheduling itself remains binding-scoped.
+func (t *Tx) ReadyAttemptPage(cursor *AttemptCursor, pageSize int) (AttemptPage, error) {
+	afterReceivedAt, afterID, err := attemptPagePosition(cursor, pageSize)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	rows, err := t.q.ListReadyAttemptPage(t.ctx, sqlitedb.ListReadyAttemptPageParams{
+		AfterReceivedAt: afterReceivedAt,
+		AfterID:         afterID,
+		PageSize:        int64(pageSize + 1),
+	})
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	total, err := t.q.CountAllReadyAttempts(t.ctx)
+	if err != nil {
+		return AttemptPage{}, err
+	}
+	return newAttemptPage(rows, total, pageSize), nil
 }
 
 // Get reloads one attempt by id, whatever state it moved to.
@@ -259,10 +370,8 @@ const DefaultRetryBudget = 3
 // those rows would silently reset this to zero and reopen the unbounded
 // retry it exists to close.
 func (t *Tx) servingsSoFar(attemptID assignment.AttemptID) (int, error) {
-	var n int
-	err := t.tx.QueryRow(
-		`SELECT count(*) FROM capsule_leases WHERE attempt_id = ?`, attemptID).Scan(&n)
-	return n, err
+	n, err := t.q.CountLeasesByAttempt(t.ctx, string(attemptID))
+	return int(n), err
 }
 
 // withinRetryBudget refuses a requeue that would exceed the budget. It
@@ -470,7 +579,7 @@ func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind EventKin
 		return err
 	}
 	_, err = t.q.InsertSequencedAttemptEvent(t.ctx, sqlitedb.InsertSequencedAttemptEventParams{
-		AttemptID: string(attemptID), Kind: string(kind), DetailJson: string(encoded),
+		AttemptID: string(attemptID), Kind: string(kind), DetailJSON: string(encoded),
 	})
 	return err
 }
@@ -478,7 +587,7 @@ func (t *Tx) RecordRepeatableEvent(attemptID assignment.AttemptID, kind EventKin
 // RecordEvent appends one lifecycle event, idempotently per key.
 func (t *Tx) RecordEvent(attemptID assignment.AttemptID, idempotencyKey string, kind EventKind) error {
 	_, err := t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: "{}",
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJSON: "{}",
 	})
 	return err
 }
@@ -493,7 +602,7 @@ func (t *Tx) RecordEventDetail(attemptID assignment.AttemptID, idempotencyKey st
 		return err
 	}
 	_, err = t.q.InsertAttemptEvent(t.ctx, sqlitedb.InsertAttemptEventParams{
-		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJson: string(encoded),
+		AttemptID: string(attemptID), IdempotencyKey: idempotencyKey, Kind: string(kind), DetailJSON: string(encoded),
 	})
 	return err
 }
@@ -522,10 +631,10 @@ func (t *Tx) AckUncertain(deliveryID assignment.DeliveryID) error {
 }
 
 // EnsureBinding records the neutral binding identity and returns its id.
-func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind string,
-	sourceBindingKey assignment.SourceBindingKey) (assignment.BindingID, error) {
+func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind assignment.ProviderKind,
+	configuredBindingKey assignment.ConfiguredBindingKey) (assignment.BindingID, error) {
 	b, err := t.q.InsertProviderBinding(t.ctx, sqlitedb.InsertProviderBindingParams{
-		TargetID: string(targetID), ProviderKind: providerKind, SourceBindingKey: string(sourceBindingKey),
+		TargetID: string(targetID), ProviderKind: string(providerKind), SourceBindingKey: string(configuredBindingKey),
 	})
 	if err != nil {
 		return 0, err
@@ -538,7 +647,7 @@ func (t *Tx) EnsureBinding(targetID assignment.TargetID, providerKind string,
 // failure leaves the last success alone, so a report can say how long a
 // binding has been unable to reach anything.
 type ProviderContact struct {
-	BindingID   int64
+	BindingID   assignment.BindingID
 	LastContact time.Time
 	LastError   string
 	LastErrorAt time.Time
@@ -565,7 +674,7 @@ func (t *Tx) RecordProviderFailure(bindingID assignment.BindingID, at time.Time,
 // that has never reached its provider and never failed either, which is
 // the shape of one that has not run yet — and stays a zero time.
 func providerContactFromRow(bindingID, contactMs int64, lastError string, errorMs int64) ProviderContact {
-	c := ProviderContact{BindingID: bindingID, LastError: lastError}
+	c := ProviderContact{BindingID: assignment.BindingID(bindingID), LastError: lastError}
 	if contactMs > 0 {
 		c.LastContact = time.UnixMilli(contactMs).UTC()
 	}
@@ -640,4 +749,11 @@ func (t *Tx) ForgetUnclaimedBindings(claimed []assignment.BindingID) (int, error
 // table and a stored value is always one the vocabulary can answer for.
 func nullVocabulary[T ~string](v T) sql.NullString {
 	return sql.NullString{String: string(v), Valid: v != ""}
+}
+
+// requiredText adapts a non-null domain field to a nullable driver type. Empty
+// remains present so the schema's CHECK rejects it; turning it into NULL here
+// would bypass the invariant the column exists to enforce.
+func requiredText[T ~string](v T) sql.NullString {
+	return sql.NullString{String: string(v), Valid: true}
 }

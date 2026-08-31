@@ -4,14 +4,34 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rhobuild/runpool/internal/assignment"
 	"github.com/rhobuild/runpool/internal/config"
 	"github.com/rhobuild/runpool/internal/engine"
 	"github.com/rhobuild/runpool/internal/store"
 )
+
+func TestStatusReferenceNamesTheImplementedContract(t *testing.T) {
+	body, err := os.ReadFile("../../docs/reference/status-api.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := string(body)
+	if !strings.Contains(reference, "**Current version: `"+statusAPIVersion+"`.**") {
+		t.Errorf("status reference does not name implemented API %s", statusAPIVersion)
+	}
+	if !strings.Contains(reference, "`configured_binding_key`") {
+		t.Error("status reference omits the configured binding identity field")
+	}
+	if strings.Contains(reference, "`source_binding_key`") {
+		t.Error("status reference exposes the persistence column replaced by configured_binding_key")
+	}
+}
 
 // TestStatusDocumentShape pins the reporting contract: versioned,
 // snake_case, and every collection an array even when empty — a
@@ -21,15 +41,18 @@ func TestStatusDocumentShape(t *testing.T) {
 	doc := statusDocument(store.Snapshot{InstanceID: "i-1", SchemaVersion: 1}, &config.Config{
 		Host:  config.Host{Topology: config.HostTopologySharedDaemon},
 		Tiers: []config.Tier{{ID: "standard", Parallelism: 1}},
-	}, nil, daemonObservation{}, "runpool-capsule:dev")
+	}, manualReviewSummary{}, daemonObservation{}, "runpool-capsule:dev")
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(raw)
 
-	if !strings.Contains(body, `"api_version":"v1"`) {
+	if !strings.Contains(body, `"api_version":"v2"`) {
 		t.Errorf("document is not versioned: %s", body)
+	}
+	if !strings.Contains(body, `"manual_review_total":0`) {
+		t.Errorf("bounded manual-review summary omitted its total: %s", body)
 	}
 	for _, field := range []string{
 		`"bindings":[]`, `"leases":[]`, `"cache_lanes":[]`,
@@ -70,7 +93,7 @@ func TestStatusDocumentShape(t *testing.T) {
 				nulls, len(nullable), body)
 		}
 	}
-	for _, upper := range []string{"InstanceID", "SourceBindingKey", "LeaseID", "AttemptID"} {
+	for _, upper := range []string{"InstanceID", "ConfiguredBindingKey", "LeaseID", "AttemptID"} {
 		if strings.Contains(body, upper) {
 			t.Errorf("persistence field name %q leaked into the reporting document", upper)
 		}
@@ -147,7 +170,7 @@ func TestStatusDiscrepanciesCoverEveryKind(t *testing.T) {
 
 	// An unreachable daemon yields no comparison, and the document says
 	// why instead of claiming agreement.
-	doc := statusDocument(store.Snapshot{InstanceID: "i"}, nil, nil, daemonObservation{err: errors.New("daemon down")}, "")
+	doc := statusDocument(store.Snapshot{InstanceID: "i"}, nil, manualReviewSummary{}, daemonObservation{err: errors.New("daemon down")}, "")
 	if doc.Discrepancies != nil {
 		t.Errorf("discrepancies = %v with an unreachable daemon; want null (not compared)", doc.Discrepancies)
 	}
@@ -169,7 +192,7 @@ func TestSchedulingStatusCountsEveryUnreleasedLease(t *testing.T) {
 		{ID: "active", TierID: "large", State: store.LeaseCleaning},
 		{ID: "released", TierID: "small", State: store.LeaseReleased},
 	}
-	got := schedulingStatus(cfg, leases, map[int64]int{7: 3}, "")
+	got := schedulingStatus(cfg, leases, map[assignment.BindingID]int{7: 3}, "")
 	if got.Mode != "global" || got.Active != 1 || got.Available != 0 || got.EffectiveParallelism != 1 {
 		t.Fatalf("scheduling = %+v", got)
 	}
@@ -190,7 +213,7 @@ func TestReleasedTotalIsTheStoresCountNotTheArrayLength(t *testing.T) {
 			{ID: "b", State: store.LeaseReleased},
 		},
 		ReleasedTotal: 4321,
-	}, nil, nil, daemonObservation{}, "")
+	}, nil, manualReviewSummary{}, daemonObservation{}, "")
 
 	if doc.ReleasedTotal != 4321 {
 		t.Errorf("released_total = %d; want the store's count, 4321", doc.ReleasedTotal)
@@ -206,7 +229,7 @@ func TestReleasedTotalIsTheStoresCountNotTheArrayLength(t *testing.T) {
 // is the shape a stuck binding takes, and it was invisible.
 func TestQueuedWorkIsReported(t *testing.T) {
 	cfg := &config.Config{Tiers: []config.Tier{{ID: "standard", Parallelism: 2}}}
-	got := schedulingStatus(cfg, nil, map[int64]int{1: 4, 2: 2}, "")
+	got := schedulingStatus(cfg, nil, map[assignment.BindingID]int{1: 4, 2: 2}, "")
 	if got.Queued != 6 {
 		t.Errorf("queued = %d; want the sum across bindings, 6", got.Queued)
 	}
@@ -284,7 +307,7 @@ func TestStatusReportsWithoutAResolvableCapsuleImage(t *testing.T) {
 	}
 }
 
-// TestBothStatusAnswersShareOneEnvelope: the two forms of a v1 status
+// TestBothStatusAnswersShareOneEnvelope: the two forms of the status
 // document are the same document.
 //
 // The pre-serve form used to be a hand-built map that re-spelled every
@@ -331,6 +354,80 @@ func TestBothStatusAnswersShareOneEnvelope(t *testing.T) {
 	}
 	if served := decode(t, out.Bytes()); !served.Served {
 		t.Error("the served form does not say so")
+	}
+}
+
+func TestStatusBoundsManualReviewAndPointsToTheNextPage(t *testing.T) {
+	const heldAttempts = statusManualReviewPageSize + 1
+	dir := t.TempDir()
+	t.Setenv("RUNPOOL_STATE_DIR", dir)
+	st, err := store.Open(dir, store.DefaultRetryBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
+		bindingID, err := tx.EnsureBinding("app", "github_actions",
+			"v1|repository|https://github.com/acme/app||runpool-standard")
+		if err != nil {
+			return err
+		}
+		workloads := make([]assignment.WorkloadAssignment, heldAttempts)
+		rows := make([]store.WorkloadRow, heldAttempts)
+		for index := range heldAttempts {
+			key := fmt.Sprintf("job-%03d", index)
+			workloads[index] = assignment.WorkloadAssignment{
+				SourceWorkloadKey: assignment.SourceWorkloadKey(key),
+			}
+			rows[index] = store.WorkloadRow{
+				SourceWorkloadKey: assignment.SourceWorkloadKey(key), TenantKey: "acme", ProjectKey: "app",
+			}
+		}
+		if _, err := tx.RecordDelivery(bindingID, "status-pagination", workloads, rows); err != nil {
+			return err
+		}
+		page, err := tx.ReadyAttemptPage(nil, heldAttempts)
+		if err != nil {
+			return err
+		}
+		for _, attempt := range page.Attempts {
+			if err := tx.HoldForReview(attempt.ID, store.ReviewReasonStartOutcomeUnknown); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runStatus(IO{Out: &out, Err: &bytes.Buffer{}}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	var doc statusDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.ManualReview) != statusManualReviewPageSize || doc.ManualReviewTotal != heldAttempts {
+		t.Fatalf("status review summary = %d of %d; want %d of %d",
+			len(doc.ManualReview), doc.ManualReviewTotal, statusManualReviewPageSize, heldAttempts)
+	}
+	if doc.ManualReviewNextCursor == "" {
+		t.Fatal("bounded status summary omitted its continuation cursor")
+	}
+
+	code, body, stderr := run(t, "attempts", "list", "--json", "--cursor", doc.ManualReviewNextCursor)
+	if code != exitOK {
+		t.Fatalf("status continuation = %d; want 0 (%q)", code, stderr)
+	}
+	var continuation attemptListDocument
+	if err := json.Unmarshal([]byte(body), &continuation); err != nil {
+		t.Fatal(err)
+	}
+	if len(continuation.Attempts) != 1 || continuation.Total != heldAttempts {
+		t.Fatalf("status continuation = %+v; want the final held attempt", continuation)
 	}
 }
 
@@ -434,7 +531,7 @@ func TestTheTextFormSaysTheGatewaysAreClosed(t *testing.T) {
 	}
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
 		return tx.SetSandboxPass(store.SandboxPass{
-			At:    time.Now().Add(-90 * time.Second).Unix(),
+			At:    time.Now().Add(-90 * time.Second),
 			Error: "host discovery: the probe could not run",
 		})
 	}); err != nil {
@@ -471,7 +568,7 @@ func TestTheTextFormSaysThePolicyIsInForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Tx(t.Context(), func(tx *store.Tx) error {
-		return tx.SetSandboxPass(store.SandboxPass{At: time.Now().Unix()})
+		return tx.SetSandboxPass(store.SandboxPass{At: time.Now()})
 	}); err != nil {
 		t.Fatal(err)
 	}

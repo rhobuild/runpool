@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rhobuild/runpool/internal/store/sqlitedb"
 
@@ -33,7 +34,7 @@ type Snapshot struct {
 	// keyed by lease, and an attempt waiting for admission has none — so
 	// without this a queue that stopped draining is invisible until an
 	// operator thinks to look for something the report never mentions.
-	Queued     map[int64]int
+	Queued     map[assignment.BindingID]int
 	CacheLanes []CacheLaneInfo
 	// Pressure is the disk monitor's last persisted verdict; nil until
 	// the monitor has run once.
@@ -45,15 +46,13 @@ type Snapshot struct {
 }
 
 // BindingInfo reports one configured source of work in neutral terms.
-// SourceBindingKey is the provider's own identity, versioned and opaque
-// here; for a GitHub Actions binding it reads as scope, URL, runner
-// group and scale set name, which is enough for an operator to tell two
-// bindings apart without the adapter's table being consulted.
+// ConfiguredBindingKey is derived from operator configuration and remains
+// opaque to the store; provider-issued metadata lives in its adapter table.
 type BindingInfo struct {
-	ID               assignment.BindingID
-	TargetID         assignment.TargetID
-	ProviderKind     string
-	SourceBindingKey assignment.SourceBindingKey
+	ID                   assignment.BindingID
+	TargetID             assignment.TargetID
+	ProviderKind         assignment.ProviderKind
+	ConfiguredBindingKey assignment.ConfiguredBindingKey
 	// Contact is what this binding's loop last managed with its provider.
 	// A binding that has never run carries the zero value, which is not
 	// the same as one that is failing: the first has nothing to report,
@@ -72,9 +71,10 @@ func (t *Tx) Bindings() ([]BindingInfo, error) {
 	out := make([]BindingInfo, len(rows))
 	for i, r := range rows {
 		out[i] = BindingInfo{
-			ID: assignment.BindingID(r.ID), TargetID: assignment.TargetID(r.TargetID), ProviderKind: r.ProviderKind,
-			SourceBindingKey: assignment.SourceBindingKey(r.SourceBindingKey),
-			Contact:          providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
+			ID: assignment.BindingID(r.ID), TargetID: assignment.TargetID(r.TargetID),
+			ProviderKind:         assignment.ProviderKind(r.ProviderKind),
+			ConfiguredBindingKey: assignment.ConfiguredBindingKey(r.SourceBindingKey),
+			Contact:              providerContactFromRow(r.ID, r.LastContactAtMs, r.LastError, r.LastErrorAtMs),
 		}
 	}
 	return out, nil
@@ -89,7 +89,7 @@ type CacheLaneInfo struct {
 	SourceProjectKey string
 	Generation       string
 	LeasedBy         assignment.LeaseID
-	LastUsed         int64
+	LastUsed         time.Time
 }
 
 // Snapshot collects the instance's whole durable picture in one
@@ -99,7 +99,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		InstanceID: s.instanceID,
 		Attempts:   map[assignment.LeaseID]Attempt{},
 		Resources:  map[assignment.LeaseID][]ResourceIntent{},
-		Queued:     map[int64]int{},
+		Queued:     map[assignment.BindingID]int{},
 	}
 	version, err := s.SchemaVersion()
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		// and the per-lease reads below turned that into two queries per
 		// row — so `runpool status` cost rose with history rather than
 		// with what the instance is doing.
-		if snap.Leases, err = tx.LeasesInStates(LiveLeaseStates...); err != nil {
+		if snap.Leases, err = tx.LeasesInStates(LiveLeaseStates()...); err != nil {
 			return err
 		}
 		recent, total, err := tx.RecentReleasedLeases(ReportedReleasedLeases)
@@ -139,7 +139,7 @@ func (s *Store) Snapshot() (Snapshot, error) {
 				return err
 			}
 			if queued > 0 {
-				snap.Queued[int64(b.ID)] = int(queued)
+				snap.Queued[b.ID] = int(queued)
 			}
 		}
 		if snap.CacheLanes, err = tx.CacheLanes(); err != nil {
@@ -158,23 +158,18 @@ func (s *Store) Snapshot() (Snapshot, error) {
 // CacheLanes lists every lane. GC plans over it (free lanes, LRU by
 // LastUsed) and the snapshot reports it; both need the same rows.
 func (t *Tx) CacheLanes() ([]CacheLaneInfo, error) {
-	rows, err := t.tx.Query(`
-		SELECT l.id, p.source_project_key, l.generation, coalesce(l.leased_by, ''), l.last_used
-		FROM cache_lanes l JOIN cache_projects p ON p.id = l.project_id
-		ORDER BY p.source_project_key, l.generation, l.id`)
+	rows, err := t.q.ListCacheLanes(t.ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []CacheLaneInfo
-	for rows.Next() {
-		var c CacheLaneInfo
-		if err := rows.Scan(&c.ID, &c.SourceProjectKey, &c.Generation, &c.LeasedBy, &c.LastUsed); err != nil {
-			return nil, err
+	out := make([]CacheLaneInfo, len(rows))
+	for i, r := range rows {
+		out[i] = CacheLaneInfo{
+			ID: r.ID, SourceProjectKey: r.SourceProjectKey, Generation: r.Generation,
+			LeasedBy: assignment.LeaseID(r.LeasedBy), LastUsed: unixTime(r.LastUsed),
 		}
-		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // selectAttempt is the attempt column list this file's set read scans.

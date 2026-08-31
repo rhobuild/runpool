@@ -15,6 +15,10 @@ set -euo pipefail
 # egress is the policy.
 #
 # Usage: test/contract/capsule/remote-harness.sh <dir with capsule-contract.test>
+if [ "$#" -ne 1 ]; then
+  echo "usage: remote-harness.sh <dir with capsule-contract.test>" >&2
+  exit 2
+fi
 dir=${1:?usage: remote-harness.sh <dir with capsule-contract.test>}
 
 RUNPOOL_CAPSULE_CONTRACT=1 "$dir/capsule-contract.test" -test.v -test.count=1 -test.timeout=30m

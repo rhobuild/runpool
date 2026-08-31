@@ -25,10 +25,10 @@ type gatedSession struct {
 	key     string
 }
 
-func (g *gatedSession) Receive(context.Context) (*githubactions.Message, error) { return nil, nil }
-func (g *gatedSession) Acknowledge(context.Context, int) error                  { return nil }
-func (g *gatedSession) SetCapacity(int)                                         {}
-func (g *gatedSession) Initial() *githubactions.Statistics                      { return nil }
+func (g *gatedSession) Receive(context.Context) (*githubactions.Message, error)        { return nil, nil }
+func (g *gatedSession) Acknowledge(context.Context, assignment.SourceDeliveryID) error { return nil }
+func (g *gatedSession) SetCapacity(int)                                                {}
+func (g *gatedSession) Initial() *githubactions.Statistics                             { return nil }
 func (g *gatedSession) Close(ctx context.Context) error {
 	g.started <- g.key
 	select {
@@ -49,7 +49,7 @@ func TestSessionsCloseTogether(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	s := &Controller{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &bindingSupervisor{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, key := range []assignment.BindingKey{"a", "b", "c"} {
 		s.bindings = append(s.bindings, &binding{
 			key:     key,
@@ -113,7 +113,7 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	}
 	lease, _ := leaseFor(t, h, "job-abandoned")
 	if err := h.store.Tx(t.Context(), func(tx *store.Tx) error {
-		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, "runner", "runpool-runner-abandoned")
+		id, err := tx.PlanResource(lease.ID, store.ResourceContainer, store.ResourceRoleCapsule, "runpool-runner-abandoned")
 		if err != nil {
 			return err
 		}
@@ -123,8 +123,8 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 	}
 	before := reloadLease(t, h, lease.ID).State
 
-	h.srv.abandoning.Store(true)
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
+	h.srv.ownership.abandonUnfinished()
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("abandoned recovery reported an error: %v", err)
 	}
 	if got := reloadLease(t, h, lease.ID).State; got != before {
@@ -136,8 +136,8 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 
 	// The mutation half: the same call without the abandonment is the
 	// destructive path, so the assertions above are proven able to fail.
-	h.srv.abandoning.Store(false)
-	if err := h.srv.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
+	h.srv.ownership.resumeRecovery()
+	if err := h.srv.executor.recoverCapsuleFailure(t.Context(), h.bind, lease.ID, assignment.NoObservation); err != nil {
 		t.Fatalf("live recovery failed: %v", err)
 	}
 	if got := reloadLease(t, h, lease.ID).State; got == before {
@@ -154,12 +154,12 @@ func TestDrainExpiryAbandonsRecovery(t *testing.T) {
 func TestDrainWindowExpiryMarksAbandonment(t *testing.T) {
 	h := newHarness(t, 1)
 	h.srv.drainWindow = 30 * time.Millisecond
-	h.srv.wg.Add(1) // a capsule goroutine that will not finish in time
-	defer h.srv.wg.Done()
+	h.srv.ownership.addActive() // a capsule goroutine that will not finish in time
+	defer h.srv.ownership.activeDone()
 	if err := h.srv.drain(); err != nil {
 		t.Fatal(err)
 	}
-	if !h.srv.abandoning.Load() {
+	if !h.srv.ownership.isAbandoning() {
 		t.Fatal("the drain window elapsed and abandonment was not marked")
 	}
 
@@ -168,7 +168,7 @@ func TestDrainWindowExpiryMarksAbandonment(t *testing.T) {
 	if err := clean.srv.drain(); err != nil {
 		t.Fatal(err)
 	}
-	if clean.srv.abandoning.Load() {
+	if clean.srv.ownership.isAbandoning() {
 		t.Fatal("a clean drain marked abandonment")
 	}
 }

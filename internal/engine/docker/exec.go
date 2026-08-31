@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"io"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
@@ -48,8 +49,25 @@ func demux(ctx context.Context, attach client.ExecAttachResult, buf *bytes.Buffe
 // code and combined output. The capsule uses it to read the dind socket
 // gid and to probe daemon readiness.
 func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) (int, string, error) {
+	return c.exec(ctx, containerID, cmd, nil)
+}
+
+// ExecWithInput runs a command inside a running container feeding input
+// on its stdin, and returns its exit code and combined output. It is
+// the credential channel: stdin is the one path into a container that
+// Docker persists nowhere — not in the container config, not in an
+// image layer, not in the log driver.
+func (c *Client) ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error) {
+	return c.exec(ctx, containerID, cmd, bytes.NewReader(input))
+}
+
+// exec owns the common Docker exec lifecycle. A nil input leaves stdin
+// detached; a non-nil reader is copied completely and then half-closed so the
+// process observes EOF before its output is drained.
+func (c *Client) exec(ctx context.Context, containerID string, cmd []string, input io.Reader) (int, string, error) {
 	created, err := c.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
+		AttachStdin:  input != nil,
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -65,47 +83,15 @@ func (c *Client) Exec(ctx context.Context, containerID string, cmd []string) (in
 	// close.
 	defer closeOnDone(ctx, attach)()
 
-	var buf bytes.Buffer
-	if err := demux(ctx, attach, &buf); err != nil {
-		return -1, buf.String(), err
+	if input != nil {
+		if _, err := io.Copy(attach.Conn, input); err != nil {
+			return -1, "", err
+		}
+		if err := attach.CloseWrite(); err != nil {
+			return -1, "", err
+		}
 	}
-	inspect, err := c.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
-	if err != nil {
-		return -1, buf.String(), err
-	}
-	return inspect.ExitCode, buf.String(), nil
-}
 
-// ExecWithInput runs a command inside a running container feeding input
-// on its stdin, and returns its exit code and combined output. It is
-// the credential channel: stdin is the one path into a container that
-// Docker persists nowhere — not in the container config, not in an
-// image layer, not in the log driver.
-func (c *Client) ExecWithInput(ctx context.Context, containerID string, cmd []string, input []byte) (int, string, error) {
-	created, err := c.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
-		Cmd:          cmd,
-		AttachStdin:  true,
-		AttachStdout: true,
-		AttachStderr: true,
-	})
-	if err != nil {
-		return -1, "", err
-	}
-	attach, err := c.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
-	if err != nil {
-		return -1, "", err
-	}
-	defer attach.Close()
-	defer closeOnDone(ctx, attach)()
-
-	// Write, then half-close so the process sees EOF; the demux drains
-	// until the process exits.
-	if _, err := attach.Conn.Write(input); err != nil {
-		return -1, "", err
-	}
-	if err := attach.CloseWrite(); err != nil {
-		return -1, "", err
-	}
 	var buf bytes.Buffer
 	if err := demux(ctx, attach, &buf); err != nil {
 		return -1, buf.String(), err
