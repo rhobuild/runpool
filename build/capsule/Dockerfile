@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
 
 FROM docker:29.7.2-dind@sha256:12e683a161823b2a839aeea999b9d960e6e1f9a97b1679ad6b441982e2d9cf07 AS engine
 
-FROM ghcr.io/actions/actions-runner:2.336.0@sha256:0cfdcc701ce933c6d243c6b0b2da767366dc9f2e99961d4c3754b0b78084cdda
+FROM ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
 
 # Root both to install the engine below and to keep it at runtime: the
 # supervisor is PID 1 and needs root to boot the inner dockerd. It drops
