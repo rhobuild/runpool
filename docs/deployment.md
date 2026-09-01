@@ -140,7 +140,13 @@ enter the Compose model or the container environment. Start from
 
 Each `credentials[].tokenFile` names a file below the mounted credential
 directory. Create each source file with mode `0600`, give it a distinct name,
-and restrict access to the deployment operator. The controller needs all
+and restrict access to the deployment operator. When a platform creates the
+file wider and offers no control over its mode, `credentials[].filePermissions`
+names the exact width the deployment accepts; the
+[configuration reference](reference/configuration.md#credentials) has the
+ladder. Every policy above the default is an explicit local disclosure, warned
+by `doctor` and at startup. Mode policy never waives the requirement that a
+credential be a regular file of at most 1 MiB. The controller needs all
 configured target credentials, so mounting one read-only directory has the
 same authority as mounting those files individually while allowing targets to
 be added without changing the deployment manifest.
@@ -278,8 +284,11 @@ the platform does not break it. Eight things, in order:
 2. The mounted socket passes a complete `runpool doctor`, including the
    internal isolated bridge — a platform managing its own networks is the thing
    most likely to interfere with that one.
-3. Configuration and credentials arrive read-only and at mode `0600`, and the
-   platform copies neither into a log nor into an environment variable.
+3. Configuration and credentials arrive read-only and at mode `0600`, or a
+   credential the platform creates wider names the narrowest `filePermissions`
+   policy that accepts it and produces the expected doctor warning. The
+   credential remains a regular file no larger than 1 MiB, and the platform
+   copies neither it nor the configuration into a log or environment variable.
 4. The platform's health display is wired to `runpool healthcheck` rather than
    to a TCP port that does not exist. The reference Compose file asks it for
    `liveness` only: readiness moves with the provider and the daemon, and a
@@ -327,10 +336,12 @@ the same seven steps; the words in brackets are Dokploy's names for them.
    platform preserves across deployments [Advanced → Mounts, under `../files`]:
    one `config.yaml`, and one file per credential. Copy the configuration
    example, then replace target names and capacity with reviewed values.
-4. Put exactly one token in each credential file, terminate it with an optional
-   newline, and set every credential file to mode `0600`. Never put a token in
-   the configuration, the Compose definition, or the platform's environment
-   editor.
+4. Put exactly one token in each credential file and terminate it with an
+   optional newline. Inspect the mounted file's mode and uid: keep the default
+   `filePermissions: owner-only` when it can remain `0600`, or configure the
+   narrowest wider policy that accepts the deployment's durable result. Every
+   wider choice is warned by `doctor`. Never put a token in the configuration,
+   the Compose definition, or the platform's environment editor.
 5. Set only `RUNPOOL_IMAGE` in the environment, using the complete released
    `@sha256:` reference. Set `RUNPOOL_CONFIG_PATH` or `RUNPOOL_CREDENTIALS_PATH`
    only when the persisted directory is not the default one.

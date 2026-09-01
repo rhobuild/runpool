@@ -8,20 +8,21 @@ import (
 // Quick Start environment variables. They compile into the same schema the
 // advanced YAML file uses; there is no second configuration model.
 const (
-	EnvGitHubURL           = "RUNPOOL_GITHUB_URL"
-	EnvGitHubToken         = "RUNPOOL_GITHUB_TOKEN"
-	EnvGitHubTokenFile     = "RUNPOOL_GITHUB_TOKEN_FILE"
-	EnvGitHubRunnerGroup   = "RUNPOOL_GITHUB_RUNNER_GROUP"
-	EnvHostTopology        = "RUNPOOL_HOST_TOPOLOGY"
-	EnvHostReserveCPU      = "RUNPOOL_HOST_RESERVE_CPU"
-	EnvHostReserveMemory   = "RUNPOOL_HOST_RESERVE_MEMORY"
-	EnvHostReserveSwap     = "RUNPOOL_HOST_RESERVE_SWAP"
-	EnvHostReserveFreeDisk = "RUNPOOL_HOST_RESERVE_FREE_DISK"
-	EnvTier                = "RUNPOOL_TIER"
-	EnvParallelism         = "RUNPOOL_PARALLELISM"
-	EnvLogLevel            = "RUNPOOL_LOG_LEVEL"
-	EnvNetworkProfile      = "RUNPOOL_NETWORK_PROFILE"
-	EnvConfigFile          = "RUNPOOL_CONFIG_FILE"
+	EnvGitHubURL                 = "RUNPOOL_GITHUB_URL"
+	EnvGitHubToken               = "RUNPOOL_GITHUB_TOKEN"
+	EnvGitHubTokenFile           = "RUNPOOL_GITHUB_TOKEN_FILE"
+	EnvCredentialFilePermissions = "RUNPOOL_CREDENTIAL_FILE_PERMISSIONS"
+	EnvGitHubRunnerGroup         = "RUNPOOL_GITHUB_RUNNER_GROUP"
+	EnvHostTopology              = "RUNPOOL_HOST_TOPOLOGY"
+	EnvHostReserveCPU            = "RUNPOOL_HOST_RESERVE_CPU"
+	EnvHostReserveMemory         = "RUNPOOL_HOST_RESERVE_MEMORY"
+	EnvHostReserveSwap           = "RUNPOOL_HOST_RESERVE_SWAP"
+	EnvHostReserveFreeDisk       = "RUNPOOL_HOST_RESERVE_FREE_DISK"
+	EnvTier                      = "RUNPOOL_TIER"
+	EnvParallelism               = "RUNPOOL_PARALLELISM"
+	EnvLogLevel                  = "RUNPOOL_LOG_LEVEL"
+	EnvNetworkProfile            = "RUNPOOL_NETWORK_PROFILE"
+	EnvConfigFile                = "RUNPOOL_CONFIG_FILE"
 )
 
 // quickStartTargetVars conflict with file mode: when RUNPOOL_CONFIG_FILE is
@@ -37,7 +38,7 @@ const (
 // exemption, because a file's tokenEnv may legitimately name it; the
 // token file path had no such excuse and was silently ignored anyway.
 var quickStartTargetVars = []string{
-	EnvGitHubURL, EnvGitHubRunnerGroup, EnvGitHubTokenFile, EnvHostTopology, EnvHostReserveCPU,
+	EnvGitHubURL, EnvGitHubRunnerGroup, EnvGitHubTokenFile, EnvCredentialFilePermissions, EnvHostTopology, EnvHostReserveCPU,
 	EnvHostReserveMemory, EnvHostReserveSwap, EnvHostReserveFreeDisk, EnvTier, EnvParallelism,
 	EnvLogLevel, EnvNetworkProfile,
 }
@@ -72,6 +73,9 @@ func FromEnvironment(environ func(string) string) (*Config, error) {
 		credential.TokenEnv = EnvGitHubToken
 	} else {
 		credential.TokenFile = tokenFile
+	}
+	if policy := environ(EnvCredentialFilePermissions); policy != "" {
+		credential.FilePermissions = CredentialFilePermissions(policy)
 	}
 
 	tier := environ(EnvTier)

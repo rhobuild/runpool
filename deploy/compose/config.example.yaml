@@ -59,6 +59,11 @@ credentials:
   - id: github-company-runners
     type: token
     tokenFile: /run/secrets/runpool/github-company-runners
+    # owner-only is the default. A platform that creates this read-only
+    # mount wider names the narrowest policy that accepts what it made; the
+    # configuration reference has the ladder. Every policy still requires a
+    # regular file no larger than 1 MiB. For a controller-owned 0644 file:
+    # filePermissions: allow-world-read
 
 tiers:
   - id: standard

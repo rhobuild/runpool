@@ -5,6 +5,24 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## Unreleased
+
+Changes since v1.2 make credential file permissions an explicit, reviewable
+deployment choice while preserving the owner-only default.
+
+### Security and deployment
+
+- **Credential file permissions are an explicit deployment policy.**
+  `credentials[].filePermissions` is a ladder of four named policies,
+  narrowest first: `owner-only`, the default, which refuses every group or
+  other bit as before; `allow-group-read`; `allow-group-or-other-read`, for a
+  platform that creates a read-only mount with its umask; and `allow-any`,
+  which consults neither mode nor owner. Every policy above the default is
+  warned by doctor and at startup, the two middle policies require the
+  controller uid to own the file, and a refusal names the narrowest policy
+  that would accept the file. `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` sets it
+  in Quick Start.
+
 ## v1.2.0 — 2026-08-31
 
 Changes since v1.1 strengthen durable delivery, admission, qualification and

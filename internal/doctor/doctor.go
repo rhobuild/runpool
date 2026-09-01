@@ -117,6 +117,9 @@ func Run(ctx context.Context, opts Options) Report {
 	add(checkPlatform())
 	if opts.Config != nil {
 		add(checkHostTopology(opts.Config))
+		for _, res := range checkCredentialFilePermissionPolicies(opts.Config) {
+			add(res)
+		}
 	}
 	// A nil client must stay a nil interface. Wrapped, it is a non-nil
 	// value holding nothing, so every `d == nil` guard below it passes
@@ -165,6 +168,29 @@ func checkHostTopology(cfg *config.Config) Result {
 	default:
 		return Result{"host topology", Fail, "not configured", "set host.topology explicitly"}
 	}
+}
+
+// checkCredentialFilePermissionPolicies makes a deployment's policy choice
+// visible even in serve's local-only preflight, which deliberately does not
+// resolve credentials or call the provider. The warning follows the
+// configured policy rather than the mode observed once: a currently-0600
+// file under a wider rung may be recreated with wider permissions on the next
+// platform deployment, and the policy is the durable decision that permits it.
+func checkCredentialFilePermissionPolicies(cfg *config.Config) []Result {
+	var out []Result
+	for _, cr := range cfg.Credentials {
+		policy, ok := cr.FilePermissions.Policy()
+		if !ok || policy.Warning == "" {
+			continue
+		}
+		out = append(out, Result{
+			Name:   "credential " + cr.ID + " file permissions",
+			Status: Warn,
+			Detail: "filePermissions: " + string(policy.Name) + ": " + policy.Warning,
+			Fix:    "prefer filePermissions: owner-only and mode 0600; keep a wider policy only while the deployment platform cannot produce that file",
+		})
+	}
+	return out
 }
 
 func checkPlatform() Result {

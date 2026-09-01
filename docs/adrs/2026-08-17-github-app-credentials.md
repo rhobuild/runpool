@@ -1,7 +1,8 @@
 # A deployment authenticates as a GitHub App, not only as a person
 
-**Status:** implemented
+**Status:** amended
 **Date:** 2026-08-17
+**Amended by:** [Credential file readability is deployment policy](2026-09-01-credential-file-readability-is-deployment-policy.md)
 
 `credentials[].type` accepts `token` and nothing else, and the adapter
 constructs its client through the personal access token path alone.
