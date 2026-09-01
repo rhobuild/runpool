@@ -5,7 +5,7 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## Unreleased
+## v1.3.0 — 2026-09-01
 
 Changes since v1.2 make credential file permissions an explicit, reviewable
 deployment choice while preserving the owner-only default.
@@ -15,13 +15,15 @@ deployment choice while preserving the owner-only default.
 - **Credential file permissions are an explicit deployment policy.**
   `credentials[].filePermissions` is a ladder of four named policies,
   narrowest first: `owner-only`, the default, which refuses every group or
-  other bit as before; `allow-group-read`; `allow-group-or-other-read`, for a
-  platform that creates a read-only mount with its umask; and `allow-any`,
+  other bit as before; `allow-group-read`; `allow-world-read`, for a platform
+  that creates a world-readable mount; and `ignore-mode-and-owner`,
   which consults neither mode nor owner. Every policy above the default is
-  warned by doctor and at startup, the two middle policies require the
-  controller uid to own the file, and a refusal names the narrowest policy
-  that would accept the file. `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` sets it
-  in Quick Start.
+  warned by doctor and at startup. The two middle policies require the
+  controller uid only when the file actually uses widened group or other
+  bits, so every rung still accepts an operator-owned `0600` mount. A refusal
+  names the narrowest policy that would accept the file. Independently of the
+  selected rung, a credential must be a regular file no larger than 1 MiB.
+  `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` sets the policy in Quick Start.
 
 ## v1.2.0 — 2026-08-31
 
