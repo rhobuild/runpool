@@ -34,7 +34,7 @@ runpool config effective
 | `RUNPOOL_GITHUB_URL` | yes | `https://github.com/<owner>` or `https://github.com/<owner>/<repo>`. The scope decides what the runner may bind. |
 | `RUNPOOL_GITHUB_TOKEN` | one of | The token, read from the environment at startup. |
 | `RUNPOOL_GITHUB_TOKEN_FILE` | one of | A file to read the token from. Setting both is an error. |
-| `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` | no | The credential file policy: `owner-only` (default), `allow-group-read`, `allow-world-read` or `ignore-mode-and-owner`. Applies only with `RUNPOOL_GITHUB_TOKEN_FILE`. |
+| `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` | no | The credential file policy: `owner-only` (default), `allow-group-read`, `allow-world-read` or `ignore-mode-and-owner`. Valid only with `RUNPOOL_GITHUB_TOKEN_FILE`; beside `RUNPOOL_GITHUB_TOKEN` it is an error, because an environment reference has no file mode. |
 | `RUNPOOL_GITHUB_RUNNER_GROUP` | conditional | Required for an organization target in `shared-daemon`; invalid for a repository target. |
 | `RUNPOOL_HOST_TOPOLOGY` | yes | `shared-daemon` or `dedicated-daemon`; the compromise and cleanup model must be explicit. |
 | `RUNPOOL_HOST_RESERVE_CPU` | shared | CPU withheld from scheduling. Required and greater than zero in shared mode; dedicated default `1`. |
@@ -382,7 +382,9 @@ before expiry on its own.
 
 The private key is the longest-lived secret a deployment holds, and the
 one whose leak revoking a single token cannot contain. Mount it as a
-file, owner-readable only.
+file, owner-readable only; `filePermissions` governs `privateKeyFile`
+exactly as it governs `tokenFile`, so a wider policy on an App credential
+is the same warned acknowledgement.
 
 ```yaml
 credentials:

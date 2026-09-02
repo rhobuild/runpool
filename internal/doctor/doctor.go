@@ -187,7 +187,8 @@ func checkCredentialFilePermissionPolicies(cfg *config.Config) []Result {
 			Name:   "credential " + cr.ID + " file permissions",
 			Status: Warn,
 			Detail: "filePermissions: " + string(policy.Name) + ": " + policy.Warning,
-			Fix:    "prefer filePermissions: owner-only and mode 0600; keep a wider policy only while the deployment platform cannot produce that file",
+			Fix: "prefer filePermissions: " + string(config.CredentialFilePermissionsOwnerOnly) +
+				" and mode 0600; keep a wider policy only while the deployment platform cannot produce that file",
 		})
 	}
 	return out
