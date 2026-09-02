@@ -341,44 +341,6 @@ func TestEveryCredentialFilePermissionPolicyIsAccepted(t *testing.T) {
 // pins the public names and masks, then proves the semantic promise over every
 // group/other mode and both ownership states: a wider rung never rejects a
 // file accepted by the previous rung, and each step admits something new.
-// TestAcceptsConsultsOwnershipOnlyForWidenedBits pins the ownership clause
-// where it lives. The credential package proves it through the reader, but
-// dropping the clause from Accepts keeps every rung nested, so the ladder
-// test below cannot see it: only a direct statement can.
-func TestAcceptsConsultsOwnershipOnlyForWidenedBits(t *testing.T) {
-	for _, tc := range []struct {
-		name  CredentialFilePermissions
-		perm  fs.FileMode
-		owned bool
-		want  bool
-	}{
-		{CredentialFilePermissionsOwnerOnly, 0o600, false, true},
-		{CredentialFilePermissionsAllowGroupRead, 0o600, false, true},
-		{CredentialFilePermissionsAllowGroupRead, 0o640, false, false},
-		{CredentialFilePermissionsAllowGroupRead, 0o640, true, true},
-		{CredentialFilePermissionsAllowWorldRead, 0o644, false, false},
-		{CredentialFilePermissionsAllowWorldRead, 0o644, true, true},
-		{CredentialFilePermissionsIgnoreModeAndOwner, 0o666, false, true},
-	} {
-		policy, ok := tc.name.Policy()
-		if !ok {
-			t.Fatalf("%s is not a policy", tc.name)
-		}
-		if got := policy.Accepts(tc.perm, tc.owned); got != tc.want {
-			t.Errorf("%s.Accepts(%#o, owned=%v) = %v; want %v", tc.name, tc.perm, tc.owned, got, tc.want)
-		}
-	}
-	// The narrowest rung follows the same clause: a foreign-owned file with
-	// widened bits skips both middle rungs, and the same file owned by the
-	// controller stops at the first rung that tolerates its bits.
-	if got := NarrowestCredentialFilePermissions(0o640, false); got != CredentialFilePermissionsIgnoreModeAndOwner {
-		t.Errorf("narrowest for a foreign-owned 0640 = %s; want %s", got, CredentialFilePermissionsIgnoreModeAndOwner)
-	}
-	if got := NarrowestCredentialFilePermissions(0o640, true); got != CredentialFilePermissionsAllowGroupRead {
-		t.Errorf("narrowest for a controller-owned 0640 = %s; want %s", got, CredentialFilePermissionsAllowGroupRead)
-	}
-}
-
 func TestCredentialFilePermissionsAreAMonotonicFourRungLadder(t *testing.T) {
 	want := []struct {
 		name         CredentialFilePermissions
@@ -436,6 +398,44 @@ func TestCredentialFilePermissionsAreAMonotonicFourRungLadder(t *testing.T) {
 		if !strictlyWider {
 			t.Errorf("%s does not admit anything beyond %s", wider.Name, narrower.Name)
 		}
+	}
+}
+
+// TestAcceptsConsultsOwnershipOnlyForWidenedBits pins the ownership clause
+// where it lives. The credential package proves it through the reader, but
+// dropping the clause from Accepts keeps every rung nested, so the ladder
+// test above cannot see it: only a direct statement can.
+func TestAcceptsConsultsOwnershipOnlyForWidenedBits(t *testing.T) {
+	for _, tc := range []struct {
+		name  CredentialFilePermissions
+		perm  fs.FileMode
+		owned bool
+		want  bool
+	}{
+		{CredentialFilePermissionsOwnerOnly, 0o600, false, true},
+		{CredentialFilePermissionsAllowGroupRead, 0o600, false, true},
+		{CredentialFilePermissionsAllowGroupRead, 0o640, false, false},
+		{CredentialFilePermissionsAllowGroupRead, 0o640, true, true},
+		{CredentialFilePermissionsAllowWorldRead, 0o644, false, false},
+		{CredentialFilePermissionsAllowWorldRead, 0o644, true, true},
+		{CredentialFilePermissionsIgnoreModeAndOwner, 0o666, false, true},
+	} {
+		policy, ok := tc.name.Policy()
+		if !ok {
+			t.Fatalf("%s is not a policy", tc.name)
+		}
+		if got := policy.Accepts(tc.perm, tc.owned); got != tc.want {
+			t.Errorf("%s.Accepts(%#o, owned=%v) = %v; want %v", tc.name, tc.perm, tc.owned, got, tc.want)
+		}
+	}
+	// The narrowest rung follows the same clause: a foreign-owned file with
+	// widened bits skips both middle rungs, and the same file owned by the
+	// controller stops at the first rung that tolerates its bits.
+	if got := NarrowestCredentialFilePermissions(0o640, false); got != CredentialFilePermissionsIgnoreModeAndOwner {
+		t.Errorf("narrowest for a foreign-owned 0640 = %s; want %s", got, CredentialFilePermissionsIgnoreModeAndOwner)
+	}
+	if got := NarrowestCredentialFilePermissions(0o640, true); got != CredentialFilePermissionsAllowGroupRead {
+		t.Errorf("narrowest for a controller-owned 0640 = %s; want %s", got, CredentialFilePermissionsAllowGroupRead)
 	}
 }
 
