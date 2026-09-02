@@ -183,6 +183,7 @@ not a second adapter, and this matrix does not pretend otherwise.
 | Enterprise-scoped scale sets | Accepted, unqualified — see Provider support above |
 | Operator-supplied capsule image | `tiers[].capsuleImage`, digest-qualified, built from the published capsule. A tier that names one is outside the configuration the gates observed, and `runpool status` reports what each tier runs |
 | GitHub App credentials | Implemented. The provider client mints and refreshes the installation token; the App path has no live coverage, because proving it end to end needs an App installed on the protected fixture |
+| Platform-created credential files | Implemented as a per-credential `filePermissions` ladder: `owner-only` by default, then `allow-group-read`, `allow-world-read` and `ignore-mode-and-owner`; doctor and startup warn on every policy above the default, middle-rung ownership is required only when widened bits are used, and every mode remains limited to regular files of at most 1 MiB |
 | GPU and device passthrough | Not implemented. The tier envelope is cpu, memory, swap and pids; nothing reaches a device, and a GPU would have to be visible to the capsule and to the daemon inside it |
 | Architectures other than amd64 | Not qualified. Nothing in the design restricts one — see Host requirements |
 

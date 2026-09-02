@@ -9,7 +9,7 @@ answers. This file records what came back.
 
 ## State
 
-Two reviews have been conducted.
+Three reviews have been conducted.
 
 The first was external, against `c8ac420`. It reported no finding that blocks
 the release boundary, and one finding recorded below. That finding was
@@ -21,9 +21,16 @@ covered each boundary surface, the build and release chain, and what reaches an
 operator-readable surface. Four findings are recorded below; each is resolved
 with the test that holds it or accepted with the reasoning.
 
+The third was internal, against the first published revision of
+[#160](https://github.com/rhobuild/runpool/pull/160) at `7011d66`. It reviewed
+the permission ladder as a set of accepted states rather than only as bitmasks,
+and followed the widest policy through the file reader. Two findings are
+recorded below and resolved in the same pull request before merge.
+
 A review covers the commit it read: a later tree is covered only to the extent
-it has not moved. The current tree postdates both reviews and changes admission,
-durable identity and qualification. Neither earlier review authorizes its next
+it has not moved. The current tree postdates all three reviews and changes
+admission, durable identity, qualification and the credential file-permission
+boundary. None of those reviews authorizes its next
 release; the release gate requires an external review of the final candidate
 commit.
 
@@ -165,3 +172,41 @@ outcome reads as unexamined.
   smallest window that still answers the question. The shared cleanup treats a
   set already gone as success, the same contract every removal in this product
   honours.
+
+### RP-SEC-006 — the named ladder was not monotonic
+
+- **Reported** — 2026-09-01, internal review of pull request #160 at `7011d66`.
+- **Surface** — ownership, at the credential-file admission boundary.
+- **Claim** — `owner-only` deliberately accepted a `0600` file owned by the
+  deployment operator, preserving the behavior of a privileged controller.
+  Both middle policies required controller ownership unconditionally, so they
+  rejected that same file. The documented ladder therefore became narrower
+  before becoming wider, and the refusal could recommend changing back to the
+  supposedly narrower policy.
+- **Assessment** — reproduces for every foreign-owned mode with no group/other
+  bits. No credential was disclosed, but the configuration contract was false
+  and an operator could not safely reason from policy order.
+- **Disposition** — `resolved` in
+  [#160](https://github.com/rhobuild/runpool/pull/160). Middle-rung ownership is
+  required only when the file actually uses a widened group/other permission.
+  `TestCredentialFilePermissionsAreAMonotonicFourRungLadder` exhausts all 64
+  group/other bit combinations under both ownership states for every adjacent
+  pair, and requires every step to be strictly wider.
+
+### RP-SEC-007 — a credential path could be an unbounded special file
+
+- **Reported** — 2026-09-01, internal review of pull request #160 at `7011d66`.
+- **Surface** — ownership, reaching controller availability through credential
+  input.
+- **Claim** — the reader rejected directories but accepted other non-regular
+  files. A FIFO could block during `open` before its metadata was inspected,
+  and `ignore-mode-and-owner` combined with an unbounded device and `io.ReadAll` could grow
+  controller memory without limit.
+- **Assessment** — reproduces. It requires the deployment operator or platform
+  to provide the path, so it does not cross the trusted-workflow boundary, but
+  a malformed mount could prevent the controller from starting or exhaust it.
+- **Disposition** — `resolved` in
+  [#160](https://github.com/rhobuild/runpool/pull/160). The path is opened
+  non-blocking, the opened descriptor must be a regular file, and reads stop at
+  1 MiB under every permission policy. `TestIgnoreModeAndOwnerStillRequiresABoundedRegularFile`
+  covers a device, a FIFO and an oversized regular file.

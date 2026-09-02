@@ -97,6 +97,41 @@ func TestQuickStartTokenFile(t *testing.T) {
 	}
 }
 
+func TestQuickStartTokenFilePermissionPolicy(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		EnvGitHubURL:                 "https://github.com/acme/app",
+		EnvGitHubTokenFile:           "/run/secrets/github-token",
+		EnvCredentialFilePermissions: string(CredentialFilePermissionsAllowWorldRead),
+		EnvHostTopology:              string(HostTopologyDedicatedDaemon),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Credentials[0].FilePermissions; got != CredentialFilePermissionsAllowWorldRead {
+		t.Errorf("filePermissions = %q", got)
+	}
+
+	_, err = Load(env(map[string]string{
+		EnvGitHubURL:                 "https://github.com/acme/app",
+		EnvGitHubToken:               "secret",
+		EnvCredentialFilePermissions: string(CredentialFilePermissionsAllowWorldRead),
+		EnvHostTopology:              string(HostTopologyDedicatedDaemon),
+	}))
+	if err == nil || !strings.Contains(err.Error(), "filePermissions") {
+		t.Fatalf("environment credential with a file-mode policy: %v", err)
+	}
+
+	_, err = Load(env(map[string]string{
+		EnvGitHubURL:                 "https://github.com/acme/app",
+		EnvGitHubToken:               "secret",
+		EnvCredentialFilePermissions: string(CredentialFilePermissionsOwnerOnly),
+		EnvHostTopology:              string(HostTopologyDedicatedDaemon),
+	}))
+	if err == nil || !strings.Contains(err.Error(), "filePermissions") {
+		t.Fatalf("owner-only on an environment credential: %v", err)
+	}
+}
+
 func TestQuickStartSharedDaemonRequiresReserve(t *testing.T) {
 	base := map[string]string{
 		EnvGitHubURL:    "https://github.com/acme/app",
@@ -172,15 +207,16 @@ func TestFileModeRefusesEveryQuickStartVariable(t *testing.T) {
 	}
 }
 
-// TestTheConflictListIsTheTwelveVariables. The refusal and its test both
+// TestTheConflictListIsTheThirteenVariables. The refusal and its test both
 // iterate quickStartTargetVars, so a variable dropped from the list
 // leaves both self-consistent: production stops refusing it beside a
 // configuration file and the test stops checking it, in one edit. The
 // literals here are the independent statement — a deletion is a diff in
 // this constant, reviewed as one.
-func TestTheConflictListIsTheTwelveVariables(t *testing.T) {
+func TestTheConflictListIsTheThirteenVariables(t *testing.T) {
 	want := []string{
 		"RUNPOOL_GITHUB_URL", "RUNPOOL_GITHUB_RUNNER_GROUP", "RUNPOOL_GITHUB_TOKEN_FILE",
+		"RUNPOOL_CREDENTIAL_FILE_PERMISSIONS",
 		"RUNPOOL_HOST_TOPOLOGY", "RUNPOOL_HOST_RESERVE_CPU", "RUNPOOL_HOST_RESERVE_MEMORY",
 		"RUNPOOL_HOST_RESERVE_SWAP", "RUNPOOL_HOST_RESERVE_FREE_DISK", "RUNPOOL_TIER",
 		"RUNPOOL_PARALLELISM", "RUNPOOL_LOG_LEVEL", "RUNPOOL_NETWORK_PROFILE",

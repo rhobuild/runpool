@@ -541,6 +541,35 @@ func TestCheckCredentials(t *testing.T) {
 	})
 }
 
+// TestEveryRungAboveOwnerOnlyIsAWarning: the default rung is silent, every
+// wider one says in doctor what it gives away, and an environment-backed
+// credential, which has no file, says nothing.
+func TestEveryRungAboveOwnerOnlyIsAWarning(t *testing.T) {
+	cfg := &config.Config{Credentials: []config.Credential{
+		{ID: "env"},
+		{ID: "strict", FilePermissions: config.CredentialFilePermissionsOwnerOnly},
+		{ID: "group", FilePermissions: config.CredentialFilePermissionsAllowGroupRead},
+		{ID: "platform", FilePermissions: config.CredentialFilePermissionsAllowWorldRead},
+		{ID: "delegated", FilePermissions: config.CredentialFilePermissionsIgnoreModeAndOwner},
+	}}
+	res := checkCredentialFilePermissionPolicies(cfg)
+	if len(res) != 3 {
+		t.Fatalf("results = %+v; want one warning per rung above the default", res)
+	}
+	for i, want := range []struct{ id, policy string }{
+		{"group", "allow-group-read"}, {"platform", "allow-world-read"}, {"delegated", "ignore-mode-and-owner"},
+	} {
+		r := res[i]
+		if r.Status != Warn || !strings.Contains(r.Name, want.id) ||
+			!strings.Contains(r.Detail, want.policy) || !strings.Contains(r.Fix, "owner-only") {
+			t.Errorf("warning %d is not actionable: %+v", i, r)
+		}
+	}
+	if !strings.Contains(res[2].Detail, "replace") {
+		t.Errorf("ignore-mode-and-owner does not say the file can be replaced: %q", res[2].Detail)
+	}
+}
+
 // TestCheckCredentialsNamesTheRunsOnLabel: a scale set is named in
 // configuration and matched by a workflow's runs-on, and nothing else an
 // operator can run says the two are the same string. A workflow that

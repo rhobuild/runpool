@@ -152,6 +152,16 @@ func Validate(c *Config) error {
 			v.errf(path+".id", "duplicate credential id %q", cr.ID)
 		}
 		credentials[cr.ID] = true
+		fileBacked := cr.TokenFile != "" || cr.PrivateKeyFile != ""
+		switch {
+		case !fileBacked && cr.FilePermissions != "":
+			v.errf(path+".filePermissions", "applies only to tokenFile or privateKeyFile; an environment reference has no file mode")
+		case !fileBacked:
+		default:
+			if _, ok := cr.FilePermissions.Policy(); !ok {
+				v.errf(path+".filePermissions", "must be one of %s, narrowest first", CredentialFilePermissionsNames())
+			}
+		}
 		switch cr.Type {
 		case CredentialTypeToken:
 			v.tokenCredential(path, cr)
