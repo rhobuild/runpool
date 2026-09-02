@@ -34,6 +34,7 @@ runpool config effective
 | `RUNPOOL_GITHUB_URL` | yes | `https://github.com/<owner>` or `https://github.com/<owner>/<repo>`. The scope decides what the runner may bind. |
 | `RUNPOOL_GITHUB_TOKEN` | one of | The token, read from the environment at startup. |
 | `RUNPOOL_GITHUB_TOKEN_FILE` | one of | A file to read the token from. Setting both is an error. |
+| `RUNPOOL_CREDENTIAL_FILE_PERMISSIONS` | no | The credential file policy: `owner-only` (default), `allow-group-read`, `allow-world-read` or `ignore-mode-and-owner`. Valid only with `RUNPOOL_GITHUB_TOKEN_FILE`; beside `RUNPOOL_GITHUB_TOKEN` it is an error, because an environment reference has no file mode. |
 | `RUNPOOL_GITHUB_RUNNER_GROUP` | conditional | Required for an organization target in `shared-daemon`; invalid for a repository target. |
 | `RUNPOOL_HOST_TOPOLOGY` | yes | `shared-daemon` or `dedicated-daemon`; the compromise and cleanup model must be explicit. |
 | `RUNPOOL_HOST_RESERVE_CPU` | shared | CPU withheld from scheduling. Required and greater than zero in shared mode; dedicated default `1`. |
@@ -293,6 +294,7 @@ is [`deploy/workflows/example.yml`](../../deploy/workflows/example.yml).
 | --- | --- |
 | `id` | Lowercase slug |
 | `type` | `token` or `github_app` |
+| `filePermissions` | Which local accounts may reach the file: `owner-only` (default), `allow-group-read`, `allow-world-read` or `ignore-mode-and-owner`; applies to the file reference below |
 | `tokenEnv` | Environment variable holding the token, for `token` |
 | `tokenFile` | File holding the token, for `token` |
 | `clientID` | The App's client id, for `github_app` |
@@ -307,9 +309,57 @@ or `privateKeyFile`. A credential carrying the fields of both types is
 refused rather than resolved by precedence.
 
 Prefer the file forms for deployments, so the credential is mounted as a
-secret rather than persisted in Docker's container environment. A secret
-file other local users can read is refused: `shared-daemon` is a
-supported topology, so another uid on the host is a real party.
+secret rather than persisted in Docker's container environment.
+`filePermissions` says which local accounts a deployment lets reach the
+file. It is a ladder of four named policies, narrowest first; each accepts
+strictly more POSIX mode/owner combinations than the one before, and the last
+ignores both. The default is the narrowest.
+
+| Policy | Refuses | Accepts, for example | Ownership rule | `doctor` |
+| --- | --- | --- | --- | --- |
+| `owner-only` (default) | every group or other bit | `0600`, `0400` | no | silent |
+| `allow-group-read` | group write or execute, and every other bit | `0640`, `0440` | controller owner when group/other bits are present | warns: the policy permits group read |
+| `allow-world-read` | group or other write or execute | `0644`, `0604`, `0444` | controller owner when group/other bits are present | warns: the policy permits any local account to read |
+| `ignore-mode-and-owner` | nothing based on POSIX mode or uid | `0664`, `0666`, `0777`, a regular file on a filesystem without POSIX modes | not checked | warns: any account that reaches the file can read or replace it |
+
+`owner-only` is what a hand-provisioned deployment uses: `chmod 600`.
+`allow-group-read` is the `root:group 0640` layout of a service secret.
+`allow-world-read` is what a platform produces when it creates a
+read-only mount with its umask and offers no control over the mode:
+
+```yaml
+credentials:
+  - id: github-company-runners
+    type: token
+    tokenFile: /run/secrets/runpool/github-company-runners
+    filePermissions: allow-world-read
+```
+
+`ignore-mode-and-owner` consults neither. It exists for filesystems that
+carry no POSIX modes, where every file reports what the mount options say
+and no `chmod` changes it, and for an operator who accepts every local
+account on the host. Its warning makes that delegation explicit.
+
+The two middle policies require the controller's effective uid only when the
+file actually carries group or other bits: a Unix owner can change those bits
+after the check. A file with no such bits does not rely on that exception, so
+an operator-owned `0600` file accepted by `owner-only` is also accepted by
+every wider rung. That conditional rule is what makes this a real ladder.
+
+A refusal names the narrowest policy that would accept the file, so widening
+is a choice of the exact word and nothing wider. The policy is invalid with
+an environment reference because no file mode exists there. `runpool config
+effective` prints the policy governing every file-backed credential, and
+`runpool doctor` plus the startup log warn on every policy above the
+default. Another uid on a `shared-daemon` host is a real party: a wider
+policy says the operator accepts what that party can then do; it does not
+turn the exposure into a secret mount.
+
+The policy governs POSIX mode and ownership only. Under every policy,
+including `ignore-mode-and-owner`, Runpool opens the path once, verifies that
+descriptor is a regular file, and accepts no more than 1 MiB of content.
+Directories, FIFOs, devices and unbounded streams are refused; a symlink is
+acceptable only when its resolved target satisfies the same checks.
 
 Runpool reads the credential at startup; rotating it requires a
 controlled controller restart. Use `runpool doctor` to verify the target
@@ -332,7 +382,9 @@ before expiry on its own.
 
 The private key is the longest-lived secret a deployment holds, and the
 one whose leak revoking a single token cannot contain. Mount it as a
-file, owner-readable only.
+file, owner-readable only; `filePermissions` governs `privateKeyFile`
+exactly as it governs `tokenFile`, so a wider policy on an App credential
+is the same warned acknowledgement.
 
 ```yaml
 credentials:

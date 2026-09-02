@@ -19,7 +19,7 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
       -o /out/capsule-supervisor ./cmd/capsule-supervisor
 
-FROM docker:29.7.2-dind@sha256:360545c5305996eb06cc850c0e48f352809fc0930c66031fe46c370b70075c2b AS engine
+FROM docker:29.7.2-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6 AS engine
 
 FROM ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
 

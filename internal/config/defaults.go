@@ -17,8 +17,12 @@ type (
 	DNSMode          string
 	CacheStorageMode string
 	CredentialType   string
-	LogFormat        string
-	LogLevel         string
+	// CredentialFilePermissions names one rung of the local-read policy for a
+	// credential file. It is a named choice rather than a raw numeric mode so
+	// an effective configuration states the disclosure the operator accepted.
+	CredentialFilePermissions string
+	LogFormat                 string
+	LogLevel                  string
 )
 
 const (
@@ -42,6 +46,20 @@ const (
 	// App rather than as a person. The provider client mints and refreshes
 	// the installation token itself from the App's own key.
 	CredentialTypeGitHubApp CredentialType = "github_app"
+
+	// CredentialFilePermissionsOwnerOnly is the default: no group or other
+	// permission bit may be set on the file.
+	CredentialFilePermissionsOwnerOnly CredentialFilePermissions = "owner-only"
+	// CredentialFilePermissionsAllowGroupRead accepts group read, but no group
+	// write or execute bit and no permission bit for other accounts.
+	CredentialFilePermissionsAllowGroupRead CredentialFilePermissions = "allow-group-read"
+	// CredentialFilePermissionsAllowWorldRead accepts group and other read,
+	// using the conventional Unix "world-readable" name. Group/other write and
+	// execute bits remain a refusal.
+	CredentialFilePermissionsAllowWorldRead CredentialFilePermissions = "allow-world-read"
+	// CredentialFilePermissionsIgnoreModeAndOwner delegates both POSIX
+	// decisions to the deployment platform. Regular-file and size checks remain.
+	CredentialFilePermissionsIgnoreModeAndOwner CredentialFilePermissions = "ignore-mode-and-owner"
 
 	LogFormatJSON LogFormat = "json"
 	LogFormatText LogFormat = "text"
@@ -151,8 +169,16 @@ func ApplyDefaults(c *Config) {
 	}
 
 	for i := range c.Credentials {
-		if c.Credentials[i].Type == "" {
-			c.Credentials[i].Type = CredentialTypeToken
+		cr := &c.Credentials[i]
+		if cr.Type == "" {
+			cr.Type = CredentialTypeToken
+		}
+		// Materialize the security policy so `config effective` says which
+		// rule governs every file-backed credential instead of leaving
+		// absence to be interpreted by the reader. Environment-backed
+		// credentials have no file mode and carry no such policy.
+		if cr.FilePermissions == "" && (cr.TokenFile != "" || cr.PrivateKeyFile != "") {
+			cr.FilePermissions = CredentialFilePermissionsOwnerOnly
 		}
 	}
 

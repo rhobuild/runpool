@@ -33,7 +33,7 @@ status two readers summarise differently.
 | 2026-08-13 | [Admission credits](2026-08-13-admission-credits.md) — tier parallelism is shared credit with a rotating discovery credit | implemented |
 | 2026-08-14 | [Scheduling and swap semantics](2026-08-14-scheduling-and-swap.md) — optional global parallelism and provider-neutral resource units | implemented |
 | 2026-08-17 | [Capsule image substitution](2026-08-17-capsule-image-substitution.md) — a tier may name its capsule, and the capsule declares its protocol | implemented |
-| 2026-08-17 | [GitHub App credentials](2026-08-17-github-app-credentials.md) — a deployment authenticates as an App, not only as a person | implemented |
+| 2026-08-17 | [GitHub App credentials](2026-08-17-github-app-credentials.md) — a deployment authenticates as an App, not only as a person | amended |
 | 2026-08-17 | [Job timeout](2026-08-17-job-timeout.md) — the lease ceiling is a backstop above the provider's own maximum | implemented |
 | 2026-08-17 | [Multiplatform locks](2026-08-17-multiplatform-locks.md) — a lock records the platforms qualified, not the only one that works | implemented |
 | 2026-08-17 | [Target hosts and scopes](2026-08-17-target-hosts-and-scopes.md) — any host the protocol serves, at any scope it defines | implemented |
@@ -45,3 +45,4 @@ status two readers summarise differently.
 | 2026-08-28 | [The status document is the metrics interface](2026-08-28-the-status-document-is-the-metrics-interface.md) — no endpoint, no exporter; `status --json` is the machine-readable account and the host decides when to look | implemented |
 | 2026-08-29 | [A tier's second label is deferred, not refused](2026-08-29-a-tiers-second-label-is-deferred-not-refused.md) — matching is all-of and measured; disjoint labels would make it safe and nothing validates that yet | accepted |
 | 2026-08-29 | [Delivery fingerprints name their encoding](2026-08-29-delivery-fingerprints-name-their-encoding.md) — length-prefixed current encoding, exact historical comparison by the row's semantic selector | implemented |
+| 2026-09-01 | [Credential file readability is deployment policy](2026-09-01-credential-file-readability-is-deployment-policy.md) — a four-rung ladder from `owner-only` to `ignore-mode-and-owner`, warned above the default | implemented |

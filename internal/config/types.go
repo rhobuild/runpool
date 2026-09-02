@@ -135,6 +135,10 @@ type TierBinding struct {
 type Credential struct {
 	ID   string         `yaml:"id"`
 	Type CredentialType `yaml:"type"`
+	// FilePermissions is the policy for whichever file reference this
+	// credential uses. Owner-only is the default; every wider rung is an
+	// explicit, warned deployment acknowledgement.
+	FilePermissions CredentialFilePermissions `yaml:"filePermissions,omitempty"`
 	// Exactly one of TokenEnv (an environment variable name) or TokenFile
 	// (a mounted secret path) references the token of a `token`
 	// credential; the value itself never appears in configuration.
@@ -147,8 +151,8 @@ type Credential struct {
 	// Exactly one of PrivateKeyEnv or PrivateKeyFile references the App's
 	// private key, in PEM form. It is the longest-lived secret a
 	// deployment holds and the one whose leak a single revocation cannot
-	// contain, so a file is held to the same owner-only mode a token file
-	// is.
+	// contain, so it follows the same explicit file-permission policy as a
+	// token rather than receiving a quieter exception of its own.
 	PrivateKeyEnv  string `yaml:"privateKeyEnv"`
 	PrivateKeyFile string `yaml:"privateKeyFile"`
 }

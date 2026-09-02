@@ -59,6 +59,12 @@ them by assertion.
   admission leaves configured host capacity unused, restricted egress is
   mandatory, and destructive operations remain instance-scoped. A controller,
   daemon or kernel compromise can still affect every service on that host.
+- **It cannot make a platform-readable credential owner-only.** A
+  `credentials[].filePermissions` policy above the default is an explicit
+  acknowledgement of what other local accounts can do with that file: read
+  it or, under `ignore-mode-and-owner`, rely entirely on the platform's POSIX
+  boundary. Runpool warns and continues; it does not narrow what the platform
+  produced. It still refuses non-regular or larger-than-1-MiB inputs.
 - **It does not protect platform-wide cleanup from the platform itself.**
   Operators must not run Docker volume prune or a system prune that includes
   volumes on a shared daemon. Runpool owns collection of its cache lanes.

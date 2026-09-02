@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -141,6 +142,14 @@ func TestValidateRules(t *testing.T) {
 		"unknown credential type": {func(c *Config) {
 			c.Credentials[0].Type = "oauth"
 		}, "credentials[0].type"},
+		"unknown credential file permission policy": {func(c *Config) {
+			c.Credentials[0].TokenEnv = ""
+			c.Credentials[0].TokenFile = "/run/secrets/runpool/token"
+			c.Credentials[0].FilePermissions = "trust-platform"
+		}, "credentials[0].filePermissions"},
+		"read exception on an environment credential": {func(c *Config) {
+			c.Credentials[0].FilePermissions = CredentialFilePermissionsAllowWorldRead
+		}, "credentials[0].filePermissions"},
 		"app credential without a client id": {func(c *Config) {
 			c.Credentials[0] = Credential{ID: "app", Type: CredentialTypeGitHubApp,
 				InstallationID: 1, PrivateKeyEnv: "KEY"}
@@ -306,11 +315,144 @@ func TestAGitHubAppCredentialIsAccepted(t *testing.T) {
 	c.Credentials[0] = Credential{
 		ID: "runners", Type: CredentialTypeGitHubApp,
 		ClientID: "Iv1.0123456789abcdef", InstallationID: 12345678,
-		PrivateKeyFile: "/run/secrets/runpool/app.pem",
+		PrivateKeyFile: "/run/secrets/runpool/app.pem", FilePermissions: CredentialFilePermissionsOwnerOnly,
 	}
 	c.Targets[0].CredentialID = "runners"
 	if err := Validate(c); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+}
+
+func TestEveryCredentialFilePermissionPolicyIsAccepted(t *testing.T) {
+	for _, policy := range credentialFilePermissionsLadder {
+		c := validConfig()
+		c.Credentials[0] = Credential{
+			ID: "github-default", Type: CredentialTypeToken,
+			TokenFile:       "/run/secrets/runpool/token",
+			FilePermissions: policy.Name,
+		}
+		if err := Validate(c); err != nil {
+			t.Errorf("%s: Validate: %v", policy.Name, err)
+		}
+	}
+}
+
+// TestCredentialFilePermissionsAreAMonotonicFourRungLadder independently
+// pins the public names and masks, then proves the semantic promise over every
+// group/other mode and both ownership states: a wider rung never rejects a
+// file accepted by the previous rung, and each step admits something new.
+func TestCredentialFilePermissionsAreAMonotonicFourRungLadder(t *testing.T) {
+	want := []struct {
+		name         CredentialFilePermissions
+		refused      fs.FileMode
+		ownerOnWiden bool
+	}{
+		{CredentialFilePermissionsOwnerOnly, 0o077, false},
+		{CredentialFilePermissionsAllowGroupRead, 0o037, true},
+		{CredentialFilePermissionsAllowWorldRead, 0o033, true},
+		{CredentialFilePermissionsIgnoreModeAndOwner, 0, false},
+	}
+	if len(credentialFilePermissionsLadder) != len(want) {
+		t.Fatalf("ladder has %d rungs; want %d", len(credentialFilePermissionsLadder), len(want))
+	}
+	wantNames := make([]string, 0, len(want))
+	for i, expected := range want {
+		got := credentialFilePermissionsLadder[i]
+		wantNames = append(wantNames, string(expected.name))
+		if got.Name != expected.name || got.RefusedBits != expected.refused ||
+			got.RequireControllerOwnerForWidening != expected.ownerOnWiden {
+			t.Errorf("rung %d = %+v; want name=%s refused=%#o owner-on-widen=%v",
+				i, got, expected.name, expected.refused, expected.ownerOnWiden)
+		}
+		if got.RefusedBits&^0o077 != 0 {
+			t.Errorf("%s refuses owner or non-permission bits: %#o", got.Name, got.RefusedBits)
+		}
+		if i == 0 && got.Warning != "" {
+			t.Errorf("the safe default unexpectedly warns: %q", got.Warning)
+		}
+		if i > 0 && got.Warning == "" {
+			t.Errorf("%s widens the default without a warning", got.Name)
+		}
+	}
+	if got := CredentialFilePermissionsNames(); got != strings.Join(wantNames, ", ") {
+		t.Errorf("names = %q; want %q", got, strings.Join(wantNames, ", "))
+	}
+
+	for i := 0; i+1 < len(credentialFilePermissionsLadder); i++ {
+		narrower := credentialFilePermissionsLadder[i]
+		wider := credentialFilePermissionsLadder[i+1]
+		strictlyWider := false
+		for extra := fs.FileMode(0); extra <= 0o077; extra++ {
+			for _, owned := range []bool{false, true} {
+				narrowAccepts := narrower.Accepts(0o600|extra, owned)
+				wideAccepts := wider.Accepts(0o600|extra, owned)
+				if narrowAccepts && !wideAccepts {
+					t.Errorf("%s accepts mode %#o owned=%v but wider %s rejects it",
+						narrower.Name, 0o600|extra, owned, wider.Name)
+				}
+				if !narrowAccepts && wideAccepts {
+					strictlyWider = true
+				}
+			}
+		}
+		if !strictlyWider {
+			t.Errorf("%s does not admit anything beyond %s", wider.Name, narrower.Name)
+		}
+	}
+}
+
+// TestAcceptsConsultsOwnershipOnlyForWidenedBits pins the ownership clause
+// where it lives. The credential package proves it through the reader, but
+// dropping the clause from Accepts keeps every rung nested, so the ladder
+// test above cannot see it: only a direct statement can.
+func TestAcceptsConsultsOwnershipOnlyForWidenedBits(t *testing.T) {
+	for _, tc := range []struct {
+		name  CredentialFilePermissions
+		perm  fs.FileMode
+		owned bool
+		want  bool
+	}{
+		{CredentialFilePermissionsOwnerOnly, 0o600, false, true},
+		{CredentialFilePermissionsAllowGroupRead, 0o600, false, true},
+		{CredentialFilePermissionsAllowGroupRead, 0o640, false, false},
+		{CredentialFilePermissionsAllowGroupRead, 0o640, true, true},
+		{CredentialFilePermissionsAllowWorldRead, 0o644, false, false},
+		{CredentialFilePermissionsAllowWorldRead, 0o644, true, true},
+		{CredentialFilePermissionsIgnoreModeAndOwner, 0o666, false, true},
+	} {
+		policy, ok := tc.name.Policy()
+		if !ok {
+			t.Fatalf("%s is not a policy", tc.name)
+		}
+		if got := policy.Accepts(tc.perm, tc.owned); got != tc.want {
+			t.Errorf("%s.Accepts(%#o, owned=%v) = %v; want %v", tc.name, tc.perm, tc.owned, got, tc.want)
+		}
+	}
+	// The narrowest rung follows the same clause: a foreign-owned file with
+	// widened bits skips both middle rungs, and the same file owned by the
+	// controller stops at the first rung that tolerates its bits.
+	if got := NarrowestCredentialFilePermissions(0o640, false); got != CredentialFilePermissionsIgnoreModeAndOwner {
+		t.Errorf("narrowest for a foreign-owned 0640 = %s; want %s", got, CredentialFilePermissionsIgnoreModeAndOwner)
+	}
+	if got := NarrowestCredentialFilePermissions(0o640, true); got != CredentialFilePermissionsAllowGroupRead {
+		t.Errorf("narrowest for a controller-owned 0640 = %s; want %s", got, CredentialFilePermissionsAllowGroupRead)
+	}
+}
+
+func TestCredentialFilePermissionsDefaultIsVisible(t *testing.T) {
+	c := validConfig()
+	c.Credentials[0].TokenEnv = ""
+	c.Credentials[0].TokenFile = "/run/secrets/runpool/token"
+	ApplyDefaults(c)
+	if got := c.Credentials[0].FilePermissions; got != CredentialFilePermissionsOwnerOnly {
+		t.Fatalf("filePermissions = %q; want the explicit safe default", got)
+	}
+	out, err := yaml.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "filePermissions: owner-only") {
+		t.Fatalf("effective configuration hides the credential policy:\n%s", out)
 	}
 }
 
