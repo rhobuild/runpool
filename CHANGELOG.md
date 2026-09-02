@@ -5,7 +5,7 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
-## v1.3.0 — 2026-09-01
+## v1.3.0 — 2026-09-02
 
 Changes since v1.2 make credential file permissions an explicit, reviewable
 deployment choice while preserving the owner-only default.
