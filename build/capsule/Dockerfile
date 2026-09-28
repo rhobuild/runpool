@@ -8,7 +8,7 @@
 # Both sources are digest-pinned to the entries in build/images.lock.json;
 # a moving tag here would put unreviewed bytes inside a privileged
 # container.
-FROM golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,7 +19,7 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
       -o /out/capsule-supervisor ./cmd/capsule-supervisor
 
-FROM docker:29.7.2-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6 AS engine
+FROM docker:29.8.1-dind@sha256:3f3c01aaaebf7cce837356b688b7c059a4749f10bd7660dec7c58fc454a283f0 AS engine
 
 FROM ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
 
