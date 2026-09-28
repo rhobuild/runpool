@@ -3,7 +3,7 @@
 # the runtime layer is distroless: no shell, no package manager, nothing
 # for a compromised process to reach for beyond the base image's CA
 # certificates, timezone data and passwd.
-FROM golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
 WORKDIR /src
 
 # Dependencies resolve in their own layer so source edits do not refetch.
