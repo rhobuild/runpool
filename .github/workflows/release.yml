@@ -679,7 +679,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate the controller SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ steps.promote.outputs.controller_reference }}
           format: spdx-json
@@ -687,7 +687,7 @@ jobs:
           upload-artifact: false
 
       - name: Generate the capsule SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ steps.promote.outputs.capsule_reference }}
           format: spdx-json
@@ -730,7 +730,7 @@ jobs:
           push-to-registry: true
 
       - name: Publish a draft GitHub release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             dist/runpool-linux-amd64
