@@ -8,7 +8,7 @@
 # Both sources are digest-pinned to the entries in build/images.lock.json;
 # a moving tag here would put unreviewed bytes inside a privileged
 # container.
-FROM golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS build
+FROM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
