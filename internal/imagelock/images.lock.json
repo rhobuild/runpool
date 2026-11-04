@@ -2,8 +2,9 @@
   "$comment": [
     "Runtime images Runpool creates containers from, pinned by digest.",
     "A tag can move; a digest cannot, so a release always runs the images",
-    "it was tested against. The runner and dind pair is versioned together:",
-    "the runner's externals tree and the daemon it drives must match.",
+    "it was tested against. The runner and dind pair is reviewed together:",
+    "a job's docker client and daemon both come from the dind image, whose",
+    "/usr/local/bin precedes the Docker the runner image keeps in /usr/bin.",
     "internal/qualification/cmd/image-lock re-resolves each tag and fails",
     "when a digest has drifted from what is recorded here. It runs on",
     "every pull request and again inside the qualification.",
@@ -15,16 +16,16 @@
     "targeting one of these resolves that platform's child of the same",
     "pinned digest."
   ],
-  "resolved": "2026-09-01",
+  "resolved": "2026-11-04",
   "platforms": [
     "linux/amd64",
     "linux/arm64"
   ],
   "images": {
     "runner": {
-      "ref": "ghcr.io/actions/actions-runner:2.337.0",
-      "digest": "sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4",
-      "upstream": "https://github.com/actions/runner/releases/tag/v2.337.0",
+      "ref": "ghcr.io/actions/actions-runner:2.338.2",
+      "digest": "sha256:759a1d94a15b05941aba5196974ff43fe15b4cbba29b694b35cbc32a1166b232",
+      "upstream": "https://github.com/actions/runner/releases/tag/v2.338.2",
       "note": "GitHub requires a runner with auto-update disabled to be updated within 30 days of a release."
     },
     "dind": {
