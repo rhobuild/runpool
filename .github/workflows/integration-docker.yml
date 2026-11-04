@@ -65,7 +65,7 @@ concurrency:
 
 env:
   # Held equal to go.mod by the consistency suite.
-  GOTOOLCHAIN: go1.26.7
+  GOTOOLCHAIN: go1.26.10
 
 jobs:
   daemon:

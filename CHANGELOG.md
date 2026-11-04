@@ -5,6 +5,22 @@ Notable changes, newest first. Runpool follows
 a version speaks for are listed in
 [the product contract](docs/product-contract.md).
 
+## v1.3.1 — 2026-11-04
+
+A maintenance release. It keeps the capsule's runner inside GitHub's update
+window and rebuilds every binary with a Go release that fixes reachable
+standard-library vulnerabilities.
+
+### Security and dependencies
+
+- **The capsule carries Actions Runner 2.338.2.** GitHub stops queuing jobs
+  for a runner with automatic updates disabled once a release has been
+  available for 30 days, and 2.338.0 reached that age on 2026-11-05. The
+  capsule's inner Docker Engine stays at 29.7.2, as qualified.
+- **The `go1.26.10` toolchain builds the controller, the capsule supervisor
+  and the standalone binaries.** `go1.26.9` fixed nine vulnerabilities in
+  `net/http`, `net/textproto` and `crypto/tls` that this code reaches.
+
 ## v1.3.0 — 2026-09-02
 
 Changes since v1.2 make credential file permissions an explicit, reviewable
